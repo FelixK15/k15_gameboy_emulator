@@ -192,7 +192,7 @@ void resizeBackbuffer(HWND hwnd, uint32 p_Width, uint32 p_Height)
 }
 
 uint8_t* pRomData = nullptr;
-size_t romDataSizeInBytes = 0u;
+GBEmulatorInstance* pEmulatorInstance = nullptr;
 
 void setup(HWND hwnd)
 {	
@@ -215,7 +215,10 @@ void setup(HWND hwnd)
 	}
 
 	pRomData = (uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
-	romDataSizeInBytes = GetFileSize(pRomHandle, nullptr);
+	
+	const size_t emulatorMemorySizeInBytes = calculateEmulatorInstanceMemoryRequirementsInBytes();
+	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
+	pEmulatorInstance = createEmulatorInstance(pEmulatorInstanceMemory);
 }
 
 void swapBuffers(HWND hwnd)
@@ -276,7 +279,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	bool8 loopRunning = K15_TRUE;
 	MSG msg = {0};
 
-	startEmulator(pRomData, romDataSizeInBytes);
+	startEmulation( pEmulatorInstance, pRomData );
 
 	while (loopRunning)
 	{
