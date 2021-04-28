@@ -127,10 +127,17 @@ struct GBSpriteAttributes
 
 struct GBMemoryMapper
 {
-    uint8_t*            pBaseAddress;
-    const uint8_t*      pRomBaseAddress;
-
-    GBSpriteAttributes* pSpriteAttributeMemory;
+    uint8_t*    pBaseAddress;
+    uint8_t*    pRomBank0;
+    uint8_t*    pRomBankSwitch;
+    uint8_t*    pVideoRAM;
+    uint8_t*    pRamBankSwitch;
+    uint8_t*    pLowRam;
+    uint8_t*    pLowRamEcho;
+    uint8_t*    pSpriteAttributes;
+    uint8_t*    IOPorts;
+    uint8_t*    pHighRam;
+    uint8_t*    pInterruptRegister;
 };
 
 struct GBRomHeader
@@ -192,10 +199,10 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
     }
 }
 
-GBRomHeader getGBRomHeader(GBMemoryMapper* pMemoryMapper)
+GBRomHeader getGBRomHeader(const uint8_t* pRomMemory)
 {
     GBRomHeader header;
-    memcpy(&header, pMemoryMapper->pRomBaseAddress + 0x0100, sizeof(GBRomHeader));
+    memcpy(&header, pRomMemory + 0x0100, sizeof(GBRomHeader));
     return header;
 }
 
@@ -231,9 +238,7 @@ size_t mapRomSizeToByteSize(uint8_t romSize)
 
 void mapRomMemory( GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory )
 {
-    pMemoryMapper->pRomBaseAddress = pRomMemory;
-    
-    const GBRomHeader romHeader = getGBRomHeader(pMemoryMapper);
+    const GBRomHeader romHeader = getGBRomHeader(pRomMemory);
     const size_t romSizeInBytes = mapRomSizeToByteSize(romHeader.romSize);
     switch(romHeader.cartridgeType)
     {
@@ -241,7 +246,7 @@ void mapRomMemory( GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory )
         {
             //FK: Map rom memory to 0x0000-0x7FFF
             memset(pMemoryMapper->pBaseAddress, 0, 0x8000);
-            memcpy(pMemoryMapper->pBaseAddress, pMemoryMapper->pRomBaseAddress, romSizeInBytes);
+            memcpy(pMemoryMapper->pBaseAddress, pRomMemory, romSizeInBytes);
             break;
         }
         default:
@@ -267,7 +272,16 @@ void initGBCpuState( GBCpuState* pState )
 void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
 {
     pMapper->pBaseAddress           = pMemory;
-    pMapper->pSpriteAttributeMemory = (GBSpriteAttributes*)(pMemory + 0xFE00);
+    pMapper->pRomBank0              = pMemory;
+    pMapper->pRomBankSwitch         = pMemory + 0x3FFF;
+    pMapper->pVideoRAM              = pMemory + 0x7FFF;
+    pMapper->pRamBankSwitch         = pMemory + 0x9FFF;
+    pMapper->pLowRam                = pMemory + 0xBFFF;
+    pMapper->pLowRamEcho            = pMemory + 0xDFFF;
+    pMapper->pSpriteAttributes      = pMemory + 0xFDFF;
+    pMapper->IOPorts                = pMemory + 0xFEFF;
+    pMapper->pHighRam               = pMemory + 0xFF7F;
+    pMapper->pInterruptRegister     = pMemory + 0xFFFE;
 }
 
 size_t calculateEmulatorInstanceMemoryRequirementsInBytes()
