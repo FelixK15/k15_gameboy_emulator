@@ -170,6 +170,11 @@ uint16_t read16BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addr
     return (hs << 8u) | (ls << 0u);
 }
 
+uint8_t* getMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset)
+{
+    return pMemoryMapper->pBaseAddress + addressOffset;
+}
+
 void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint8_t value )
 {
     pMemoryMapper->pBaseAddress[addressOffset] = value;
@@ -735,43 +740,43 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
                         
                     //LD (HL), B
                     case 0x70:
-                        pTargetRegister = &pMemoryMapper->pBaseAddress[pCpuState->cpuRegisters.HL];
+                        pTargetRegister = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
                         value           = pCpuState->cpuRegisters.B;
                         cycleCost       = 8;
                         break;
                     //LD (HL), C
                     case 0x71:
-                        pTargetRegister = &pMemoryMapper->pBaseAddress[pCpuState->cpuRegisters.HL];
+                        pTargetRegister = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
                         value           = pCpuState->cpuRegisters.C;
                         cycleCost       = 8;
                         break;
                     //LD (HL), D
                     case 0x72:
-                        pTargetRegister = &pMemoryMapper->pBaseAddress[pCpuState->cpuRegisters.HL];
+                        pTargetRegister = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
                         value           = pCpuState->cpuRegisters.D;
                         cycleCost       = 8;
                         break;
                     //LD (HL), E
                     case 0x73:
-                        pTargetRegister = &pMemoryMapper->pBaseAddress[pCpuState->cpuRegisters.HL];
+                        pTargetRegister = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
                         value           = pCpuState->cpuRegisters.E;
                         cycleCost       = 8;
                         break;
                     //LD (HL), H
                     case 0x74:
-                        pTargetRegister = &pMemoryMapper->pBaseAddress[pCpuState->cpuRegisters.HL];
+                        pTargetRegister = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
                         value           = pCpuState->cpuRegisters.H;
                         cycleCost       = 8;
                         break;
                     //LD (HL), L
                     case 0x75:
-                        pTargetRegister = &pMemoryMapper->pBaseAddress[pCpuState->cpuRegisters.HL];
+                        pTargetRegister = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
                         value           = pCpuState->cpuRegisters.L;
                         cycleCost       = 8;
                         break;
                     //LD (HL), n
                     case 0x36:
-                        pTargetRegister = &pMemoryMapper->pBaseAddress[pCpuState->cpuRegisters.HL];
+                        pTargetRegister = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
                         value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
                         cycleCost       = 12;
                         break;
@@ -876,7 +881,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
                         pCpuState->cycleCount += 8;
                         break;
                     case 0xEE:
-                        operand = pMemoryMapper->pBaseAddress[pCpuState->programCounter++];
+                        operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
                         pCpuState->cycleCount += 8;
                         break;
                 }
@@ -971,7 +976,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
             //LDH (n),A
             case 0xE0:
             {
-                const uint16_t address = 0xFF00 + pMemoryMapper->pBaseAddress[pCpuState->programCounter++];
+                const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
                 write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->cpuRegisters.A);
                 pCpuState->cycleCount += 12;
                 break;
@@ -980,7 +985,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
             //LDH A,(n)
             case 0xF0:
             {
-                const uint16_t address = 0xFF00 + pMemoryMapper->pBaseAddress[pCpuState->programCounter++];
+                const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
                 pCpuState->cpuRegisters.A = read8BitValueFromAddress(pMemoryMapper, address);
                 pCpuState->cycleCount += 12;
                 break;
@@ -1005,7 +1010,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
             //DEC (HL)
             case 0x35:
             {
-                uint8_t* pValue = pMemoryMapper->pBaseAddress + pCpuState->cpuRegisters.HL;
+                uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
                 --*pValue;
                 pCpuState->cpuRegisters.Flags.Z = (*pValue == 0);
                 pCpuState->cpuRegisters.Flags.N = 1;
