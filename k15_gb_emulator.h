@@ -326,7 +326,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
             case 0xFA:
             {
                 const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-                pCpuState->cpuRegisters.A = pMemoryMapper->pBaseAddress[address];
+                pCpuState->cpuRegisters.A = read8BitValueFromAddress(pMemoryMapper, address);
                 pCpuState->programCounter += 2;
                 pCpuState->cycleCount     += 16;
                 break;     
