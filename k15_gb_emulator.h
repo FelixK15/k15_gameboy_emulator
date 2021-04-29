@@ -269,6 +269,61 @@ void initGBCpuState( GBCpuState* pState )
     pState->cpuRegisters.SP = 0xFFFE;
 }
 
+struct x86Flags
+{
+    uint8_t carry               : 1;
+    uint8_t reserved0           : 1;
+    uint8_t parity              : 1;
+    uint8_t reserved1           : 1;
+    uint8_t adjust              : 1;
+    uint8_t reserved2           : 1;
+    uint8_t zero                : 1;
+    uint8_t sign                : 1;
+    uint8_t trap                : 1;
+    uint8_t interruptEnable     : 1;
+    uint8_t direction           : 1;
+    uint8_t overflow            : 1;
+    uint8_t ioPrivilegeLevel    : 1;
+    uint8_t nestedTask          : 1;
+    uint8_t reserved3           : 1;
+};
+
+x86Flags readX86CpuFlags()
+{
+    uint16_t cpuFlagsValue = 0;
+     __asm
+    {
+        pushf                   ; push 16bit flags onto stack
+        pop bx                  ; pop stack value into bx (bx = flags)
+        mov cpuFlagsValue, bx   ; store value of bx register into 'cpuFlagsValue'
+    };
+    
+    x86Flags cpuFlags;
+    memcpy(&cpuFlags, &cpuFlagsValue, sizeof(x86Flags));
+    return cpuFlags;
+}
+
+void compareValue( GBCpuState* pCpuState, uint8_t value )
+{
+    const uint8_t compareResult = pCpuState->cpuRegisters.A - value;
+    const x86Flags flagsRegister = readX86CpuFlags();
+
+    pCpuState->cpuRegisters.Flags.N = 1;
+    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
+    pCpuState->cpuRegisters.Flags.C = flagsRegister.carry;
+    pCpuState->cpuRegisters.Flags.H = flagsRegister.adjust;
+}
+
+void decrementValue( GBCpuState* pCpuState, uint8_t* pValueAddress )
+{
+    --*pValueAddress;
+    const x86Flags flagsRegister = readX86CpuFlags();
+    
+    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
+    pCpuState->cpuRegisters.Flags.H = flagsRegister.adjust;
+    pCpuState->cpuRegisters.Flags.N = 1;
+}
+
 void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
 {
     pMapper->pBaseAddress           = pMemory;
@@ -848,7 +903,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
                 break;
             }
 
-            //XOR A, n
+            //XOR n
             case 0xAF:
             case 0xA8:
             case 0xA9:
@@ -947,42 +1002,40 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
             case 0x25:
             case 0x2D:
             {
-                uint8_t* pRegisterToDecrement = nullptr;
+                uint8_t* pRegister = nullptr;
                 switch(opcode)
                 {
                     //DEC A
                     case 0x3D:
-                        pRegisterToDecrement = &pCpuState->cpuRegisters.A;
+                        pRegister = &pCpuState->cpuRegisters.A;
                         break;
                     //DEC B
                     case 0x05:
-                        pRegisterToDecrement = &pCpuState->cpuRegisters.B;
+                        pRegister = &pCpuState->cpuRegisters.B;
                         break;
                     //DEC C
                     case 0x0D:
-                        pRegisterToDecrement = &pCpuState->cpuRegisters.C;
+                        pRegister = &pCpuState->cpuRegisters.C;
                         break;
                     //DEC D
                     case 0x15:
-                        pRegisterToDecrement = &pCpuState->cpuRegisters.D;
+                        pRegister = &pCpuState->cpuRegisters.D;
                         break;
                     //DEC E
                     case 0x1D:
-                        pRegisterToDecrement = &pCpuState->cpuRegisters.E;
+                        pRegister = &pCpuState->cpuRegisters.E;
                         break;
                     //DEC H
                     case 0x25:
-                        pRegisterToDecrement = &pCpuState->cpuRegisters.H;
+                        pRegister = &pCpuState->cpuRegisters.H;
                         break;
                     //DEC L
                     case 0x2D:
-                        pRegisterToDecrement = &pCpuState->cpuRegisters.L;
+                        pRegister = &pCpuState->cpuRegisters.L;
                         break;
                 }
-                --*pRegisterToDecrement;
 
-                pCpuState->cpuRegisters.Flags.Z = (*pRegisterToDecrement == 0);
-                pCpuState->cpuRegisters.Flags.N = 1;
+                decrementValue(pCpuState, pRegister);
                 pCpuState->cycleCount += 4;
                 break;
             }
@@ -1025,9 +1078,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
             case 0x35:
             {
                 uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
-                --*pValue;
-                pCpuState->cpuRegisters.Flags.Z = (*pValue == 0);
-                pCpuState->cpuRegisters.Flags.N = 1;
+                decrementValue(pCpuState, pValue);
                 pCpuState->cycleCount += 12;
                 break;
             }
@@ -1093,9 +1144,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
                         break;
                 }
 
-                pCpuState->cpuRegisters.Flags.N = 1;
-                pCpuState->cpuRegisters.Flags.Z = (value == pCpuState->cpuRegisters.A);
-                pCpuState->cpuRegisters.Flags.C = (value < pCpuState->cpuRegisters.A);
+                compareValue(pCpuState, value);
                 break;
             }
 
