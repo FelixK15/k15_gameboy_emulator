@@ -187,14 +187,14 @@ struct GBRomHeader
 
 struct GBLcdControl
 {
-    uint8_t enable                  : 1;
-    uint8_t windowTileMapArea       : 1;
-    uint8_t windowEnable            : 1;
-    uint8_t bgAndWindowTileDataArea : 1;
-    uint8_t bgTileMapArea           : 1;
-    uint8_t objSize                 : 1;
-    uint8_t objEnable               : 1;
     uint8_t bgAndWindowEnable       : 1;
+    uint8_t objEnable               : 1;
+    uint8_t objSize                 : 1;
+    uint8_t bgTileMapArea           : 1;
+    uint8_t bgAndWindowTileDataArea : 1;
+    uint8_t windowEnable            : 1;
+    uint8_t windowTileMapArea       : 1;
+    uint8_t enable                  : 1;
 };
 
 struct GBPalette
@@ -207,12 +207,12 @@ struct GBPalette
 
 struct GBLcdStatus
 {
-    uint8_t enableLycEqLyInterrupt      : 1;
-    uint8_t enableMode2OAMInterrupt     : 1;
-    uint8_t enableMode1VBlankInterrupt  : 1;
-    uint8_t enableMode0HBlankInterrupt  : 1;
-    uint8_t LycEqLyFlag                 : 1;
     uint8_t mode                        : 2;
+    uint8_t LycEqLyFlag                 : 1;
+    uint8_t enableMode0HBlankInterrupt  : 1;
+    uint8_t enableMode1VBlankInterrupt  : 1;
+    uint8_t enableMode2OAMInterrupt     : 1;
+    uint8_t enableLycEqLyInterrupt      : 1;
 };
 
 struct GBLcdRegisters
