@@ -54,6 +54,7 @@ HBITMAP backbufferBitmap = 0;
 uint32 screenWidth = 1024;
 uint32 screenHeight = 768;
 uint32 timePerFrameInMS = 16;
+uint32_t* pBackbuffer = nullptr;
 
 void K15_WindowCreated(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -182,9 +183,23 @@ uint32 getTimeInMilliseconds(LARGE_INTEGER p_PerformanceFrequency)
 void resizeBackbuffer(HWND hwnd, uint32 p_Width, uint32 p_Height)
 {
 	DeleteObject(backbufferBitmap);
+	DeleteDC(backbufferDC);
+
+	BITMAPINFO info;
+	memset(&info, 0, sizeof(info));
+	info.bmiHeader.biSize = sizeof(info.bmiHeader);
+	info.bmiHeader.biWidth = screenWidth;
+	info.bmiHeader.biHeight = screenHeight;
+	info.bmiHeader.biPlanes = 1;
+	info.bmiHeader.biBitCount = 32;
+	info.bmiHeader.biCompression = BI_RGB;
+
+	info.bmiHeader.biHeight = -info.bmiHeader.biHeight;
 
 	HDC originalDC = GetDC(hwnd);
-	backbufferBitmap = CreateCompatibleBitmap(originalDC, p_Width, p_Height);
+	backbufferDC = CreateCompatibleDC(originalDC);
+	backbufferBitmap = CreateDIBSection(backbufferDC, &info, DIB_RGB_COLORS, (VOID**)&pBackbuffer, nullptr, 0u);
+
 	screenWidth = p_Width;
 	screenHeight = p_Height;
 	
@@ -196,8 +211,6 @@ GBEmulatorInstance* pEmulatorInstance = nullptr;
 
 void setup(HWND hwnd)
 {	
-	HDC originalDC = GetDC(hwnd);
-	backbufferDC = CreateCompatibleDC(originalDC);
 	resizeBackbuffer(hwnd, screenWidth, screenHeight);
 
 	HANDLE pRomHandle = CreateFile("rom.gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
@@ -219,6 +232,9 @@ void setup(HWND hwnd)
 	const size_t emulatorMemorySizeInBytes = calculateEmulatorInstanceMemoryRequirementsInBytes();
 	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
 	pEmulatorInstance = createEmulatorInstance(pEmulatorInstanceMemory);
+
+	const GBRomHeader header = getGBRomHeader(pRomData);
+	SetWindowText(hwnd, (LPCSTR)header.gameTitle);
 }
 
 void swapBuffers(HWND hwnd)
@@ -252,6 +268,47 @@ void doFrame(uint32 p_DeltaTimeInMS, HWND hwnd)
 {
 	drawDeltaTime(p_DeltaTimeInMS);
 	swapBuffers(hwnd);
+}
+
+void renderVideoRam(const uint8_t* pVideoRam)
+{
+	const uint32_t pixelMapping[4] = {
+		RGB(255,255,255),
+		RGB(192, 192, 192),
+		RGB(128, 128, 128),
+		RGB(64, 64, 64),
+	};
+	const size_t videoRamSizeInBytes = Kbyte(8);
+	const size_t tileDataTableSizeInBytes = 0x1000;
+
+	int x = 0;
+	int y = 0;
+
+	for( size_t tileDataByteIndex = 0; tileDataByteIndex < tileDataTableSizeInBytes; )
+	{
+		for( int tileY = 0; tileY < 8; ++tileY )
+		{
+			const uint16_t tileData = ( pVideoRam[tileDataByteIndex + tileY * 2 + 0] << 0 | 
+										pVideoRam[tileDataByteIndex + tileY * 2 + 1] << 8 );
+
+			pBackbuffer[x + 0 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  0) & 0x3)];
+			pBackbuffer[x + 1 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  2) & 0x3)];
+			pBackbuffer[x + 2 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  4) & 0x3)];
+			pBackbuffer[x + 3 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  6) & 0x3)];
+			pBackbuffer[x + 4 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  8) & 0x3)];
+			pBackbuffer[x + 5 + (y + tileY) * screenWidth] = pixelMapping[((tileData << 10) & 0x3)];
+			pBackbuffer[x + 6 + (y + tileY) * screenWidth] = pixelMapping[((tileData << 12) & 0x3)];
+			pBackbuffer[x + 7 + (y + tileY) * screenWidth] = pixelMapping[((tileData << 14) & 0x3)];
+		}
+
+		x += 8;
+		if( x == 256 )
+		{
+			x = 0;
+			y += 8;
+		}
+		tileDataByteIndex += 16;
+	}
 }
 
 int CALLBACK WinMain(HINSTANCE hInstance,
@@ -302,12 +359,12 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			break;
 		}
 
-		doFrame(deltaMs, hwnd);
+		const uint8_t cycleCount = runSingleInstruction( pEmulatorInstance );
+		tickPPU( pEmulatorInstance, cycleCount );
 
-		timeFrameEnded = getTimeInMilliseconds(performanceFrequency);
-		deltaMs = timeFrameEnded - timeFrameStarted;
-
-		Sleep(timePerFrameInMS - deltaMs);
+		const uint8_t* pVideoRam = getVideoRam(pEmulatorInstance);
+		renderVideoRam(pVideoRam);
+		swapBuffers(hwnd);
 	}
 
 	DestroyWindow(hwnd);
