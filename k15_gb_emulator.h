@@ -1,14 +1,13 @@
 #include "stdint.h"
 #include "stdio.h"
-#include "assert.h"
 
 #define K15_PRINT_DISASSEMBLY
-#define K15_BREAK_ON_UNKNOWN_INSTRUCTION 1
+#define K15_BREAK_ON_UNKNOWN_INSTRUCTION
 
 #ifdef K15_PRINT_DISASSEMBLY
-#   include "k15_gb_opcodes.h"
 #endif
 
+#include "k15_gb_opcodes.h"
 
 #define Kbyte(x) (x)*1024
 #define Mbyte(x) Kbyte(x)*1024
@@ -92,7 +91,7 @@ struct GBCpuState
 
         uint16_t SP;
 
-    } cpuRegisters;
+    } registers;
 };
 
 enum GBCartridgeType : uint8_t
@@ -228,7 +227,7 @@ struct GBLcdRegisters
 
 struct GBPpuState
 {
-    uint16_t            dotCounter;
+    uint32_t            dotCounter;
     GBLcdRegisters      lcdRegisters;
 
 
@@ -272,19 +271,41 @@ uint8_t* getMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset
 
 void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint8_t value )
 {
-    pMemoryMapper->pBaseAddress[addressOffset] = value;
+    const uint8_t startDMATransfer = (addressOffset == 0xFF46);
 
-    //FK: Echo 8kB internal Ram
-    if( addressOffset >= 0xC000 && addressOffset < 0xDE00 )
+#if 0
+    if( addressOffset >= 0x8000 && addressOffset <= 0x9000 )
     {
-        addressOffset += 0x2000;
-        pMemoryMapper->pBaseAddress[addressOffset] = value;
+        if( value > 0 )
+        {
+            __debugbreak();
+        }
     }
-    else if( addressOffset >= 0xE000 && addressOffset < 0xFE00 )
+#endif
+    if( startDMATransfer )
     {
-        addressOffset -= 0x2000;
-        pMemoryMapper->pBaseAddress[addressOffset] = value;
+        const uint16_t sourceAddress = value * 0x100;
+        uint8_t* pSource        = getMemoryAddress(pMemoryMapper, sourceAddress);
+        uint8_t* pDestination   = getMemoryAddress(pMemoryMapper, 0xFE00);
+        memcpy( pDestination, pSource, 0x9F );
     }
+    else
+    {
+        pMemoryMapper->pBaseAddress[addressOffset] = value;
+
+        //FK: Echo 8kB internal Ram
+        if( addressOffset >= 0xC000 && addressOffset < 0xDE00 )
+        {
+            addressOffset += 0x2000;
+            pMemoryMapper->pBaseAddress[addressOffset] = value;
+        }
+        else if( addressOffset >= 0xE000 && addressOffset < 0xFE00 )
+        {
+            addressOffset -= 0x2000;
+            pMemoryMapper->pBaseAddress[addressOffset] = value;
+        }
+    }
+   
 }
 
 GBRomHeader getGBRomHeader(const uint8_t* pRomMemory)
@@ -312,15 +333,10 @@ size_t mapRomSizeToByteSize(uint8_t romSize)
             return Mbit(8u);
         case 0x06:
             return Mbit(16u);
-        case 0x52:
-            return Mbit(9);
-        case 0x53:
-            return Mbit(10);
-        case 0x54:
-            return Mbit(12);
     }
 
-    assert(false);
+    printf("Unsupported romSize identifier '%.2hhx'\n", romSize);
+    __debugbreak();
     return 0;
 }
 
@@ -339,8 +355,8 @@ void mapRomMemory( GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory )
         }
         default:
         {
-            printf("Cartridge type '%d' not supported.\n", romHeader.cartridgeType);
-            assert(false);
+            printf("Cartridge type '%.2hhx' not supported.\n", romHeader.cartridgeType);
+            __debugbreak();
         }
     }
 }
@@ -353,19 +369,19 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     //is initialized to $FFFE on power up but a programmer 
     //should not rely on this setting and rather should 
     //explicitly set its value.
-    pState->cpuRegisters.SP = 0xFFFE;
+    pState->registers.SP = 0xFFFE;
 
     //FK: TODO: Make the following values user defined
     //FK: A value of 11h indicates CGB (or GBA) hardware
-    pState->cpuRegisters.A = 0x11;
+    pState->registers.A = 0x11;
 
     //FK: examine Bit 0 of the CPUs B-Register to separate between CGB (bit cleared) and GBA (bit set)
-    pState->cpuRegisters.B = 0x1;
+    pState->registers.B = 0x1;
 
-    pState->cpuRegisters.F = 0xB0;
-    pState->cpuRegisters.C = 0x13;
-    pState->cpuRegisters.DE = 0x00D8;
-    pState->cpuRegisters.HL = 0x014D;
+    pState->registers.F = 0xB0;
+    pState->registers.C = 0x13;
+    pState->registers.DE = 0x00D8;
+    pState->registers.HL = 0x014D;
 
     pState->pIE = pMemoryMapper->pBaseAddress + 0xFFFF;
     pState->pIF = pMemoryMapper->pBaseAddress + 0xFF0F;
@@ -384,24 +400,16 @@ struct x86Flags
     uint8_t reserved2           : 1;
     uint8_t zero                : 1;
     uint8_t sign                : 1;
-    uint8_t trap                : 1;
-    uint8_t interruptEnable     : 1;
-    uint8_t direction           : 1;
-    uint8_t overflow            : 1;
-    uint8_t ioPrivilegeLevel    : 1;
-    uint8_t nestedTask          : 1;
-    uint8_t reserved3           : 1;
 };
 
 x86Flags readX86CpuFlags()
 {
-    uint16_t cpuFlagsValue = 0;
+    uint8_t cpuFlagsValue = 0;
 
      __asm
     {
-        pushf                   ; push 16bit flags onto stack
-        pop bx                  ; pop stack value into bx (bx = flags)
-        mov cpuFlagsValue, bx   ; store value of bx register into 'cpuFlagsValue'
+        lahf                    ; push first 8 bits of FLAGS register to ah
+        mov cpuFlagsValue, ah   ; store value of ah register into 'cpuFlagsValue'
     };
     
     x86Flags cpuFlags;
@@ -411,13 +419,13 @@ x86Flags readX86CpuFlags()
 
 void compareValue( GBCpuState* pCpuState, uint8_t value )
 {
-    const uint8_t compareResult = pCpuState->cpuRegisters.A - value;
+    const uint8_t compareResult = pCpuState->registers.A - value;
     const x86Flags flagsRegister = readX86CpuFlags();
 
-    pCpuState->cpuRegisters.Flags.N = 1;
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.C = flagsRegister.carry;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.adjust;
+    pCpuState->registers.Flags.N = 1;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.C = flagsRegister.carry;
+    pCpuState->registers.Flags.H = flagsRegister.adjust;
 }
 
 void increment8BitValue( GBCpuState* pCpuState, uint8_t* pValueAddress )
@@ -425,9 +433,9 @@ void increment8BitValue( GBCpuState* pCpuState, uint8_t* pValueAddress )
     ++*pValueAddress;
     const x86Flags flagsRegister = readX86CpuFlags();
     
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.adjust;
-    pCpuState->cpuRegisters.Flags.N = 1;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.H = flagsRegister.adjust;
+    pCpuState->registers.Flags.N = 1;
 }
 
 void decrement8BitValue( GBCpuState* pCpuState, uint8_t* pValueAddress )
@@ -435,9 +443,9 @@ void decrement8BitValue( GBCpuState* pCpuState, uint8_t* pValueAddress )
     --*pValueAddress;
     const x86Flags flagsRegister = readX86CpuFlags();
     
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.adjust;
-    pCpuState->cpuRegisters.Flags.N = 1;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.H = flagsRegister.adjust;
+    pCpuState->registers.Flags.N = 1;
 }
 
 void increment16BitValue( GBCpuState* pCpuState, uint16_t* pValueAddress )
@@ -445,9 +453,9 @@ void increment16BitValue( GBCpuState* pCpuState, uint16_t* pValueAddress )
     ++*pValueAddress;
     const x86Flags flagsRegister = readX86CpuFlags();
     
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.adjust;
-    pCpuState->cpuRegisters.Flags.N = 1;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.H = flagsRegister.adjust;
+    pCpuState->registers.Flags.N = 1;
 }
 
 void decrement16BitValue( GBCpuState* pCpuState, uint16_t* pValueAddress )
@@ -455,9 +463,9 @@ void decrement16BitValue( GBCpuState* pCpuState, uint16_t* pValueAddress )
     --*pValueAddress;
     const x86Flags flagsRegister = readX86CpuFlags();
     
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.adjust;
-    pCpuState->cpuRegisters.Flags.N = 1;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.H = flagsRegister.adjust;
+    pCpuState->registers.Flags.N = 1;
 }
 
 uint8_t rotateThroughCarryLeft( GBCpuState* pCpuState, uint8_t value )
@@ -469,8 +477,8 @@ uint8_t rotateThroughCarryLeft( GBCpuState* pCpuState, uint8_t value )
         mov value, bl
     }
 
-    pCpuState->cpuRegisters.Flags.N = 0;
-    pCpuState->cpuRegisters.Flags.H = 0;
+    pCpuState->registers.Flags.N = 0;
+    pCpuState->registers.Flags.H = 0;
     return value;
 }
 
@@ -483,16 +491,16 @@ uint8_t rotateThroughCarryRight( GBCpuState* pCpuState, uint8_t value)
         mov value, bl
     }
 
-    pCpuState->cpuRegisters.Flags.N = 0;
-    pCpuState->cpuRegisters.Flags.H = 0;
+    pCpuState->registers.Flags.N = 0;
+    pCpuState->registers.Flags.H = 0;
     return value;
 }
 
 uint8_t rotateLeft( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->cpuRegisters.Flags.C = (value << 0);
-    pCpuState->cpuRegisters.Flags.N = 0;
-    pCpuState->cpuRegisters.Flags.H = 0;
+    pCpuState->registers.Flags.C = (value << 0);
+    pCpuState->registers.Flags.N = 0;
+    pCpuState->registers.Flags.H = 0;
 
     __asm
     {
@@ -506,9 +514,9 @@ uint8_t rotateLeft( GBCpuState* pCpuState, uint8_t value )
 
 uint8_t rotateRight( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->cpuRegisters.Flags.C = (value << 7);
-    pCpuState->cpuRegisters.Flags.N = 0;
-    pCpuState->cpuRegisters.Flags.H = 0;
+    pCpuState->registers.Flags.C = (value << 7);
+    pCpuState->registers.Flags.N = 0;
+    pCpuState->registers.Flags.H = 0;
     
     __asm
     {
@@ -522,9 +530,9 @@ uint8_t rotateRight( GBCpuState* pCpuState, uint8_t value )
 
 uint8_t shiftLeft( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->cpuRegisters.Flags.N = 0;
-    pCpuState->cpuRegisters.Flags.H = 0;
-    pCpuState->cpuRegisters.Flags.C = (value << 0);
+    pCpuState->registers.Flags.N = 0;
+    pCpuState->registers.Flags.H = 0;
+    pCpuState->registers.Flags.C = (value << 0);
 
     value = (value << 1);
     return value;
@@ -532,9 +540,9 @@ uint8_t shiftLeft( GBCpuState* pCpuState, uint8_t value )
 
 uint8_t shiftRight( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->cpuRegisters.Flags.N = 0;
-    pCpuState->cpuRegisters.Flags.H = 0;
-    pCpuState->cpuRegisters.Flags.C = (value << 7);
+    pCpuState->registers.Flags.N = 0;
+    pCpuState->registers.Flags.H = 0;
+    pCpuState->registers.Flags.C = (value << 7);
 
     value = (value >> 1);
     return value;
@@ -542,9 +550,9 @@ uint8_t shiftRight( GBCpuState* pCpuState, uint8_t value )
 
 uint8_t shiftRightKeepMSB( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->cpuRegisters.Flags.N = 0;
-    pCpuState->cpuRegisters.Flags.H = 0;
-    pCpuState->cpuRegisters.Flags.C = (value << 7);
+    pCpuState->registers.Flags.N = 0;
+    pCpuState->registers.Flags.H = 0;
+    pCpuState->registers.Flags.C = (value << 7);
 
     const uint8_t msb = value & (1 << 7);
     value = (value >> 1) | msb;
@@ -559,9 +567,9 @@ uint8_t swapNibbles( GBCpuState* pCpuState, uint8_t value )
 
 void testBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
 {
-    pCpuState->cpuRegisters.Flags.Z = (value >> bitIndex);
-    pCpuState->cpuRegisters.Flags.N = 0;
-    pCpuState->cpuRegisters.Flags.H = 1;
+    pCpuState->registers.Flags.Z = (value >> bitIndex);
+    pCpuState->registers.Flags.N = 0;
+    pCpuState->registers.Flags.H = 1;
 }
 
 uint8_t resetBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
@@ -578,50 +586,50 @@ uint8_t setBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
 
 void addValue8Bit( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->cpuRegisters.A += value;
+    pCpuState->registers.A += value;
     
     const x86Flags flagsRegister = readX86CpuFlags();
     
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.C = flagsRegister.carry;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.parity;
-    pCpuState->cpuRegisters.Flags.N = 0;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.C = flagsRegister.carry;
+    pCpuState->registers.Flags.H = flagsRegister.parity;
+    pCpuState->registers.Flags.N = 0;
 }
 
 void addValue16Bit( GBCpuState* pCpuState, uint16_t value )
 {
-    pCpuState->cpuRegisters.HL += value;
+    pCpuState->registers.HL += value;
     
     const x86Flags flagsRegister = readX86CpuFlags();
     
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.C = flagsRegister.carry;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.parity;
-    pCpuState->cpuRegisters.Flags.N = 0;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.C = flagsRegister.carry;
+    pCpuState->registers.Flags.H = flagsRegister.parity;
+    pCpuState->registers.Flags.N = 0;
 }
 
 void subValue8Bit( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->cpuRegisters.A -= value;
+    pCpuState->registers.A -= value;
     
     const x86Flags flagsRegister = readX86CpuFlags();
     
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.C = flagsRegister.carry;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.parity;
-    pCpuState->cpuRegisters.Flags.N = 0;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.C = flagsRegister.carry;
+    pCpuState->registers.Flags.H = flagsRegister.parity;
+    pCpuState->registers.Flags.N = 0;
 }
 
 void subValue16Bit( GBCpuState* pCpuState, uint16_t value )
 {
-    pCpuState->cpuRegisters.HL -= value;
+    pCpuState->registers.HL -= value;
     
     const x86Flags flagsRegister = readX86CpuFlags();
     
-    pCpuState->cpuRegisters.Flags.Z = flagsRegister.zero;
-    pCpuState->cpuRegisters.Flags.C = flagsRegister.carry;
-    pCpuState->cpuRegisters.Flags.H = flagsRegister.parity;
-    pCpuState->cpuRegisters.Flags.N = 0;
+    pCpuState->registers.Flags.Z = flagsRegister.zero;
+    pCpuState->registers.Flags.C = flagsRegister.carry;
+    pCpuState->registers.Flags.H = flagsRegister.parity;
+    pCpuState->registers.Flags.N = 0;
 }
 
 void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
@@ -630,15 +638,15 @@ void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
 
     pMapper->pBaseAddress           = pMemory;
     pMapper->pRomBank0              = pMemory;
-    pMapper->pRomBankSwitch         = pMemory + 0x3FFF;
-    pMapper->pVideoRAM              = pMemory + 0x7FFF;
-    pMapper->pRamBankSwitch         = pMemory + 0x9FFF;
-    pMapper->pLowRam                = pMemory + 0xBFFF;
-    pMapper->pLowRamEcho            = pMemory + 0xDFFF;
-    pMapper->pSpriteAttributes      = pMemory + 0xFDFF;
-    pMapper->IOPorts                = pMemory + 0xFEFF;
-    pMapper->pHighRam               = pMemory + 0xFF7F;
-    pMapper->pInterruptRegister     = pMemory + 0xFFFE;
+    pMapper->pRomBankSwitch         = pMemory + 0x4000;
+    pMapper->pVideoRAM              = pMemory + 0x8000;
+    pMapper->pRamBankSwitch         = pMemory + 0xA000;
+    pMapper->pLowRam                = pMemory + 0xC000;
+    pMapper->pLowRamEcho            = pMemory + 0xE000;
+    pMapper->pSpriteAttributes      = pMemory + 0xFE00;
+    pMapper->IOPorts                = pMemory + 0xFF00;
+    pMapper->pHighRam               = pMemory + 0xFF80;
+    pMapper->pInterruptRegister     = pMemory + 0xFFFF;
 }
 
 void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
@@ -663,7 +671,7 @@ void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
 
 size_t calculateEmulatorInstanceMemoryRequirementsInBytes()
 {
-    const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + sizeof(GBMemoryMapper) + sizeof(GBPpuState) + 0xFFFF;
+    const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + sizeof(GBMemoryMapper) + sizeof(GBPpuState) + 0x10000;
     return memoryRequirementsInBytes;
 }
 
@@ -683,7 +691,7 @@ GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 
 uint8_t* getVideoRam( GBEmulatorInstance* pEmulator)
 {
-    return pEmulator->pMemoryMapper->pVideoRAM;
+    return pEmulator->pPpuState->pBackgroundOrWindowTiles[0];
 }
 
 void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
@@ -799,13 +807,19 @@ void tickPPU( GBEmulatorInstance* pEmulator, const uint8_t cycleCount )
 
     uint8_t triggerLCDStatInterrupt = 0;
 
+    pPpuState->dotCounter += cycleCount;
+
     if( lcdMode == 2 && pPpuState->dotCounter >= 80 )
     {
+        pPpuState->dotCounter -= 80;
+
         lcdMode = 3;
         pushScanline(pEmulator, ly);
     }
-    else if( lcdMode == 3 && pPpuState->dotCounter >= 172 )
+    else if( lcdMode == 3 && pPpuState->dotCounter >= 168 )
     {
+        pPpuState->dotCounter -= 168;
+
         lcdMode = 0;
         triggerLCDStatInterrupt = pLcdStatus->enableMode0HBlankInterrupt;
 
@@ -823,8 +837,10 @@ void tickPPU( GBEmulatorInstance* pEmulator, const uint8_t cycleCount )
             }
         }
     }
-    else if( lcdMode == 0 && pPpuState->dotCounter >= 204 )
+    else if( lcdMode == 0 && pPpuState->dotCounter >= 208 )
     {
+        pPpuState->dotCounter -= 208;
+
         if( ly == 145 )
         {
             lcdMode = 1;
@@ -836,10 +852,20 @@ void tickPPU( GBEmulatorInstance* pEmulator, const uint8_t cycleCount )
             lcdMode = 2;
         }
     }
-    else if( lcdMode == 1 && ly == 155 )
+    else if( lcdMode == 1 )
     {
-        lcdMode = 2;
-        triggerLCDStatInterrupt = pLcdStatus->enableMode2OAMInterrupt;
+        if (pPpuState->dotCounter >= 456 )
+        {
+            pPpuState->dotCounter -= 456;
+            ++ly;
+
+            if( ly == 155 )
+            {
+                ly = 0;
+                lcdMode = 2;
+                triggerLCDStatInterrupt = pLcdStatus->enableMode2OAMInterrupt;
+            }
+        }
     }
 
     if( triggerLCDStatInterrupt )
@@ -847,28 +873,23 @@ void tickPPU( GBEmulatorInstance* pEmulator, const uint8_t cycleCount )
         triggerInterrupt( pCpuState, LCDStatInterrupt );
     }
 
-    pPpuState->dotCounter += cycleCount;
-
     *pPpuState->lcdRegisters.pLy    = ly;
     pLcdStatus->mode                = lcdMode;
 }
 
 void push16BitValueToStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint16_t value )
 {
-    //FK: TODO: Better error handling
-    assert( pCpuState->cpuRegisters.SP < 0xFFFE );
-
-    pCpuState->cpuRegisters.SP -= 2;
+    pCpuState->registers.SP -= 2;
     
-    uint8_t* pStack = pMemoryMapper->pBaseAddress + pCpuState->cpuRegisters.SP;
+    uint8_t* pStack = pMemoryMapper->pBaseAddress + pCpuState->registers.SP;
     pStack[0] = (uint8_t)( value >> 8 );
     pStack[1] = (uint8_t)( value >> 0 );
 }
 
 uint16_t pop16BitValueFromStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper )
 {
-    uint8_t* pStack = pMemoryMapper->pBaseAddress + pCpuState->cpuRegisters.SP;
-    pCpuState->cpuRegisters.SP += 2;
+    uint8_t* pStack = pMemoryMapper->pBaseAddress + pCpuState->registers.SP;
+    pCpuState->registers.SP += 2;
 
     const uint16_t value = (uint16_t)pStack[0] << 8 | 
                            (uint16_t)pStack[1] << 0;
@@ -887,7 +908,20 @@ void triggerPendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
     const uint8_t interruptHandleMask   = ( interruptEnable & interruptFlags );
     if( interruptHandleMask > 0u )
     {
-        push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->programCounter);
+        for( uint8_t interruptIndex = 0u; interruptIndex < 5u; ++interruptIndex )
+        {
+            //FK:   start with lowest prio interrupt, that way the program counter will eventually be overwritten with the higher prio interrupts
+            //      with the lower prio interrupts being pushed to the stack
+            const uint8_t interruptFlag = 1 << ( 4u - interruptIndex );
+            if( interruptHandleMask & interruptFlag )
+            {
+                push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->programCounter);
+                pCpuState->programCounter = 0x40 + 0x08 * ( 4u - interruptIndex );
+                *pCpuState->pIF &= ~interruptFlag;
+                break;
+            }
+        }
+
         pCpuState->flags.halt = 0;
     }
 }
@@ -920,49 +954,49 @@ uint8_t handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x00:
         {
             cycleCost = 8u;
-            pTarget = &pCpuState->cpuRegisters.B;
+            pTarget = &pCpuState->registers.B;
             break;
         }
         case 0x01:
         {
             cycleCost = 8u;
-            pTarget = &pCpuState->cpuRegisters.C;
+            pTarget = &pCpuState->registers.C;
             break;
         }
         case 0x02:
         {
             cycleCost = 8u;
-            pTarget = &pCpuState->cpuRegisters.D;
+            pTarget = &pCpuState->registers.D;
             break;
         }
         case 0x03:
         {
             cycleCost = 8u;
-            pTarget = &pCpuState->cpuRegisters.E;
+            pTarget = &pCpuState->registers.E;
             break;
         }
         case 0x04:
         {
             cycleCost = 8u;
-            pTarget = &pCpuState->cpuRegisters.H;
+            pTarget = &pCpuState->registers.H;
             break;
         }
         case 0x05:
         {
             cycleCost = 8u;
-            pTarget = &pCpuState->cpuRegisters.L;
+            pTarget = &pCpuState->registers.L;
             break;
         }
         case 0x06:
         {
             cycleCost = operation == 0x0E || operation == 0x06 ? 12 : 16;
-            pTarget = getMemoryAddress( pMemoryMapper, pCpuState->cpuRegisters.HL );
+            pTarget = getMemoryAddress( pMemoryMapper, pCpuState->registers.HL );
             break;
         }
         case 0x07:
         {
             cycleCost = 8u;
-            pTarget = &pCpuState->cpuRegisters.A;
+            pTarget = &pCpuState->registers.A;
             break;
         }
     }
@@ -1081,6 +1115,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
     {
         //NOP
         case 0x00:
+            cycleCost = 4;
             break;
 
         //CALL nn
@@ -1089,6 +1124,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
             push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->programCounter + 2);
             pCpuState->programCounter = address;
+            cycleCost = 24;
             break;
         }
 
@@ -1105,19 +1141,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //CALL nz, nn
                 case 0xC4:
-                    condition = pCpuState->cpuRegisters.Flags.Z == 0;
+                    condition = pCpuState->registers.Flags.Z == 0;
                     break;
                 //CALL nc, nn
                 case 0xCC:
-                    condition = pCpuState->cpuRegisters.Flags.C == 0;
+                    condition = pCpuState->registers.Flags.C == 0;
                     break;
                 //CALL z, nn
                 case 0xD4:
-                    condition = pCpuState->cpuRegisters.Flags.Z == 1;
+                    condition = pCpuState->registers.Flags.Z == 1;
                     break;
                 //CALL c, nn
                 case 0xDC:
-                    condition = pCpuState->cpuRegisters.Flags.C == 1;
+                    condition = pCpuState->registers.Flags.C == 1;
                     break;
             }
 
@@ -1126,19 +1162,39 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
                 push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->programCounter);
                 pCpuState->programCounter = address;
             }
+
+            cycleCost = condition ? 24 : 12;
             break;
         }
   
 
         //LD A,(BC)
         case 0x0A:
-            pCpuState->cpuRegisters.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.BC);
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.BC);
             cycleCost = 8;
             break;
 
         //LD A,(DE)
         case 0x1A:
-            pCpuState->cpuRegisters.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.DE);
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.DE);
+            cycleCost = 8;
+            break;
+
+        //LD (BC), A
+        case 0x02:
+            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.BC, pCpuState->registers.A);
+            cycleCost = 8;
+            break;
+
+        //LD (DE), A
+        case 0x12:
+            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.DE, pCpuState->registers.A);
+            cycleCost = 8;
+            break;
+
+        //LD (HL), A
+        case 0x77:
+            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.DE, pCpuState->registers.A);
             cycleCost = 8;
             break;
 
@@ -1146,35 +1202,17 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         case 0xFA:
         {
             const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            pCpuState->cpuRegisters.A = read8BitValueFromAddress(pMemoryMapper, address);
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, address);
             pCpuState->programCounter += 2;
             cycleCost = 16;
             break;     
         }
 
-        //LD (BC), A
-        case 0x02:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->cpuRegisters.BC, pCpuState->cpuRegisters.A);
-            cycleCost = 8;
-            break;
-
-        //LD (DE), A
-        case 0x12:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->cpuRegisters.DE, pCpuState->cpuRegisters.A);
-            cycleCost = 8;
-            break;
-
-        //LD (HL), A
-        case 0x77:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->cpuRegisters.DE, pCpuState->cpuRegisters.A);
-            cycleCost = 8;
-            break;
-
         //LD (nn), A
         case 0xEA:
         {
             const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->cpuRegisters.A);
+            write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.A);
             pCpuState->programCounter += 2;
             cycleCost = 16;
             break;
@@ -1182,57 +1220,75 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
 
         //LD A,n
         case 0x3E:
-            pCpuState->cpuRegisters.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             cycleCost = 8;
             break;
 
         //LD B,n
         case 0x06:  
-            pCpuState->cpuRegisters.B = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.B = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             cycleCost = 8;
             break;
 
         //LD C,n
         case 0x0E:
-            pCpuState->cpuRegisters.C = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.C = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             cycleCost = 8;
             break;
 
         //LD D,n
         case 0x16: 
-            pCpuState->cpuRegisters.D = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.D = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             cycleCost = 8;
             break;
             
         //LD E,n
         case 0x1E: 
-            pCpuState->cpuRegisters.E = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.E = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             cycleCost = 8;
             break;
         
         //LD H,n
         case 0x26:
-            pCpuState->cpuRegisters.H = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.H = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             cycleCost = 8;
             break;
 
         //LD L,n
         case 0x2E:
-            pCpuState->cpuRegisters.L = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.L = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             cycleCost = 8;
             break;
         
         //LD a,(HL++)
         case 0x2A:
-            pCpuState->cpuRegisters.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL++);
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL++);
+            cycleCost = 8;
+            break;
+
+        //LD a,(HL++)
+        case 0x3A:
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL--);
+            cycleCost = 8;
+            break;
+
+        //LD (HL++),a
+        case 0x22:
+            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.HL++, pCpuState->registers.A);
+            cycleCost = 8;
+            break;
+
+        //LD (HL--),a
+        case 0x32:
+            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.HL--, pCpuState->registers.A);
             cycleCost = 8;
             break;
 
         //LD (C),a
         case 0xE2:
         {
-            const uint16_t address = 0xFF00 + pCpuState->cpuRegisters.C;
-            write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->cpuRegisters.A);
+            const uint16_t address = 0xFF00 + pCpuState->registers.C;
+            write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.A);
             cycleCost = 8;
             break;
         }
@@ -1240,7 +1296,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //LD b,a
         case 0x47:
         {
-            pCpuState->cpuRegisters.B = pCpuState->cpuRegisters.A;
+            pCpuState->registers.B = pCpuState->registers.A;
             cycleCost = 4;
             break;
         }
@@ -1248,7 +1304,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //LD c,a
         case 0x4F:
         {
-            pCpuState->cpuRegisters.C = pCpuState->cpuRegisters.A;
+            pCpuState->registers.C = pCpuState->registers.A;
             cycleCost = 4;
             break;
         }
@@ -1256,7 +1312,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //LD E, A
         case 0x5F:
         {
-            pCpuState->cpuRegisters.E = pCpuState->cpuRegisters.A;
+            pCpuState->registers.E = pCpuState->registers.A;
             cycleCost = 4;
             break;
         }
@@ -1274,6 +1330,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         case 0x7A:
         case 0x7B:
         case 0x7C:
+        case 0x7D:
         case 0x7E:
         case 0x36:
         case 0x40:
@@ -1311,6 +1368,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         case 0x64:
         case 0x65:
         case 0x66:
+        case 0x67:
         case 0x68:
         case 0x69:
         case 0x6A:
@@ -1318,6 +1376,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         case 0x6C:
         case 0x6D:
         case 0x6E:
+        case 0x6F:
         {
             uint8_t* pTarget            = nullptr;
             uint8_t value               = 0;
@@ -1325,350 +1384,360 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //LD A, A
                 case 0x7F:
-                    pTarget         = &pCpuState->cpuRegisters.A;
-                    value           = pCpuState->cpuRegisters.A;
+                    pTarget         = &pCpuState->registers.A;
+                    value           = pCpuState->registers.A;
                     cycleCost       = 4;
                     break;
                 //LD A, B
                 case 0x78:
-                    pTarget         = &pCpuState->cpuRegisters.A;
-                    value           = pCpuState->cpuRegisters.B;
+                    pTarget         = &pCpuState->registers.A;
+                    value           = pCpuState->registers.B;
                     cycleCost       = 4;
                     break;
                 //LD A, C
                 case 0x79:
-                    pTarget         = &pCpuState->cpuRegisters.A;
-                    value           = pCpuState->cpuRegisters.C;
+                    pTarget         = &pCpuState->registers.A;
+                    value           = pCpuState->registers.C;
                     cycleCost       = 4;
                     break;
                 //LD A, D
                 case 0x7A:
-                    pTarget         = &pCpuState->cpuRegisters.A;
-                    value           = pCpuState->cpuRegisters.D;
+                    pTarget         = &pCpuState->registers.A;
+                    value           = pCpuState->registers.D;
                     cycleCost       = 4;
                     break;
                 //LD A, E
                 case 0x7B:
-                    pTarget         = &pCpuState->cpuRegisters.A;
-                    value           = pCpuState->cpuRegisters.E;
+                    pTarget         = &pCpuState->registers.A;
+                    value           = pCpuState->registers.E;
                     cycleCost       = 4;
                     break;
                 //LD A, H
                 case 0x7C:
-                    pTarget         = &pCpuState->cpuRegisters.A;
-                    value           = pCpuState->cpuRegisters.H;
+                    pTarget         = &pCpuState->registers.A;
+                    value           = pCpuState->registers.H;
                     cycleCost       = 4;
                     break;
                 //LD A, L
                 case 0x7D:
-                    pTarget         = &pCpuState->cpuRegisters.A;
-                    value           = pCpuState->cpuRegisters.L;
+                    pTarget         = &pCpuState->registers.A;
+                    value           = pCpuState->registers.L;
                     cycleCost       = 4;
                     break;
                 //LD A, (HL)
                 case 0x7E:
-                    pTarget         = &pCpuState->cpuRegisters.A;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    pTarget         = &pCpuState->registers.A;
+                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost       = 8;
                     break;
 
                 //LD B, B
                 case 0x40:
-                    pTarget         = &pCpuState->cpuRegisters.B;
-                    value           = pCpuState->cpuRegisters.B;
+                    pTarget         = &pCpuState->registers.B;
+                    value           = pCpuState->registers.B;
                     cycleCost       = 4;
                     break;
                 //LD B, C
                 case 0x41:
-                    pTarget         = &pCpuState->cpuRegisters.B;
-                    value           = pCpuState->cpuRegisters.C;
+                    pTarget         = &pCpuState->registers.B;
+                    value           = pCpuState->registers.C;
                     cycleCost       = 4;
                     break;
                 //LD B, D
                 case 0x42:
-                    pTarget         = &pCpuState->cpuRegisters.B;
-                    value           = pCpuState->cpuRegisters.D;
+                    pTarget         = &pCpuState->registers.B;
+                    value           = pCpuState->registers.D;
                     cycleCost       = 4;
                     break;
                 //LD B, E
                 case 0x43:
-                    pTarget         = &pCpuState->cpuRegisters.B;
-                    value           = pCpuState->cpuRegisters.E;
+                    pTarget         = &pCpuState->registers.B;
+                    value           = pCpuState->registers.E;
                     cycleCost       = 4;
                     break;
                 //LD B, H
                 case 0x44:
-                    pTarget         = &pCpuState->cpuRegisters.B;
-                    value           = pCpuState->cpuRegisters.H;
+                    pTarget         = &pCpuState->registers.B;
+                    value           = pCpuState->registers.H;
                     cycleCost       = 4;
                     break;
                 //LD B, L
                 case 0x45:
-                    pTarget         = &pCpuState->cpuRegisters.B;
-                    value           = pCpuState->cpuRegisters.L;
+                    pTarget         = &pCpuState->registers.B;
+                    value           = pCpuState->registers.L;
                     cycleCost       = 4;
                     break;
                 //LD B, (HL)
                 case 0x46:
-                    pTarget         = &pCpuState->cpuRegisters.B;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    pTarget         = &pCpuState->registers.B;
+                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost       = 8;
                     break;
 
                 //LD C, B
                 case 0x48:
-                    pTarget         = &pCpuState->cpuRegisters.C;
-                    value           = pCpuState->cpuRegisters.B;
+                    pTarget         = &pCpuState->registers.C;
+                    value           = pCpuState->registers.B;
                     cycleCost       = 4;
                     break;
                 //LD C, C
                 case 0x49:
-                    pTarget         = &pCpuState->cpuRegisters.C;
-                    value           = pCpuState->cpuRegisters.C;
+                    pTarget         = &pCpuState->registers.C;
+                    value           = pCpuState->registers.C;
                     cycleCost       = 4;
                     break;
                 //LD C, D
                 case 0x4A:
-                    pTarget         = &pCpuState->cpuRegisters.C;
-                    value           = pCpuState->cpuRegisters.D;
+                    pTarget         = &pCpuState->registers.C;
+                    value           = pCpuState->registers.D;
                     cycleCost       = 4;
                     break;
                 //LD C, E
                 case 0x4B:
-                    pTarget         = &pCpuState->cpuRegisters.C;
-                    value           = pCpuState->cpuRegisters.E;
+                    pTarget         = &pCpuState->registers.C;
+                    value           = pCpuState->registers.E;
                     cycleCost       = 4;
                     break;
                 //LD C, H
                 case 0x4C:
-                    pTarget         = &pCpuState->cpuRegisters.C;
-                    value           = pCpuState->cpuRegisters.H;
+                    pTarget         = &pCpuState->registers.C;
+                    value           = pCpuState->registers.H;
                     cycleCost       = 4;
                     break;
                 //LD C, L
                 case 0x4D:
-                    pTarget         = &pCpuState->cpuRegisters.C;
-                    value           = pCpuState->cpuRegisters.L;
+                    pTarget         = &pCpuState->registers.C;
+                    value           = pCpuState->registers.L;
                     cycleCost       = 4;
                     break;
                 //LD C, (HL)
                 case 0x4E:
-                    pTarget         = &pCpuState->cpuRegisters.C;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    pTarget         = &pCpuState->registers.C;
+                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost       = 8;
                     break;
 
                 //LD D, B
                 case 0x50:
-                    pTarget         = &pCpuState->cpuRegisters.D;
-                    value           = pCpuState->cpuRegisters.B;
+                    pTarget         = &pCpuState->registers.D;
+                    value           = pCpuState->registers.B;
                     cycleCost       = 4;
                     break;
                 //LD D, C
                 case 0x51:
-                    pTarget         = &pCpuState->cpuRegisters.D;
-                    value           = pCpuState->cpuRegisters.C;
+                    pTarget         = &pCpuState->registers.D;
+                    value           = pCpuState->registers.C;
                     cycleCost       = 4;
                     break;
                 //LD D, D
                 case 0x52:
-                    pTarget         = &pCpuState->cpuRegisters.D;
-                    value           = pCpuState->cpuRegisters.D;
+                    pTarget         = &pCpuState->registers.D;
+                    value           = pCpuState->registers.D;
                     cycleCost       = 4;
                     break;
                 //LD D, E
                 case 0x53:
-                    pTarget         = &pCpuState->cpuRegisters.D;
-                    value           = pCpuState->cpuRegisters.E;
+                    pTarget         = &pCpuState->registers.D;
+                    value           = pCpuState->registers.E;
                     cycleCost       = 4;
                     break;
                 //LD D, H
                 case 0x54:
-                    pTarget         = &pCpuState->cpuRegisters.D;
-                    value           = pCpuState->cpuRegisters.H;
+                    pTarget         = &pCpuState->registers.D;
+                    value           = pCpuState->registers.H;
                     cycleCost       = 4;
                     break;
                 //LD D, L
                 case 0x55:
-                    pTarget         = &pCpuState->cpuRegisters.D;
-                    value           = pCpuState->cpuRegisters.L;
+                    pTarget         = &pCpuState->registers.D;
+                    value           = pCpuState->registers.L;
                     cycleCost       = 4;
                     break;
                 //LD B, (HL)
                 case 0x56:
-                    pTarget         = &pCpuState->cpuRegisters.D;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    pTarget         = &pCpuState->registers.D;
+                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost       = 8;
                     break;
 
                 //LD E, B
                 case 0x58:
-                    pTarget         = &pCpuState->cpuRegisters.E;
-                    value           = pCpuState->cpuRegisters.B;
+                    pTarget         = &pCpuState->registers.E;
+                    value           = pCpuState->registers.B;
                     cycleCost       = 4;
                     break;
                 //LD E, C
                 case 0x59:
-                    pTarget         = &pCpuState->cpuRegisters.E;
-                    value           = pCpuState->cpuRegisters.C;
+                    pTarget         = &pCpuState->registers.E;
+                    value           = pCpuState->registers.C;
                     cycleCost       = 4;
                     break;
                 //LD E, D
                 case 0x5A:
-                    pTarget         = &pCpuState->cpuRegisters.E;
-                    value           = pCpuState->cpuRegisters.D;
+                    pTarget         = &pCpuState->registers.E;
+                    value           = pCpuState->registers.D;
                     cycleCost       = 4;
                     break;
                 //LD E, E
                 case 0x5B:
-                    pTarget         = &pCpuState->cpuRegisters.E;
-                    value           = pCpuState->cpuRegisters.E;
+                    pTarget         = &pCpuState->registers.E;
+                    value           = pCpuState->registers.E;
                     cycleCost       = 4;
                     break;
                 //LD E, H
                 case 0x5C:
-                    pTarget         = &pCpuState->cpuRegisters.E;
-                    value           = pCpuState->cpuRegisters.H;
+                    pTarget         = &pCpuState->registers.E;
+                    value           = pCpuState->registers.H;
                     cycleCost       = 4;
                     break;
                 //LD E, L
                 case 0x5D:
-                    pTarget         = &pCpuState->cpuRegisters.E;
-                    value           = pCpuState->cpuRegisters.L;
+                    pTarget         = &pCpuState->registers.E;
+                    value           = pCpuState->registers.L;
                     cycleCost       = 4;
                     break;
                 //LD E, (HL)
                 case 0x5E:
-                    pTarget         = &pCpuState->cpuRegisters.E;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    pTarget         = &pCpuState->registers.E;
+                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost       = 8;
                     break;
 
                 //LD H, B
                 case 0x60:
-                    pTarget         = &pCpuState->cpuRegisters.H;
-                    value           = pCpuState->cpuRegisters.B;
+                    pTarget         = &pCpuState->registers.H;
+                    value           = pCpuState->registers.B;
                     cycleCost       = 4;
                     break;
                 //LD H, C
                 case 0x61:
-                    pTarget         = &pCpuState->cpuRegisters.H;
-                    value           = pCpuState->cpuRegisters.C;
+                    pTarget         = &pCpuState->registers.H;
+                    value           = pCpuState->registers.C;
                     cycleCost       = 4;
                     break;
                 //LD H, D
                 case 0x62:
-                    pTarget         = &pCpuState->cpuRegisters.H;
-                    value           = pCpuState->cpuRegisters.D;
+                    pTarget         = &pCpuState->registers.H;
+                    value           = pCpuState->registers.D;
                     cycleCost       = 4;
                     break;
                 //LD H, E
                 case 0x63:
-                    pTarget         = &pCpuState->cpuRegisters.H;
-                    value           = pCpuState->cpuRegisters.E;
+                    pTarget         = &pCpuState->registers.H;
+                    value           = pCpuState->registers.E;
                     cycleCost       = 4;
                     break;
                 //LD H, H
                 case 0x64:
-                    pTarget         = &pCpuState->cpuRegisters.H;
-                    value           = pCpuState->cpuRegisters.H;
+                    pTarget         = &pCpuState->registers.H;
+                    value           = pCpuState->registers.H;
                     cycleCost       = 4;
                     break;
                 //LD H, L
                 case 0x65:
-                    pTarget         = &pCpuState->cpuRegisters.H;
-                    value           = pCpuState->cpuRegisters.L;
+                    pTarget         = &pCpuState->registers.H;
+                    value           = pCpuState->registers.L;
                     cycleCost       = 4;
                     break;
                 //LD H, (HL)
                 case 0x66:
-                    pTarget         = &pCpuState->cpuRegisters.H;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    pTarget         = &pCpuState->registers.H;
+                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost       = 8;
+                    break;
+                case 0x67:
+                    pTarget         = &pCpuState->registers.H;
+                    value           = pCpuState->registers.A;
+                    cycleCost       = 4;
                     break;
 
                 //LD L, B
                 case 0x68:
-                    pTarget         = &pCpuState->cpuRegisters.L;
-                    value           = pCpuState->cpuRegisters.B;
+                    pTarget         = &pCpuState->registers.L;
+                    value           = pCpuState->registers.B;
                     cycleCost       = 4;
                     break;
                 //LD L, C
                 case 0x69:
-                    pTarget         = &pCpuState->cpuRegisters.L;
-                    value           = pCpuState->cpuRegisters.C;
+                    pTarget         = &pCpuState->registers.L;
+                    value           = pCpuState->registers.C;
                     cycleCost       = 4;
                     break;
                 //LD L, D
                 case 0x6A:
-                    pTarget         = &pCpuState->cpuRegisters.L;
-                    value           = pCpuState->cpuRegisters.D;
+                    pTarget         = &pCpuState->registers.L;
+                    value           = pCpuState->registers.D;
                     cycleCost       = 4;
                     break;
                 //LD L, E
                 case 0x6B:
-                    pTarget         = &pCpuState->cpuRegisters.L;
-                    value           = pCpuState->cpuRegisters.E;
+                    pTarget         = &pCpuState->registers.L;
+                    value           = pCpuState->registers.E;
                     cycleCost       = 4;
                     break;
                 //LD L, H
                 case 0x6C:
-                    pTarget         = &pCpuState->cpuRegisters.L;
-                    value           = pCpuState->cpuRegisters.H;
+                    pTarget         = &pCpuState->registers.L;
+                    value           = pCpuState->registers.H;
                     cycleCost       = 4;
                     break;
                 //LD L, L
                 case 0x6D:
-                    pTarget         = &pCpuState->cpuRegisters.L;
-                    value           = pCpuState->cpuRegisters.L;
+                    pTarget         = &pCpuState->registers.L;
+                    value           = pCpuState->registers.L;
                     cycleCost       = 4;
                     break;
                 //LD L, (HL)
                 case 0x6E:
-                    pTarget         = &pCpuState->cpuRegisters.L;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    pTarget         = &pCpuState->registers.L;
+                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost       = 8;
                     break;
+                //LD L, A
+                case 0x6F:
+                    pTarget         = &pCpuState->registers.L;
+                    value           = pCpuState->registers.A;
+                    cycleCost       = 4;
                     
                 //LD (HL), B
                 case 0x70:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
-                    value           = pCpuState->cpuRegisters.B;
+                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
+                    value           = pCpuState->registers.B;
                     cycleCost       = 8;
                     break;
                 //LD (HL), C
                 case 0x71:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
-                    value           = pCpuState->cpuRegisters.C;
+                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
+                    value           = pCpuState->registers.C;
                     cycleCost       = 8;
                     break;
                 //LD (HL), D
                 case 0x72:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
-                    value           = pCpuState->cpuRegisters.D;
+                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
+                    value           = pCpuState->registers.D;
                     cycleCost       = 8;
                     break;
                 //LD (HL), E
                 case 0x73:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
-                    value           = pCpuState->cpuRegisters.E;
+                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
+                    value           = pCpuState->registers.E;
                     cycleCost       = 8;
                     break;
                 //LD (HL), H
                 case 0x74:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
-                    value           = pCpuState->cpuRegisters.H;
+                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
+                    value           = pCpuState->registers.H;
                     cycleCost       = 8;
                     break;
                 //LD (HL), L
                 case 0x75:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
-                    value           = pCpuState->cpuRegisters.L;
+                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
+                    value           = pCpuState->registers.L;
                     cycleCost       = 8;
                     break;
                 //LD (HL), n
                 case 0x36:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
                     value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
                     cycleCost       = 12;
                     break;
@@ -1688,15 +1757,53 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             break;
         }
 
-        //JP (HL)
+        //JP HL
         case 0xE9:
         {
             cycleCost = 4u;
-
-            const uint16_t addressToJumpTo = read16BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
-            pCpuState->programCounter = addressToJumpTo;
+            pCpuState->programCounter = pCpuState->registers.HL;
             break;
         }
+
+        //JP conditional
+        case 0xC2:
+        case 0xCA:
+        case 0xD2:
+        case 0xDA:
+        {
+            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            pCpuState->programCounter += 2;
+
+            uint8_t condition = 0;
+            switch( opcode )
+            {
+                //JP nz nn
+                case 0xC2:
+                    condition = pCpuState->registers.Flags.Z == 0;
+                    break;
+                //JP nc nn
+                case 0xD2:
+                    condition = pCpuState->registers.Flags.C == 0;
+                    break;
+                //JP z nn
+                case 0xCA:
+                    condition = pCpuState->registers.Flags.Z == 1;
+                    break;
+                //JP c nn
+                    condition = pCpuState->registers.Flags.C == 1;
+                    break;
+            }
+
+            cycleCost = condition ? 16 : 12;
+
+            if( condition )
+            {
+                pCpuState->programCounter = address;
+            }
+
+            break;
+        }
+
 
         //JR n
         case 0x18:
@@ -1719,19 +1826,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //JR nz
                 case 0x20:
-                    condition = pCpuState->cpuRegisters.Flags.Z == 0;
+                    condition = pCpuState->registers.Flags.Z == 0;
                     break;
                 //JR nc
                 case 0x30:
-                    condition = pCpuState->cpuRegisters.Flags.C == 0;
+                    condition = pCpuState->registers.Flags.C == 0;
                     break;
                 //JR z
                 case 0x28:
-                    condition = pCpuState->cpuRegisters.Flags.Z == 1;
+                    condition = pCpuState->registers.Flags.Z == 1;
                     break;
                 //JR c
                 case 0x38:
-                    condition = pCpuState->cpuRegisters.Flags.C == 1;
+                    condition = pCpuState->registers.Flags.C == 1;
                     break;
             }
 
@@ -1759,35 +1866,35 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             switch(opcode)
             {
                 case 0xAF:
-                    operand = pCpuState->cpuRegisters.A;
+                    operand = pCpuState->registers.A;
                     cycleCost = 4;
                     break;
                 case 0xA8:
-                    operand = pCpuState->cpuRegisters.B;
+                    operand = pCpuState->registers.B;
                     cycleCost = 4;
                     break;
                 case 0xA9:
-                    operand = pCpuState->cpuRegisters.C;
+                    operand = pCpuState->registers.C;
                     cycleCost = 4;
                     break;
                 case 0xAA:
-                    operand = pCpuState->cpuRegisters.D;
+                    operand = pCpuState->registers.D;
                     cycleCost = 4;
                     break;
                 case 0xAB:
-                    operand = pCpuState->cpuRegisters.E;
+                    operand = pCpuState->registers.E;
                     cycleCost = 4;
                     break;
                 case 0xAC:
-                    operand = pCpuState->cpuRegisters.H;
+                    operand = pCpuState->registers.H;
                     cycleCost = 4;
                     break;
                 case 0xAD:
-                    operand = pCpuState->cpuRegisters.L;
+                    operand = pCpuState->registers.L;
                     cycleCost = 4;
                     break;
                 case 0xAE:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost = 8;
                     break;
                 case 0xEE:
@@ -1796,9 +1903,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
                     break;
             }
             
-            pCpuState->cpuRegisters.A            = pCpuState->cpuRegisters.A ^ operand;
-            pCpuState->cpuRegisters.Flags.value  = 0x0;
-            pCpuState->cpuRegisters.Flags.Z      = (pCpuState->cpuRegisters.A == 0);
+            pCpuState->registers.A            = pCpuState->registers.A ^ operand;
+            pCpuState->registers.Flags.value  = 0x0;
+            pCpuState->registers.Flags.Z      = (pCpuState->registers.A == 0);
             
             break;
         }
@@ -1819,42 +1926,42 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //OR A
                 case 0xB7:
-                    operand = pCpuState->cpuRegisters.A;
+                    operand = pCpuState->registers.A;
                     cycleCost += 4;
                     break;
                 //OR B
                 case 0xB0:
-                    operand = pCpuState->cpuRegisters.B;
+                    operand = pCpuState->registers.B;
                     cycleCost += 4;
                     break;
                 //OR C
                 case 0xB1:
-                    operand = pCpuState->cpuRegisters.C;
+                    operand = pCpuState->registers.C;
                     cycleCost += 4;
                     break;
                 //OR D
                 case 0xB2:
-                    operand = pCpuState->cpuRegisters.D;
+                    operand = pCpuState->registers.D;
                     cycleCost += 4;
                     break;
                 //OR E
                 case 0xB3:
-                    operand = pCpuState->cpuRegisters.E;
+                    operand = pCpuState->registers.E;
                     cycleCost += 4;
                     break;
                 //OR H
                 case 0xB4:
-                    operand = pCpuState->cpuRegisters.H;
+                    operand = pCpuState->registers.H;
                     cycleCost += 4;
                     break;
                 //OR L
                 case 0xB5:
-                    operand = pCpuState->cpuRegisters.L;
+                    operand = pCpuState->registers.L;
                     cycleCost += 4;
                     break;
                 //OR (HL)
                 case 0xB6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost += 8;
                     break;
                 //OR #
@@ -1864,9 +1971,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
                     break;
             }
 
-            pCpuState->cpuRegisters.A = pCpuState->cpuRegisters.A | operand;
-            pCpuState->cpuRegisters.Flags.value  = 0x0;
-            pCpuState->cpuRegisters.Flags.Z      = (pCpuState->cpuRegisters.A == 0);
+            pCpuState->registers.A = pCpuState->registers.A | operand;
+            pCpuState->registers.Flags.value  = 0x0;
+            pCpuState->registers.Flags.Z      = (pCpuState->registers.A == 0);
             break;
         }
 
@@ -1886,42 +1993,42 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //AND A
                 case 0xA7:
-                    operand = pCpuState->cpuRegisters.A;
+                    operand = pCpuState->registers.A;
                     cycleCost += 4;
                     break;
                 //AND B
                 case 0xA0:
-                    operand = pCpuState->cpuRegisters.B;
+                    operand = pCpuState->registers.B;
                     cycleCost += 4;
                     break;
                 //AND C
                 case 0xA1:
-                    operand = pCpuState->cpuRegisters.C;
+                    operand = pCpuState->registers.C;
                     cycleCost += 4;
                     break;
                 //AND D
                 case 0xA2:
-                    operand = pCpuState->cpuRegisters.D;
+                    operand = pCpuState->registers.D;
                     cycleCost += 4;
                     break;
                 //AND E
                 case 0xA3:
-                    operand = pCpuState->cpuRegisters.E;
+                    operand = pCpuState->registers.E;
                     cycleCost += 4;
                     break;
                 //AND H
                 case 0xA4:
-                    operand = pCpuState->cpuRegisters.H;
+                    operand = pCpuState->registers.H;
                     cycleCost += 4;
                     break;
                 //AND L
                 case 0xA5:
-                    operand = pCpuState->cpuRegisters.L;
+                    operand = pCpuState->registers.L;
                     cycleCost += 4;
                     break;
                 //AND (HL)
                 case 0xA6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost += 8;
                     break;
                 //AND #
@@ -1931,42 +2038,33 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
                     break;
             }
 
-            pCpuState->cpuRegisters.A = pCpuState->cpuRegisters.A & operand;
-            pCpuState->cpuRegisters.Flags.value  = 0x0;
-            pCpuState->cpuRegisters.Flags.Z      = (pCpuState->cpuRegisters.A == 0);
+            pCpuState->registers.A = pCpuState->registers.A & operand;
+            pCpuState->registers.Flags.value  = 0x0;
+            pCpuState->registers.Flags.Z      = (pCpuState->registers.A == 0);
             break;
         }
 
         //LD n,nn (16bit loads)
         case 0x01:
-            pCpuState->cpuRegisters.BC = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            pCpuState->registers.BC = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
             pCpuState->programCounter += 2u;
             cycleCost = 12;
             break;
         case 0x11:
-            pCpuState->cpuRegisters.DE = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            pCpuState->registers.DE = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
             pCpuState->programCounter += 2u;
             cycleCost = 12;
             break;
         case 0x21:
-            pCpuState->cpuRegisters.HL = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            pCpuState->registers.HL = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
             pCpuState->programCounter += 2u;
             cycleCost = 12;
             break;
         case 0x31:
-            pCpuState->cpuRegisters.SP = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            pCpuState->registers.SP = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
             pCpuState->programCounter += 2u;
             cycleCost = 12;
             break;
-
-        //LDD (HL),A
-        case 0x32:
-        {
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->cpuRegisters.HL, pCpuState->cpuRegisters.A);
-            --pCpuState->cpuRegisters.HL;
-            cycleCost = 8;
-            break;
-        }
 
         //INC n
         case 0x3C:
@@ -1982,31 +2080,31 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //INC A
                 case 0x3C:
-                    pRegister = &pCpuState->cpuRegisters.A;
+                    pRegister = &pCpuState->registers.A;
                     break;
                 //INC B
                 case 0x04:
-                    pRegister = &pCpuState->cpuRegisters.B;
+                    pRegister = &pCpuState->registers.B;
                     break;
                 //INC C
                 case 0x0C:
-                    pRegister = &pCpuState->cpuRegisters.C;
+                    pRegister = &pCpuState->registers.C;
                     break;
                 //INC D
                 case 0x14:
-                    pRegister = &pCpuState->cpuRegisters.D;
+                    pRegister = &pCpuState->registers.D;
                     break;
                 //INC E
                 case 0x1C:
-                    pRegister = &pCpuState->cpuRegisters.E;
+                    pRegister = &pCpuState->registers.E;
                     break;
                 //INC H
                 case 0x24:
-                    pRegister = &pCpuState->cpuRegisters.H;
+                    pRegister = &pCpuState->registers.H;
                     break;
                 //INC L
                 case 0x2C:
-                    pRegister = &pCpuState->cpuRegisters.L;
+                    pRegister = &pCpuState->registers.L;
                     break;
             }
 
@@ -2026,19 +2124,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //INC BC
                 case 0x03:
-                    pRegister = &pCpuState->cpuRegisters.BC;
+                    pRegister = &pCpuState->registers.BC;
                     break;
                 //INC DE
                 case 0x13:
-                    pRegister = &pCpuState->cpuRegisters.DE;
+                    pRegister = &pCpuState->registers.DE;
                     break;
                 //INC HL
                 case 0x23:
-                    pRegister = &pCpuState->cpuRegisters.HL;
+                    pRegister = &pCpuState->registers.HL;
                     break;
                 //INC SP
                 case 0x33:
-                    pRegister = &pCpuState->cpuRegisters.SP;
+                    pRegister = &pCpuState->registers.SP;
                     break;
             }
 
@@ -2061,31 +2159,31 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //DEC A
                 case 0x3D:
-                    pRegister = &pCpuState->cpuRegisters.A;
+                    pRegister = &pCpuState->registers.A;
                     break;
                 //DEC B
                 case 0x05:
-                    pRegister = &pCpuState->cpuRegisters.B;
+                    pRegister = &pCpuState->registers.B;
                     break;
                 //DEC C
                 case 0x0D:
-                    pRegister = &pCpuState->cpuRegisters.C;
+                    pRegister = &pCpuState->registers.C;
                     break;
                 //DEC D
                 case 0x15:
-                    pRegister = &pCpuState->cpuRegisters.D;
+                    pRegister = &pCpuState->registers.D;
                     break;
                 //DEC E
                 case 0x1D:
-                    pRegister = &pCpuState->cpuRegisters.E;
+                    pRegister = &pCpuState->registers.E;
                     break;
                 //DEC H
                 case 0x25:
-                    pRegister = &pCpuState->cpuRegisters.H;
+                    pRegister = &pCpuState->registers.H;
                     break;
                 //DEC L
                 case 0x2D:
-                    pRegister = &pCpuState->cpuRegisters.L;
+                    pRegister = &pCpuState->registers.L;
                     break;
             }
 
@@ -2105,19 +2203,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //DEC BC
                 case 0x0B:
-                    pRegister = &pCpuState->cpuRegisters.BC;
+                    pRegister = &pCpuState->registers.BC;
                     break;
                 //DEC DE
                 case 0x1B:
-                    pRegister = &pCpuState->cpuRegisters.DE;
+                    pRegister = &pCpuState->registers.DE;
                     break;
                 //DEC HL
                 case 0x2B:
-                    pRegister = &pCpuState->cpuRegisters.HL;
+                    pRegister = &pCpuState->registers.HL;
                     break;
                 //DEC SP
                 case 0x3B:
-                    pRegister = &pCpuState->cpuRegisters.SP;
+                    pRegister = &pCpuState->registers.SP;
                     break;
             }
 
@@ -2137,7 +2235,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         case 0xE0:
         {
             const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
-            write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->cpuRegisters.A);
+            write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.A);
             cycleCost = 12;
             break;
         }
@@ -2146,7 +2244,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         case 0xF0:
         {
             const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
-            pCpuState->cpuRegisters.A = read8BitValueFromAddress(pMemoryMapper, address);
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, address);
             cycleCost = 12;
             break;
         }
@@ -2178,22 +2276,22 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //ADD HL, BC
                 case 0x09:
-                    operand = pCpuState->cpuRegisters.BC;
+                    operand = pCpuState->registers.BC;
                     cycleCost = 8;
                     break;
                 //ADD HL, DE
                 case 0x19:
-                    operand = pCpuState->cpuRegisters.DE;
+                    operand = pCpuState->registers.DE;
                     cycleCost = 8;
                     break;
                 //ADD HL, HL
                 case 0x29:
-                    operand = pCpuState->cpuRegisters.HL;
+                    operand = pCpuState->registers.HL;
                     cycleCost = 8;
                     break;
                 //ADD HL, SP
                 case 0x39:
-                    operand = pCpuState->cpuRegisters.SP;
+                    operand = pCpuState->registers.SP;
                     cycleCost = 8;
                     break;
             }
@@ -2206,7 +2304,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         case 0xE8:
         {
             const int8_t value = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
-            pCpuState->cpuRegisters.SP += value;
+            pCpuState->registers.SP += value;
             break;
         }
 
@@ -2226,42 +2324,42 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //ADD A, A
                 case 0x87:
-                    operand = pCpuState->cpuRegisters.A;
+                    operand = pCpuState->registers.A;
                     cycleCost = 4;
                     break;
                 //ADD A, B
                 case 0x80:
-                    operand = pCpuState->cpuRegisters.B;
+                    operand = pCpuState->registers.B;
                     cycleCost = 4;
                     break;
                 //ADD A, C
                 case 0x81:
-                    operand = pCpuState->cpuRegisters.C;
+                    operand = pCpuState->registers.C;
                     cycleCost = 4;
                     break;
                 //ADD A, D
                 case 0x82:
-                    operand = pCpuState->cpuRegisters.D;
+                    operand = pCpuState->registers.D;
                     cycleCost = 4;
                     break;
                 //ADD A, E
                 case 0x83:
-                    operand = pCpuState->cpuRegisters.E;
+                    operand = pCpuState->registers.E;
                     cycleCost = 4;
                     break;
                 //ADD A, H
                 case 0x84:
-                    operand = pCpuState->cpuRegisters.H;
+                    operand = pCpuState->registers.H;
                     cycleCost = 4;
                     break;
                 //ADD A, L
                 case 0x85:
-                    operand = pCpuState->cpuRegisters.L;
+                    operand = pCpuState->registers.L;
                     cycleCost = 4;
                     break;
                 //ADD A, (HL)
                 case 0x86:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost = 8;
                     break;
                 //ADD A, #
@@ -2291,42 +2389,42 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //SUB A, A
                 case 0x87:
-                    operand = pCpuState->cpuRegisters.A;
+                    operand = pCpuState->registers.A;
                     cycleCost = 4;
                     break;
                 //SUB A, B
                 case 0x80:
-                    operand = pCpuState->cpuRegisters.B;
+                    operand = pCpuState->registers.B;
                     cycleCost = 4;
                     break;
                 //SUB A, C
                 case 0x81:
-                    operand = pCpuState->cpuRegisters.C;
+                    operand = pCpuState->registers.C;
                     cycleCost = 4;
                     break;
                 //SUB A, D
                 case 0x82:
-                    operand = pCpuState->cpuRegisters.D;
+                    operand = pCpuState->registers.D;
                     cycleCost = 4;
                     break;
                 //SUB A, E
                 case 0x83:
-                    operand = pCpuState->cpuRegisters.E;
+                    operand = pCpuState->registers.E;
                     cycleCost = 4;
                     break;
                 //SUB A, H
                 case 0x84:
-                    operand = pCpuState->cpuRegisters.H;
+                    operand = pCpuState->registers.H;
                     cycleCost = 4;
                     break;
                 //SUB A, L
                 case 0x85:
-                    operand = pCpuState->cpuRegisters.L;
+                    operand = pCpuState->registers.L;
                     cycleCost = 4;
                     break;
                 //SUB A, (HL)
                 case 0x86:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost = 8;
                     break;
                 //SUB A, #
@@ -2350,34 +2448,32 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //RET NZ
                 case 0xC0:
-                    condition = pCpuState->cpuRegisters.Flags.Z == 0;
+                    condition = pCpuState->registers.Flags.Z == 0;
                     break;
 
                 //RET NC
                 case 0xD0:
-                    condition = pCpuState->cpuRegisters.Flags.C == 0;
+                    condition = pCpuState->registers.Flags.C == 0;
                     break;
 
                 //RET NZ
                 case 0xC8:
-                    condition = pCpuState->cpuRegisters.Flags.Z == 1;
+                    condition = pCpuState->registers.Flags.Z == 1;
                     break;
 
                 //RET NC
                 case 0xD8:
-                    condition = pCpuState->cpuRegisters.Flags.C == 1;
+                    condition = pCpuState->registers.Flags.C == 1;
                     break;
             }
+
+            cycleCost = condition ? 20 : 8;
 
             if( condition )
             {
                 pCpuState->programCounter = pop16BitValueFromStack(pCpuState, pMemoryMapper);
-                cycleCost = 20;
             }
-            else
-            {
-                cycleCost = 8;
-            }
+            break;
         }
 
         //RETI
@@ -2398,7 +2494,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //INC (HL)
         case 0x34:
         {
-            uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+            uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
             increment8BitValue(pCpuState, pValue);
             cycleCost = 12;
             break;
@@ -2407,7 +2503,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //DEC (HL)
         case 0x35:
         {
-            uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+            uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
             decrement8BitValue(pCpuState, pValue);
             cycleCost = 12;
             break;
@@ -2416,9 +2512,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         // CPL
         case 0x2F:
         {
-            pCpuState->cpuRegisters.A = pCpuState->cpuRegisters.A ^ 0xFF;
-            pCpuState->cpuRegisters.Flags.N = 1;
-            pCpuState->cpuRegisters.Flags.H = 1;
+            pCpuState->registers.A = pCpuState->registers.A ^ 0xFF;
+            pCpuState->registers.Flags.N = 1;
+            pCpuState->registers.Flags.H = 1;
             cycleCost = 4;
             break;
         }
@@ -2426,9 +2522,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //CCF
         case 0x3F:
         {
-            pCpuState->cpuRegisters.Flags.C = !pCpuState->cpuRegisters.Flags.C;
-            pCpuState->cpuRegisters.Flags.N = 0;
-            pCpuState->cpuRegisters.Flags.H = 0;
+            pCpuState->registers.Flags.C = !pCpuState->registers.Flags.C;
+            pCpuState->registers.Flags.N = 0;
+            pCpuState->registers.Flags.H = 0;
             cycleCost = 4;
             break;
         }
@@ -2436,9 +2532,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //SCF
         case 0x37:
         {
-            pCpuState->cpuRegisters.Flags.C = 1;
-            pCpuState->cpuRegisters.Flags.N = 0;
-            pCpuState->cpuRegisters.Flags.H = 0;
+            pCpuState->registers.Flags.C = 1;
+            pCpuState->registers.Flags.N = 0;
+            pCpuState->registers.Flags.H = 0;
             cycleCost = 4;
             break;
         }
@@ -2454,19 +2550,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //PUSH AF
                 case 0xF5:
-                    value = pCpuState->cpuRegisters.AF;
+                    value = pCpuState->registers.AF;
                     break;
                 //PUSH BC
                 case 0xC5:
-                    value = pCpuState->cpuRegisters.BC;
+                    value = pCpuState->registers.BC;
                     break;
                 //PUSH DE
                 case 0xD5:
-                    value = pCpuState->cpuRegisters.DE;
+                    value = pCpuState->registers.DE;
                     break;
                 //PUSH HL
                 case 0xE5:
-                    value = pCpuState->cpuRegisters.HL;
+                    value = pCpuState->registers.HL;
                     break;
             }
             push16BitValueToStack( pCpuState, pMemoryMapper, value );
@@ -2485,19 +2581,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //POP AF
                 case 0xF1:
-                    pTarget = &pCpuState->cpuRegisters.AF;
+                    pTarget = &pCpuState->registers.AF;
                     break;
                 //POP BC
                 case 0xC1:
-                    pTarget = &pCpuState->cpuRegisters.BC;
+                    pTarget = &pCpuState->registers.BC;
                     break;
                 //POP DE
                 case 0xD1:
-                    pTarget = &pCpuState->cpuRegisters.DE;
+                    pTarget = &pCpuState->registers.DE;
                     break;
                 //POP HL
                 case 0xE1:
-                    pTarget = &pCpuState->cpuRegisters.HL;
+                    pTarget = &pCpuState->registers.HL;
                     break;
             }
             *pTarget = pop16BitValueFromStack( pCpuState, pMemoryMapper );
@@ -2517,6 +2613,20 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         {
             const uint8_t cbOpcode = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             cycleCost = handleCbOpcode(pCpuState, pMemoryMapper, cbOpcode);
+            break;
+        }
+
+        //RLCA
+        case 0x07:
+        //RLA
+        case 0x17:
+        //RRCA
+        case 0x0F:
+        //RRA
+        case 0x1F:
+        {
+            cycleCost = 4;
+            handleCbOpcode(pCpuState, pMemoryMapper, opcode);
             break;
         }
 
@@ -2553,42 +2663,42 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //CP A
                 case 0xBF:
-                    value = pCpuState->cpuRegisters.A;
+                    value = pCpuState->registers.A;
                     cycleCost = 4;
                     break;
                 //CP B
                 case 0xB8:
-                    value = pCpuState->cpuRegisters.B;
+                    value = pCpuState->registers.B;
                     cycleCost = 4;
                     break;
                 //CP C
                 case 0xB9:
-                    value = pCpuState->cpuRegisters.C;
+                    value = pCpuState->registers.C;
                     cycleCost = 4;
                     break;
                 //CP D
                 case 0xBA:
-                    value = pCpuState->cpuRegisters.D;
+                    value = pCpuState->registers.D;
                     cycleCost = 4;
                     break;
                 //CP E
                 case 0xBB:
-                    value = pCpuState->cpuRegisters.E;
+                    value = pCpuState->registers.E;
                     cycleCost = 4;
                     break;
                 //CP H
                 case 0xBC:
-                    value = pCpuState->cpuRegisters.H;
+                    value = pCpuState->registers.H;
                     cycleCost = 4;
                     break;
                 //CP L
                 case 0xBD:
-                    value = pCpuState->cpuRegisters.L;
+                    value = pCpuState->registers.L;
                     cycleCost = 4;
                     break;
                 //CP (HL)
                 case 0xBE:
-                    value = read8BitValueFromAddress(pMemoryMapper, pCpuState->cpuRegisters.HL);
+                    value = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     cycleCost = 8;
                     break;
                 //CP #
@@ -2603,10 +2713,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         }
 
         default:
-#ifdef K15_PRINT_DISASSEMBLY
             printf( "not implemented opcode '0x%.2hhX'\n", opcode );
-#endif
-
 #ifdef K15_BREAK_ON_UNKNOWN_INSTRUCTION
             __debugbreak();
 #endif

@@ -270,7 +270,7 @@ void doFrame(uint32 p_DeltaTimeInMS, HWND hwnd)
 	swapBuffers(hwnd);
 }
 
-void renderVideoRam(const uint8_t* pVideoRam)
+void renderVideoRam(const uint8_t* pVideoRam, const uint8_t* pBG)
 {
 	const uint32_t pixelMapping[4] = {
 		RGB(255,255,255),
@@ -278,36 +278,70 @@ void renderVideoRam(const uint8_t* pVideoRam)
 		RGB(128, 128, 128),
 		RGB(64, 64, 64),
 	};
-	const size_t videoRamSizeInBytes = Kbyte(8);
 	const size_t tileDataTableSizeInBytes = 0x1000;
 
 	int x = 0;
 	int y = 0;
 
-	for( size_t tileDataByteIndex = 0; tileDataByteIndex < tileDataTableSizeInBytes; )
+	for( size_t tileIndex = 0; tileIndex < tileDataTableSizeInBytes; )
 	{
-		for( int tileY = 0; tileY < 8; ++tileY )
+		for( size_t pixely = 0; pixely < 8; ++pixely )
 		{
-			const uint16_t tileData = ( pVideoRam[tileDataByteIndex + tileY * 2 + 0] << 0 | 
-										pVideoRam[tileDataByteIndex + tileY * 2 + 1] << 8 );
+				const uint8_t lineValues[2] = {
+					pVideoRam[ tileIndex + 0 ],
+					pVideoRam[ tileIndex + 1 ]
+				};
 
-			pBackbuffer[x + 0 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  0) & 0x3)];
-			pBackbuffer[x + 1 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  2) & 0x3)];
-			pBackbuffer[x + 2 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  4) & 0x3)];
-			pBackbuffer[x + 3 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  6) & 0x3)];
-			pBackbuffer[x + 4 + (y + tileY) * screenWidth] = pixelMapping[((tileData <<  8) & 0x3)];
-			pBackbuffer[x + 5 + (y + tileY) * screenWidth] = pixelMapping[((tileData << 10) & 0x3)];
-			pBackbuffer[x + 6 + (y + tileY) * screenWidth] = pixelMapping[((tileData << 12) & 0x3)];
-			pBackbuffer[x + 7 + (y + tileY) * screenWidth] = pixelMapping[((tileData << 14) & 0x3)];
+				const uint8_t colorIdBitsL[8] = {
+					(uint8_t)(lineValues[0] >> 7 & 0x1),
+					(uint8_t)(lineValues[0] >> 6 & 0x1),
+					(uint8_t)(lineValues[0] >> 5 & 0x1),
+					(uint8_t)(lineValues[0] >> 4 & 0x1),
+					(uint8_t)(lineValues[0] >> 3 & 0x1),
+					(uint8_t)(lineValues[0] >> 2 & 0x1),
+					(uint8_t)(lineValues[0] >> 1 & 0x1),
+					(uint8_t)(lineValues[0] >> 0 & 0x1)
+				};
+
+				const uint8_t colorIdBitsR[8] = {
+					(uint8_t)(lineValues[1] >> 7 & 0x1),
+					(uint8_t)(lineValues[1] >> 6 & 0x1),
+					(uint8_t)(lineValues[1] >> 5 & 0x1),
+					(uint8_t)(lineValues[1] >> 4 & 0x1),
+					(uint8_t)(lineValues[1] >> 3 & 0x1),
+					(uint8_t)(lineValues[1] >> 2 & 0x1),
+					(uint8_t)(lineValues[1] >> 1 & 0x1),
+					(uint8_t)(lineValues[1] >> 0 & 0x1)
+				};
+
+				const uint8_t colorIds[8] = {
+					(uint8_t)(colorIdBitsL[0] << 0 | colorIdBitsR[0] << 1),
+					(uint8_t)(colorIdBitsL[1] << 0 | colorIdBitsR[1] << 1),
+					(uint8_t)(colorIdBitsL[2] << 0 | colorIdBitsR[2] << 1),
+					(uint8_t)(colorIdBitsL[3] << 0 | colorIdBitsR[3] << 1),
+					(uint8_t)(colorIdBitsL[4] << 0 | colorIdBitsR[4] << 1),
+					(uint8_t)(colorIdBitsL[5] << 0 | colorIdBitsR[5] << 1),
+					(uint8_t)(colorIdBitsL[6] << 0 | colorIdBitsR[6] << 1),
+					(uint8_t)(colorIdBitsL[7] << 0 | colorIdBitsR[7] << 1)
+				};
+
+				pBackbuffer[x + 0 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[0] ];
+				pBackbuffer[x + 1 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[1] ];
+				pBackbuffer[x + 2 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[2] ];
+				pBackbuffer[x + 3 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[3] ];
+				pBackbuffer[x + 4 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[4] ];
+				pBackbuffer[x + 5 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[5] ];
+				pBackbuffer[x + 6 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[6] ];
+				pBackbuffer[x + 7 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[7] ];
+				tileIndex += 2;
 		}
 
-		x += 8;
-		if( x == 256 )
+		x+=8;
+		if( x==8*16)
 		{
-			x = 0;
-			y += 8;
+			x=0;
+			y+=8;
 		}
-		tileDataByteIndex += 16;
 	}
 }
 
@@ -338,6 +372,8 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 
 	startEmulation( pEmulatorInstance, pRomData );
 
+	uint32_t totalCycleCount = 0;
+
 	while (loopRunning)
 	{
 		timeFrameStarted = getTimeInMilliseconds(performanceFrequency);
@@ -361,10 +397,22 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 
 		const uint8_t cycleCount = runSingleInstruction( pEmulatorInstance );
 		tickPPU( pEmulatorInstance, cycleCount );
+	
+		if( cycleCount == 0 )
+		{
+			__debugbreak();
+		}
 
-		const uint8_t* pVideoRam = getVideoRam(pEmulatorInstance);
-		renderVideoRam(pVideoRam);
-		swapBuffers(hwnd);
+		totalCycleCount += cycleCount;
+		if( totalCycleCount >= 70224 )
+		{
+			totalCycleCount -= 70224;
+			const uint8_t* pVideoRam = pEmulatorInstance->pMemoryMapper->pVideoRAM;
+			const uint8_t* pBG = pEmulatorInstance->pPpuState->pBackgroundOrWindowTiles[ 0 ];
+			renderVideoRam( pVideoRam, pBG );
+			swapBuffers( hwnd );
+		}
+
 	}
 
 	DestroyWindow(hwnd);
