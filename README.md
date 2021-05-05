@@ -21,7 +21,12 @@ All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h`
 - [x] Display video ram and show the tetris tileset
 - [ ] Implement opcodes to get into tetris menu and start a game
 - [ ] Test Tetris
-- [ ] Add IMGUI dependency to be able to add debug features
+- [x] Add IMGUI dependency to be able to add debug features
+  - [ ] Add breakpoints
+  - [ ] Add conditional breakpoints
+  - [ ] Add code stepping
+  - [ ] Add memory inspection
+  - [ ] Add VRAM viewer
 - [ ] Implement rom-switching
   - [ ] MBC1
   - [ ] MBC3
@@ -31,3 +36,4 @@ All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h`
 - [ ] Implement sound
 
 Currently the emulator is purely run on the CPU, meaning that the Nintendo GameBoy CPU as well as the PPU are being emulated purely on the host CPU.
+The final image from the emulator will be blit to the screen by the GPU to utilize programmable scaling options and filters.
