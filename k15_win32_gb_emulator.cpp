@@ -2,12 +2,22 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <gl/GL.h>
+
+#include "imgui/imgui.cpp"
+#include "imgui/imgui_demo.cpp"
+#include "imgui/imgui_draw.cpp"
+#include "imgui/imgui_tables.cpp"
+#include "imgui/imgui_widgets.cpp"
+#include "imgui/imgui_impl_win32.cpp"
+#include "imgui/imgui_impl_opengl2.cpp"
 
 #include "k15_gb_emulator.h"
 
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "opengl32.lib")
 
 #define K15_FALSE 0
 #define K15_TRUE 1
@@ -47,14 +57,14 @@ void allocateDebugConsole()
 	freopen("CONOUT$", "w", stdout);
 }
 
-void resizeBackbuffer(HWND hwnd, uint32 p_Width, uint32 p_Height);
-
-HDC backbufferDC = 0;
-HBITMAP backbufferBitmap = 0;
 uint32 screenWidth = 1024;
 uint32 screenHeight = 768;
 uint32 timePerFrameInMS = 16;
-uint32_t* pBackbuffer = nullptr;
+
+GLuint gbScreenTexture = 0;
+uint32 gbScreenWidth = 160;
+uint32 gbScreenHeight = 144;
+uint8_t* pGameboyVideoBuffer = nullptr;
 
 void K15_WindowCreated(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -88,15 +98,21 @@ void K15_MouseWheel(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 void K15_WindowResized(HWND hwnd, UINT p_Messaeg, WPARAM wparam, LPARAM lparam)
 {
-	WORD newWidth = (WORD)(lparam);
-	WORD newHeight = (WORD)(lparam >> 16);
+	RECT clientRect = {0};
+	GetClientRect(hwnd, &clientRect);
 
-	resizeBackbuffer(hwnd, newWidth, newHeight);
+	screenWidth  = clientRect.right - clientRect.left;
+	screenHeight = clientRect.bottom - clientRect.top;
+
+	glViewport(0, 0, screenWidth, screenHeight);
 }
 
 LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	bool8 messageHandled = K15_FALSE;
+
+	if (ImGui_ImplWin32_WndProcHandler(hwnd, message, wparam, lparam))
+        return true;
 
 	switch (message)
 	{
@@ -180,38 +196,50 @@ uint32 getTimeInMilliseconds(LARGE_INTEGER p_PerformanceFrequency)
 	return (uint32)(appTime.QuadPart / p_PerformanceFrequency.QuadPart);
 }
 
-void resizeBackbuffer(HWND hwnd, uint32 p_Width, uint32 p_Height)
-{
-	DeleteObject(backbufferBitmap);
-	DeleteDC(backbufferDC);
-
-	BITMAPINFO info;
-	memset(&info, 0, sizeof(info));
-	info.bmiHeader.biSize = sizeof(info.bmiHeader);
-	info.bmiHeader.biWidth = screenWidth;
-	info.bmiHeader.biHeight = screenHeight;
-	info.bmiHeader.biPlanes = 1;
-	info.bmiHeader.biBitCount = 32;
-	info.bmiHeader.biCompression = BI_RGB;
-
-	info.bmiHeader.biHeight = -info.bmiHeader.biHeight;
-
-	HDC originalDC = GetDC(hwnd);
-	backbufferDC = CreateCompatibleDC(originalDC);
-	backbufferBitmap = CreateDIBSection(backbufferDC, &info, DIB_RGB_COLORS, (VOID**)&pBackbuffer, nullptr, 0u);
-
-	screenWidth = p_Width;
-	screenHeight = p_Height;
-	
-	SelectObject(backbufferDC, backbufferBitmap);
-}
-
 uint8_t* pRomData = nullptr;
 GBEmulatorInstance* pEmulatorInstance = nullptr;
 
 void setup(HWND hwnd)
 {	
-	resizeBackbuffer(hwnd, screenWidth, screenHeight);
+	PIXELFORMATDESCRIPTOR pfd =
+		{
+			sizeof(PIXELFORMATDESCRIPTOR),
+			1,
+			PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,    //Flags
+			PFD_TYPE_RGBA,            //The kind of framebuffer. RGBA or palette.
+			32,                        //Colordepth of the framebuffer.
+			0, 0, 0, 0, 0, 0,
+			0,
+			0,
+			0,
+			0, 0, 0, 0,
+			24,                        //Number of bits for the depthbuffer
+			8,                        //Number of bits for the stencilbuffer
+			0,                        //Number of Aux buffers in the framebuffer.
+			PFD_MAIN_PLANE,
+			0,
+			0, 0, 0
+		};
+
+	HDC mainDC = GetDC(hwnd);
+
+	int pixelFormat = ChoosePixelFormat(mainDC, &pfd); 
+	SetPixelFormat(mainDC,pixelFormat, &pfd);
+
+	HGLRC glContext = wglCreateContext(mainDC);
+
+	wglMakeCurrent(mainDC, glContext);
+	
+	//set default gl state
+	glShadeModel(GL_SMOOTH);
+
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+
+	pGameboyVideoBuffer = (uint8*)malloc(gbScreenHeight*gbScreenWidth*3);
 
 	HANDLE pRomHandle = CreateFile("rom.gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
 	if( pRomHandle == INVALID_HANDLE_VALUE )
@@ -235,39 +263,86 @@ void setup(HWND hwnd)
 
 	const GBRomHeader header = getGBRomHeader(pRomData);
 	SetWindowText(hwnd, (LPCSTR)header.gameTitle);
-}
 
-void swapBuffers(HWND hwnd)
-{
-	HDC originalDC = GetDC(hwnd);
-	
-	//blit to front buffer
-	BitBlt(originalDC, 0, 0, screenWidth, screenHeight, backbufferDC, 0, 0, SRCCOPY);
+	glGenTextures(1, &gbScreenTexture);
 
-	//clear backbuffer
-	BitBlt(backbufferDC, 0, 0, screenWidth, screenHeight, backbufferDC, 0, 0, BLACKNESS);
-}
+	glBindTexture(GL_TEXTURE_2D, gbScreenTexture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 
-void drawDeltaTime(uint32 p_DeltaTimeInMS)
-{
-	RECT textRect;
-	textRect.left = 70;
-	textRect.top = 70;
-	textRect.bottom = screenHeight;
-	textRect.right = screenWidth;
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO(); (void)io;
 
-	char messageBuffer[64];
-	SetTextColor(backbufferDC, RGB(255, 255, 255));
-	SetBkColor(backbufferDC, RGB(0, 0, 0));
+	ImGui::StyleColorsDark();
 
-	sprintf_s(messageBuffer, 64, "MS: %d", p_DeltaTimeInMS);
-	DrawTextA(backbufferDC, messageBuffer, -1, &textRect, DT_LEFT | DT_TOP);
+	ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplOpenGL2_Init();
 }
 
 void doFrame(uint32 p_DeltaTimeInMS, HWND hwnd)
 {
-	drawDeltaTime(p_DeltaTimeInMS);
-	swapBuffers(hwnd);
+	#if 0
+	glBegin(GL_TRIANGLES);
+		glColor3f(1.0, 0.0, 0.0);
+		glVertex3f(1.0f, -1.0f, 0.0f);
+
+		glColor3f(0.0, 1.0f, 0.0f);
+		glVertex3f(0.0f, 1.0f, 0.0f);
+
+		glColor3f(0.0, 0.0, 1.0);
+		glVertex3f(-1.0f, -1.0f, 0.0f);
+	glEnd();
+	#endif
+
+	glEnable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, gbScreenTexture);
+
+#if 1
+const float pixelUnitH = 1.0f/(float)screenWidth;
+const float pixelUnitV = 1.0f/(float)screenHeight;
+const float centerH = pixelUnitH*(0.5f*(float)screenWidth);
+const float centerV = pixelUnitV*(0.5f*(float)screenHeight);
+
+const float gbSizeH = pixelUnitH*gbScreenWidth;
+const float gbSizeV = pixelUnitV*gbScreenHeight;
+
+const float scale = 4.0f;
+
+const float left  = -gbSizeH * 0.5f * scale;
+const float right = +gbSizeH * 0.5f * scale;
+const float top	  = +gbSizeV * 0.5f * scale;
+const float bottom	  = -gbSizeV * 0.5f * scale;
+
+	glBegin(GL_TRIANGLES);
+		glTexCoord2f(0.0f, 1.0f);
+		glVertex2f(left, bottom);
+
+		glTexCoord2f(1.0f, 1.0f);
+		glVertex2f(right, bottom);
+
+		glTexCoord2f(1.0f, 0.0f);
+		glVertex2f(right, top);
+
+		glTexCoord2f(1.0f, 0.0f);
+		glVertex2f(right, top);
+
+		glTexCoord2f(0.0f, 0.0f);
+		glVertex2f(left, top);
+
+		glTexCoord2f(0.0f, 1.0f);
+		glVertex2f(left, bottom);
+	glEnd();
+	#endif
+
+	ImGui::Render();
+	ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
+
+	HDC deviceContext = GetDC(hwnd);
+	SwapBuffers(deviceContext);
+
+	glClear(GL_COLOR_BUFFER_BIT);
 }
 
 void renderVideoRam(const uint8_t* pVideoRam, const uint8_t* pBG)
@@ -325,14 +400,16 @@ void renderVideoRam(const uint8_t* pVideoRam, const uint8_t* pBG)
 					(uint8_t)(colorIdBitsL[7] << 0 | colorIdBitsR[7] << 1)
 				};
 
-				pBackbuffer[x + 0 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[0] ];
-				pBackbuffer[x + 1 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[1] ];
-				pBackbuffer[x + 2 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[2] ];
-				pBackbuffer[x + 3 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[3] ];
-				pBackbuffer[x + 4 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[4] ];
-				pBackbuffer[x + 5 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[5] ];
-				pBackbuffer[x + 6 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[6] ];
-				pBackbuffer[x + 7 + ((y + pixely) * screenWidth)] = pixelMapping[ colorIds[7] ];
+				for( size_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
+				{
+					const uint32_t vbIndex = x + pixelIndex + (y+pixely)*gbScreenWidth;
+
+					const uint32_t pixel = pixelMapping[ colorIds[ pixelIndex ] ];
+					pGameboyVideoBuffer[vbIndex * 3 + 0] = pixel >> 0;
+					pGameboyVideoBuffer[vbIndex * 3 + 1] = pixel >> 8;
+					pGameboyVideoBuffer[vbIndex * 3 + 2] = pixel >> 16;
+				}
+				
 				tileIndex += 2;
 		}
 
@@ -376,6 +453,12 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 
 	while (loopRunning)
 	{
+		ImGui_ImplOpenGL2_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+		ImGui::NewFrame();
+
+		ImGui::ShowDemoWindow();
+
 		timeFrameStarted = getTimeInMilliseconds(performanceFrequency);
 
 		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE) > 0)
@@ -410,9 +493,19 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			const uint8_t* pVideoRam = pEmulatorInstance->pMemoryMapper->pVideoRAM;
 			const uint8_t* pBG = pEmulatorInstance->pPpuState->pBackgroundOrWindowTiles[ 0 ];
 			renderVideoRam( pVideoRam, pBG );
-			swapBuffers( hwnd );
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 		}
 
+		ImGui::EndFrame();
+
+		timeFrameEnded = getTimeInMilliseconds(performanceFrequency);
+		deltaMs += timeFrameEnded - timeFrameStarted;
+
+		if( deltaMs >= 16 )
+		{
+			doFrame( deltaMs, hwnd );
+			deltaMs = 0;
+		}
 	}
 
 	DestroyWindow(hwnd);
