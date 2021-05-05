@@ -26,6 +26,7 @@ All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h`
   - [ ] MBC1
   - [ ] MBC3
   - [ ] MBC5
+- [ ] verify correctness with Blargg's Gameboy hardware test ROMs
 - [ ] Implement Nintendo GameBoy Color features
 - [ ] Implement sound
 
