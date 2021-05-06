@@ -5,10 +5,20 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "(Windows) Launch",
+            "name": "(Windows) Launch Debug",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "k15_win32_gb_emulator.exe",
+            "program": "k15_win32_gb_emulator_debug.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+        },
+        {
+            "name": "(Windows) Launch Release",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "k15_win32_gb_emulator_release.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

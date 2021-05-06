@@ -648,14 +648,15 @@ struct GBEmulatorInstance
         for(uint8_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex)
         {
             const uint8_t bitIndex  = pixelIndex;
+            const uint8_t rBitIndex = 7 - bitIndex;
 
             const uint8_t pixelBits[2] = {
                 ( uint8_t )( tileLineValues[0] >> bitIndex & 0x1 ),
                 ( uint8_t )( tileLineValues[1] >> bitIndex & 0x1 ),
             };
 
-            pixels |= ( pixelBits[0] << ( 0 + bitIndex * 2 ) );
-            pixels |= ( pixelBits[1] << ( 1 + bitIndex * 2 ) );
+            pixels |= ( pixelBits[0] << ( 0 + rBitIndex * 2 ) );
+            pixels |= ( pixelBits[1] << ( 1 + rBitIndex * 2 ) );
         }
 
         return pixels;

@@ -4,11 +4,13 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build K15 GB Emulator",
+            "label": "Build K15 GB Emulator - DEBUG",
             "type": "shell",
             "windows": {
                 "command": "build.bat",
-                "args": [ "debug" ]
+                "args": [
+                    "debug"
+                ]
             },
             "problemMatcher": [
                 "$msCompile"
@@ -18,5 +20,32 @@
                 "isDefault": true
             }
         },
+        {
+            "label": "Build K15 GB Emulator - RELEASE",
+            "type": "shell",
+            "windows": {
+                "command": "build.bat",
+                "args": [
+                    "release"
+                ]
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "Dump disassembly of release build",
+            "type": "shell",
+            "windows": {
+                "command": "disassemble_release.bat",
+                "args": [
+                ]
+            },
+            "problemMatcher": []
+        }
     ]
 }
