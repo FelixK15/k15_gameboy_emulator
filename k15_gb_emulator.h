@@ -4,9 +4,6 @@
 #define K15_PRINT_DISASSEMBLY
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION
 
-#ifdef K15_PRINT_DISASSEMBLY
-#endif
-
 #include "k15_gb_opcodes.h"
 
 #define Kbyte(x) (x)*1024
