@@ -203,6 +203,37 @@ uint32 getTimeInMilliseconds(LARGE_INTEGER p_PerformanceFrequency)
 	return (uint32)(appTime.QuadPart / p_PerformanceFrequency.QuadPart);
 }
 
+uint16_t generateGbPixelsForTileLine(uint16_t tileLine)
+{
+	const uint32_t selectorMask = 0b1010101010101010;
+
+	uint8_t a = (tileLine & 0xFF00) >> 8;
+	uint8_t b = (tileLine & 0x00FF) >> 0;
+
+	uint16_t pixels = 0;
+	__asm
+	{
+		mov		bl, a
+		mov		cl, b
+		mov 	edx, selectorMask
+		pdep 	ebx, ebx, edx		; extract bits from first pixel byte
+		shr		edx, 1				; shift selectorMask to bit extract bits from second tile byte
+		pdep 	ecx, ecx, edx		; extract bits from first pixel byte
+		or		bx, cx				; or them together to get one pixel tile row
+		mov 	pixels, bx	
+	}
+
+	//FK: reverse bit order
+	uint16_t reversedPixels = 0;
+	for( size_t bitIndex = 0; bitIndex < 16; ++bitIndex )
+	{
+		const uint8_t pixelBit = (pixels >> bitIndex) & 0x1;
+		reversedPixels |= (pixelBit << ( 15 - bitIndex ) );
+	}
+
+	return reversedPixels;
+}
+
 void renderVideoRam(const uint8_t* pVideoRam)
 {
 	const uint32_t pixelMapping[4] = {
@@ -220,55 +251,22 @@ void renderVideoRam(const uint8_t* pVideoRam)
 	{
 		for( size_t pixely = 0; pixely < 8; ++pixely )
 		{
-				const uint8_t lineValues[2] = {
-					pVideoRam[ tileIndex + 0 ],
-					pVideoRam[ tileIndex + 1 ]
-				};
-
-				const uint8_t colorIdBitsL[8] = {
-					(uint8_t)(lineValues[0] >> 7 & 0x1),
-					(uint8_t)(lineValues[0] >> 6 & 0x1),
-					(uint8_t)(lineValues[0] >> 5 & 0x1),
-					(uint8_t)(lineValues[0] >> 4 & 0x1),
-					(uint8_t)(lineValues[0] >> 3 & 0x1),
-					(uint8_t)(lineValues[0] >> 2 & 0x1),
-					(uint8_t)(lineValues[0] >> 1 & 0x1),
-					(uint8_t)(lineValues[0] >> 0 & 0x1)
-				};
-
-				const uint8_t colorIdBitsR[8] = {
-					(uint8_t)(lineValues[1] >> 7 & 0x1),
-					(uint8_t)(lineValues[1] >> 6 & 0x1),
-					(uint8_t)(lineValues[1] >> 5 & 0x1),
-					(uint8_t)(lineValues[1] >> 4 & 0x1),
-					(uint8_t)(lineValues[1] >> 3 & 0x1),
-					(uint8_t)(lineValues[1] >> 2 & 0x1),
-					(uint8_t)(lineValues[1] >> 1 & 0x1),
-					(uint8_t)(lineValues[1] >> 0 & 0x1)
-				};
-
-				const uint8_t colorIds[8] = {
-					(uint8_t)(colorIdBitsL[0] << 0 | colorIdBitsR[0] << 1),
-					(uint8_t)(colorIdBitsL[1] << 0 | colorIdBitsR[1] << 1),
-					(uint8_t)(colorIdBitsL[2] << 0 | colorIdBitsR[2] << 1),
-					(uint8_t)(colorIdBitsL[3] << 0 | colorIdBitsR[3] << 1),
-					(uint8_t)(colorIdBitsL[4] << 0 | colorIdBitsR[4] << 1),
-					(uint8_t)(colorIdBitsL[5] << 0 | colorIdBitsR[5] << 1),
-					(uint8_t)(colorIdBitsL[6] << 0 | colorIdBitsR[6] << 1),
-					(uint8_t)(colorIdBitsL[7] << 0 | colorIdBitsR[7] << 1)
-				};
-
-				for( size_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
-				{
-					const uint32_t vbIndex = x + pixelIndex + (y+pixely)*gbScreenWidth;
-
-					const uint32_t pixel = pixelMapping[ colorIds[ pixelIndex ] ];
-					pGameboyVideoBuffer[vbIndex * 3 + 0] = pixel >> 0;
-					pGameboyVideoBuffer[vbIndex * 3 + 1] = pixel >> 8;
-					pGameboyVideoBuffer[vbIndex * 3 + 2] = pixel >> 16;
-				}
+			const uint16_t tileLine = *(uint16_t*)(pVideoRam + tileIndex);
+			const uint16_t pixels	 = generateGbPixelsForTileLine(tileLine);
+			
+			//FK: Reverse bit order in colorMask
+			for( size_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
+			{
+				const uint32_t vbIndex = x + pixelIndex + (y+pixely)*gbScreenWidth;
 				
-				tileIndex += 2;
+				//FK: Map gameboy pixels to rgb pixels
+				const uint32_t pixel = pixelMapping[ pixels >> ( pixelIndex * 2 ) & 0x3 ];
+				pGameboyVideoBuffer[vbIndex * 3 + 0] = pixel >> 0;
+				pGameboyVideoBuffer[vbIndex * 3 + 1] = pixel >> 8;
+				pGameboyVideoBuffer[vbIndex * 3 + 2] = pixel >> 16;
+			}
+
+			tileIndex += 2;
 		}
 
 		x+=8;
