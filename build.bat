@@ -1,12 +1,32 @@
 @echo off
+
+set BUILD_CONFIG=%1
+if [%1]==[] (
+	echo Missing argument, assuming debug build
+	set BUILD_CONFIG=debug
+)
+
+if not "%BUILD_CONFIG%"=="debug" if not "%BUILD_CONFIG%"=="release" (
+	echo Wrong build config "%BUILD_CONFIG%", assuming debug build
+	set BUILD_CONFIG="debug"
+)
+
 echo Searching for Visual Studio installation...
 setlocal enableextensions enabledelayedexpansion
 
-set PROJECT_NAME=k15_win32_gb_emulator
+set PROJECT_NAME=k15_win32_gb_emulator_%BUILD_CONFIG%
 set C_FILE_NAME=k15_win32_gb_emulator.cpp
 
-set COMPILER_OPTIONS=/nologo /Od /TP /MTd /W3 /Z7 /Fe!PROJECT_NAME!.exe
+set COMPILER_OPTIONS=/nologo /TP /MTd /W3 /Fe!PROJECT_NAME!.exe
 set LINKER_OPTIONS=/PDB:!PROJECT_NAME!.pdb
+
+if "%BUILD_CONFIG%"=="debug" (
+	echo Build config = debug
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Z7
+) else (
+	echo Build config = optimized release
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /O2 /Z7
+)
 
 set CL_OPTIONS=!COMPILER_OPTIONS! /link !LINKER_OPTIONS!
 

@@ -7,7 +7,8 @@
             "label": "Build K15 GB Emulator",
             "type": "shell",
             "windows": {
-                "command": "build.bat"
+                "command": "build.bat",
+                "args": [ "debug" ]
             },
             "problemMatcher": [
                 "$msCompile"

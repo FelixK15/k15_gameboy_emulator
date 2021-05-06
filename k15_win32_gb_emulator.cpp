@@ -23,36 +23,18 @@ typedef const char *(WINAPI * PFNWGLGETEXTENSIONSSTRINGEXTPROC) (void);
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "opengl32.lib")
 
-#define K15_FALSE 0
-#define K15_TRUE 1
+constexpr uint32_t gbScreenWidth 	= 160;
+constexpr uint32_t gbScreenHeight 	= 144;
+uint32_t screenWidth 				= 1024;
+uint32_t screenHeight 				= 768;
+GLuint gbScreenTexture 				= 0;
 
-typedef unsigned char bool8;
-typedef unsigned char byte;
-typedef unsigned int uint32;
-typedef unsigned short uint16;
-typedef unsigned char uint8;
+uint8_t* pGameboyVideoBuffer 		= nullptr;
+HANDLE gbThreadHandle 				= INVALID_HANDLE_VALUE;
+HANDLE gbFrameSyncEvent 			= INVALID_HANDLE_VALUE;
+HANDLE gbFrameFinishedEvent 		= INVALID_HANDLE_VALUE;
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
-
-void printErrorToFile(const char* pFileName)
-{
-	DWORD errorId = GetLastError();
-	char* textBuffer = 0;
-	DWORD writtenChars = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER, 0, errorId, 
-		MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), (LPSTR)&textBuffer, 512, 0);
-
-	if (writtenChars > 0)
-	{
-		FILE* file = fopen(pFileName, "w");
-
-		if (file)
-		{
-			fwrite(textBuffer, writtenChars, 1, file);			
-			fflush(file);
-			fclose(file);
-		}
-	}
-}
 
 void allocateDebugConsole()
 {
@@ -60,18 +42,6 @@ void allocateDebugConsole()
 	AttachConsole(ATTACH_PARENT_PROCESS);
 	freopen("CONOUT$", "w", stdout);
 }
-
-uint32 screenWidth = 1024;
-uint32 screenHeight = 768;
-uint32 timePerFrameInMS = 16;
-
-GLuint gbScreenTexture = 0;
-uint32 gbScreenWidth = 160;
-uint32 gbScreenHeight = 144;
-uint8_t* pGameboyVideoBuffer = nullptr;
-HANDLE gbThreadHandle 		= INVALID_HANDLE_VALUE;
-HANDLE gbFrameSyncEvent 	= INVALID_HANDLE_VALUE;
-HANDLE gbFrameFinishedEvent = INVALID_HANDLE_VALUE;
 
 void K15_WindowCreated(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -103,7 +73,7 @@ void K15_MouseWheel(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 }
 
-void K15_WindowResized(HWND hwnd, UINT p_Messaeg, WPARAM wparam, LPARAM lparam)
+void K15_WindowResized(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	RECT clientRect = {0};
 	GetClientRect(hwnd, &clientRect);
@@ -116,7 +86,7 @@ void K15_WindowResized(HWND hwnd, UINT p_Messaeg, WPARAM wparam, LPARAM lparam)
 
 LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	bool8 messageHandled = K15_FALSE;
+	uint8_t messageHandled = false;
 
 	if (ImGui_ImplWin32_WndProcHandler(hwnd, message, wparam, lparam))
         return true;
@@ -130,7 +100,7 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 	case WM_CLOSE:
 		K15_WindowClosed(hwnd, message, wparam, lparam);
 		PostQuitMessage(0);
-		messageHandled = K15_TRUE;
+		messageHandled = true;
 		break;
 
 	case WM_KEYDOWN:
@@ -164,19 +134,19 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 		break;
 	}
 
-	if (messageHandled == K15_FALSE)
+	if (messageHandled == false)
 	{
 		return DefWindowProc(hwnd, message, wparam, lparam);
 	}
 
-	return 0;
+	return false;
 }
 
-HWND setupWindow(HINSTANCE p_Instance, int p_Width, int p_Height)
+HWND setupWindow(HINSTANCE pInstance, int width, int height)
 {
 	WNDCLASS wndClass = {0};
 	wndClass.style = CS_HREDRAW | CS_OWNDC | CS_VREDRAW;
-	wndClass.hInstance = p_Instance;
+	wndClass.hInstance = pInstance;
 	wndClass.lpszClassName = "K15_Win32Template";
 	wndClass.lpfnWndProc = K15_WNDPROC;
 	wndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -184,54 +154,13 @@ HWND setupWindow(HINSTANCE p_Instance, int p_Width, int p_Height)
 
 	HWND hwnd = CreateWindowA("K15_Win32Template", "Win32 Template",
 		WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-		p_Width, p_Height, 0, 0, p_Instance, 0);
+		width, height, 0, 0, pInstance, 0);
 
 	if (hwnd == INVALID_HANDLE_VALUE)
 		MessageBox(0, "Error creating Window.\n", "Error!", 0);
 	else
 		ShowWindow(hwnd, SW_SHOW);
 	return hwnd;
-}
-
-uint32 getTimeInMilliseconds(LARGE_INTEGER p_PerformanceFrequency)
-{
-	LARGE_INTEGER appTime = {0};
-	QueryPerformanceCounter(&appTime);
-
-	appTime.QuadPart *= 1000; //to milliseconds
-
-	return (uint32)(appTime.QuadPart / p_PerformanceFrequency.QuadPart);
-}
-
-uint16_t generateGbPixelsForTileLine(uint16_t tileLine)
-{
-	const uint32_t selectorMask = 0b1010101010101010;
-
-	uint8_t a = (tileLine & 0xFF00) >> 8;
-	uint8_t b = (tileLine & 0x00FF) >> 0;
-
-	uint16_t pixels = 0;
-	__asm
-	{
-		mov		bl, a
-		mov		cl, b
-		mov 	edx, selectorMask
-		pdep 	ebx, ebx, edx		; extract bits from first pixel byte
-		shr		edx, 1				; shift selectorMask to bit extract bits from second tile byte
-		pdep 	ecx, ecx, edx		; extract bits from first pixel byte
-		or		bx, cx				; or them together to get one pixel tile row
-		mov 	pixels, bx	
-	}
-
-	//FK: reverse bit order
-	uint16_t reversedPixels = 0;
-	for( size_t bitIndex = 0; bitIndex < 16; ++bitIndex )
-	{
-		const uint8_t pixelBit = (pixels >> bitIndex) & 0x1;
-		reversedPixels |= (pixelBit << ( 15 - bitIndex ) );
-	}
-
-	return reversedPixels;
 }
 
 void renderVideoRam(const uint8_t* pVideoRam)
@@ -254,7 +183,6 @@ void renderVideoRam(const uint8_t* pVideoRam)
 			const uint16_t tileLine = *(uint16_t*)(pVideoRam + tileIndex);
 			const uint16_t pixels	 = generateGbPixelsForTileLine(tileLine);
 			
-			//FK: Reverse bit order in colorMask
 			for( size_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
 			{
 				const uint32_t vbIndex = x + pixelIndex + (y+pixely)*gbScreenWidth;
@@ -391,7 +319,7 @@ void setup(HWND hwnd)
 	gbThreadHandle = CreateThread( nullptr, 0, emulatorThreadEntryPoint, pRomData, 0, nullptr );
 	assert( gbThreadHandle != INVALID_HANDLE_VALUE );
 	
-	pGameboyVideoBuffer = (uint8*)malloc(gbScreenHeight*gbScreenWidth*3);
+	pGameboyVideoBuffer = (uint8_t*)malloc(gbScreenHeight*gbScreenWidth*3);
 
 	const GBRomHeader header = getGBRomHeader(pRomData);
 	SetWindowText(hwnd, (LPCSTR)header.gameTitle);
@@ -413,7 +341,7 @@ void setup(HWND hwnd)
     ImGui_ImplOpenGL2_Init();
 }
 
-void doFrame(uint32 p_DeltaTimeInMS, HWND hwnd)
+void doFrame(HWND hwnd)
 {
 	const float pixelUnitH = 1.0f/(float)screenWidth;
 	const float pixelUnitV = 1.0f/(float)screenHeight;
@@ -481,13 +409,8 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 
 	setup(hwnd);
 
-	uint32 timeFrameStarted = 0;
-	uint32 timeFrameEnded = 0;
-	uint32 deltaMs = 0;
-
-	bool8 loopRunning = K15_TRUE;
+	uint8_t loopRunning = true;
 	MSG msg = {0};
-
 
 	while (loopRunning)
 	{
@@ -497,13 +420,11 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 
 		ImGui::ShowDemoWindow();
 
-		timeFrameStarted = getTimeInMilliseconds(performanceFrequency);
-
 		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE) > 0)
 		{
 			if (msg.message == WM_QUIT)
 			{
-				loopRunning = K15_FALSE;
+				loopRunning = false;
 				break;
 			}
 
@@ -525,11 +446,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 		}
 
-		timeFrameEnded = getTimeInMilliseconds(performanceFrequency);
-		deltaMs += timeFrameEnded - timeFrameStarted;
-
-		doFrame( deltaMs, hwnd );
-		deltaMs = 0;
+		doFrame(hwnd);
 	}
 
 	DestroyWindow(hwnd);
