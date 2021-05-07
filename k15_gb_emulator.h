@@ -443,22 +443,18 @@ struct GBEmulatorInstance
         return value;
     }
 
-    uint16_t generateGbPixelsForTileLineX86(uint16_t tileLine)
+    uint16_t generateGbPixelsForTileLineX86(uint8_t pixelLineLSB, uint8_t pixelLineMSB)
     {
         const uint32_t selectorMask = 0b0101010101010101;
-
-        uint8_t a = (tileLine & 0xFF00) >> 8;
-        uint8_t b = (tileLine & 0x00FF) >> 0;
-
         uint16_t pixels = 0;
         __asm
         {
-            mov		bl, a
-            mov		cl, b
+            mov		bl, pixelLineLSB
+            mov		cl, pixelLineMSB
             mov 	edx, selectorMask
-            pdep 	ebx, ebx, edx		; extract bits from first pixel byte
+            pdep 	ebx, ebx, edx		; extract bits from lsb pixel byte
             shl		edx, 1				; shift selectorMask to bit extract bits from second tile byte
-            pdep 	ecx, ecx, edx		; extract bits from first pixel byte
+            pdep 	ecx, ecx, edx		; extract bits from msb pixel byte
             or		bx, cx				; or them together to get one pixel tile row
             mov 	pixels, bx	
         }
@@ -466,7 +462,7 @@ struct GBEmulatorInstance
         return pixels;
     }
 
-//#   define generateGbPixelsForTileLine  generateGbPixelsForTileLineX86
+#   define generateGbPixelsForTileLine  generateGbPixelsForTileLineX86
 #   define rotateRight                  rotateRightX86 
 #   define rotateLeft                   rotateLeftX86 
 #   define rotateThroughCarryLeft       rotateThroughCarryLeftX86
@@ -629,7 +625,7 @@ struct GBEmulatorInstance
 #   define rotateRight  rotateRightSoftware
 #endif
 
-//#ifndef generateGbPixelsForTileLine
+#ifndef generateGbPixelsForTileLine
     uint16_t generateGbPixelsForTileLineSoftware(uint8_t pixelLineLSB, uint8_t pixelLineMSB)
     {
         uint16_t pixels = 0;
@@ -647,7 +643,7 @@ struct GBEmulatorInstance
         return pixels;
     }
 #   define generateGbPixelsForTileLine     generateGbPixelsForTileLineSoftware
-//#endif
+#endif
 
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {

@@ -1,6 +1,6 @@
 struct UiState
 {
-    bool memoryViewOpen = true;
+    bool memoryViewOpen = false;
 };
 
 static UiState uiState;
@@ -34,7 +34,15 @@ void doMemoryView(GBEmulatorInstance* pEmulatorInstance)
 
 void doUiFrame(GBEmulatorInstance* pEmulatorInstance)
 {
+#if 1
+    ImGui::NewFrame();
+	ImGui::ShowDemoWindow();
+	ImGui::EndFrame();
+#else
+    //FK: WIP
 	ImGui::NewFrame();
 	doMemoryView(pEmulatorInstance);
 	ImGui::EndFrame();
+#endif
+
 }
