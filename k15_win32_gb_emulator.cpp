@@ -13,6 +13,7 @@
 #include "imgui/imgui_impl_opengl2.cpp"
 
 #include "k15_gb_emulator.h"
+#include "k15_gb_emulator_ui.cpp"
 
 typedef BOOL (WINAPI * PFNWGLSWAPINTERVALEXTPROC) (int interval);
 typedef int (WINAPI * PFNWGLGETSWAPINTERVALEXTPROC) (void);
@@ -165,11 +166,18 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 
 void renderVideoRam(const uint8_t* pVideoRam)
 {
-	const uint32_t pixelMapping[4] = {
-		RGB(255,255,255),
-		RGB(192, 192, 192),
-		RGB(128, 128, 128),
-		RGB(64, 64, 64),
+	//FK: greenish hue of gameboy lcd
+	constexpr float gbRGBMapping[3] = {
+		(float)0xB0,
+		(float)0xCE,
+		(float)0x48,
+	};
+
+	const float pixelIntensity[4] = {
+		1.0f, 
+		0.75f,
+		0.5f,
+		0.25f
 	};
 	const size_t tileDataTableSizeInBytes = 0x1000;
 
@@ -180,18 +188,32 @@ void renderVideoRam(const uint8_t* pVideoRam)
 	{
 		for( size_t pixely = 0; pixely < 8; ++pixely )
 		{
-			const uint16_t tileLine = *(uint16_t*)(pVideoRam + tileIndex);
-			const uint16_t pixels	 = generateGbPixelsForTileLine(tileLine);
+			const uint8_t pixelLineLSB 	 = pVideoRam[tileIndex + 0];
+			const uint8_t pixelLineMSB 	 = pVideoRam[tileIndex + 1];
+			const uint16_t pixels	 	= generateGbPixelsForTileLine(pixelLineLSB, pixelLineMSB);
 			
-			for( size_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
+			for( uint8_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
 			{
 				const uint32_t vbIndex = x + pixelIndex + (y+pixely)*gbScreenWidth;
 				
+				const uint8_t pixelShift = (15 - pixelIndex * 2) - 1;
+				const uint16_t pixelMask = (uint16_t)(0x3 << pixelShift);
+
+				const uint8_t pixelMSBShift = pixelShift + 0;
+				const uint8_t pixelLSBShift = pixelShift + 1;
+				const uint8_t pixelMSB = (uint8_t)(( pixels & pixelMask ) >> pixelMSBShift & 0x1);
+				const uint8_t pixelLSB = (uint8_t)(( pixels & pixelMask ) >> pixelLSBShift & 0x1);
+				const uint8_t pixelValue = pixelMSB << 1 |
+										   pixelLSB << 0;
+
 				//FK: Map gameboy pixels to rgb pixels
-				const uint32_t pixel = pixelMapping[ pixels >> ( pixelIndex * 2 ) & 0x3 ];
-				pGameboyVideoBuffer[vbIndex * 3 + 0] = pixel >> 0;
-				pGameboyVideoBuffer[vbIndex * 3 + 1] = pixel >> 8;
-				pGameboyVideoBuffer[vbIndex * 3 + 2] = pixel >> 16;
+				const float intensity = pixelIntensity[ pixelValue ];
+				const float r = intensity * gbRGBMapping[0];
+				const float g = intensity * gbRGBMapping[1];
+				const float b = intensity * gbRGBMapping[2];
+				pGameboyVideoBuffer[vbIndex * 3 + 0] = (uint8_t)r;
+				pGameboyVideoBuffer[vbIndex * 3 + 1] = (uint8_t)g;
+				pGameboyVideoBuffer[vbIndex * 3 + 2] = (uint8_t)b;
 			}
 
 			tileIndex += 2;
@@ -206,13 +228,15 @@ void renderVideoRam(const uint8_t* pVideoRam)
 	}
 }
 
+GBEmulatorInstance* pEmulatorInstance = nullptr;
+
 DWORD WINAPI emulatorThreadEntryPoint(LPVOID pParameter)
 {
 	const size_t emulatorMemorySizeInBytes = calculateEmulatorInstanceMemoryRequirementsInBytes();
 
 	uint8_t* pRomData = (uint8_t*)pParameter;
 	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
-	GBEmulatorInstance* pEmulatorInstance = createEmulatorInstance(pEmulatorInstanceMemory);
+	pEmulatorInstance = createEmulatorInstance(pEmulatorInstanceMemory);
 
 	startEmulation( pEmulatorInstance, pRomData );
 
@@ -414,12 +438,6 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 
 	while (loopRunning)
 	{
-		ImGui_ImplOpenGL2_NewFrame();
-        ImGui_ImplWin32_NewFrame();
-		ImGui::NewFrame();
-
-		ImGui::ShowDemoWindow();
-
 		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE) > 0)
 		{
 			if (msg.message == WM_QUIT)
@@ -437,7 +455,6 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			break;
 		}
 
-		ImGui::EndFrame();
 
 		const DWORD waitResult = WaitForSingleObject(gbFrameSyncEvent, 0);
 		if( waitResult == WAIT_OBJECT_0 )
@@ -446,6 +463,13 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 		}
 
+		//FK: UI
+		{
+			ImGui_ImplOpenGL2_NewFrame();
+			ImGui_ImplWin32_NewFrame();
+			doUiFrame(pEmulatorInstance);
+		}
+	
 		doFrame(hwnd);
 	}
 

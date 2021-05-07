@@ -445,7 +445,7 @@ struct GBEmulatorInstance
 
     uint16_t generateGbPixelsForTileLineX86(uint16_t tileLine)
     {
-        const uint32_t selectorMask = 0b1010101010101010;
+        const uint32_t selectorMask = 0b0101010101010101;
 
         uint8_t a = (tileLine & 0xFF00) >> 8;
         uint8_t b = (tileLine & 0x00FF) >> 0;
@@ -457,25 +457,16 @@ struct GBEmulatorInstance
             mov		cl, b
             mov 	edx, selectorMask
             pdep 	ebx, ebx, edx		; extract bits from first pixel byte
-            shr		edx, 1				; shift selectorMask to bit extract bits from second tile byte
+            shl		edx, 1				; shift selectorMask to bit extract bits from second tile byte
             pdep 	ecx, ecx, edx		; extract bits from first pixel byte
             or		bx, cx				; or them together to get one pixel tile row
             mov 	pixels, bx	
-
         }
 
-        //FK: reverse bit order
-        uint16_t reversedPixels = 0;
-        for( size_t bitIndex = 0; bitIndex < 16; ++bitIndex )
-        {
-            const uint8_t pixelBit = (pixels >> bitIndex) & 0x1;
-            reversedPixels |= (pixelBit << ( 15 - bitIndex ) );
-        }
-
-        return reversedPixels;
+        return pixels;
     }
 
-#   define generateGbPixelsForTileLine  generateGbPixelsForTileLineX86
+//#   define generateGbPixelsForTileLine  generateGbPixelsForTileLineX86
 #   define rotateRight                  rotateRightX86 
 #   define rotateLeft                   rotateLeftX86 
 #   define rotateThroughCarryLeft       rotateThroughCarryLeftX86
@@ -638,31 +629,25 @@ struct GBEmulatorInstance
 #   define rotateRight  rotateRightSoftware
 #endif
 
-#ifndef generateGbPixelsForTileLine
-    uint16_t generateGbPixelsForTileLineSoftware(uint16_t tileLine)
+//#ifndef generateGbPixelsForTileLine
+    uint16_t generateGbPixelsForTileLineSoftware(uint8_t pixelLineLSB, uint8_t pixelLineMSB)
     {
-        uint8_t tileLineValues[2];
-        memcpy(tileLineValues, &tileLine, sizeof(tileLine));
-
         uint16_t pixels = 0;
         for(uint8_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex)
         {
             const uint8_t bitIndex  = pixelIndex;
-            const uint8_t rBitIndex = 7 - bitIndex;
 
-            const uint8_t pixelBits[2] = {
-                ( uint8_t )( tileLineValues[0] >> bitIndex & 0x1 ),
-                ( uint8_t )( tileLineValues[1] >> bitIndex & 0x1 ),
-            };
+            const uint8_t pixelLSB = ( uint8_t )( pixelLineLSB >> bitIndex & 0x1 );
+            const uint8_t pixelMSB = ( uint8_t )( pixelLineMSB >> bitIndex & 0x1 );
 
-            pixels |= ( pixelBits[0] << ( 0 + rBitIndex * 2 ) );
-            pixels |= ( pixelBits[1] << ( 1 + rBitIndex * 2 ) );
+            pixels |= ( pixelLSB << ( 0 + bitIndex * 2 ) );
+            pixels |= ( pixelMSB << ( 1 + bitIndex * 2 ) );
         }
 
         return pixels;
     }
 #   define generateGbPixelsForTileLine     generateGbPixelsForTileLineSoftware
-#endif
+//#endif
 
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
