@@ -905,7 +905,7 @@ void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
     pCpuState->programCounter    = 0x0100;
 }
 
-void pushSpritesToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
+void pushSpritePixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     const uint8_t objHeight = pPpuState->pLcdControl->objSize == 0 ? 8 : 16;
 
@@ -956,7 +956,7 @@ void pushPixelsFromTileData(uint8_t* pScanline, const uint16_t tileData)
     *pScanline   = pixels[4] << 6 | pixels[5] << 4 | pixels[6] << 2 | pixels[7] << 0;
 }
 
-void pushBackgroundOrWindowToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
+void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     constexpr uint8_t horizontalTileCount = 32; //FK: Window and Background tile maps are 32x32 tiles
 
@@ -1041,12 +1041,12 @@ void pushScanline( GBEmulatorInstance* pEmulator, uint8_t scanlineYCoordinate )
 
     if( pPpuState->pLcdControl->bgAndWindowEnable )
     {
-        pushBackgroundOrWindowToScanline( scanlineInGBPixels, pPpuState, scanlineYCoordinate );
+        pushBackgroundOrWindowPixelsToScanline( scanlineInGBPixels, pPpuState, scanlineYCoordinate );
     }
 
     if( pPpuState->pLcdControl->objEnable )
     {
-        pushSpritesToScanline( scanlineInGBPixels, pPpuState, scanlineYCoordinate );
+        pushSpritePixelsToScanline( scanlineInGBPixels, pPpuState, scanlineYCoordinate );
     }
 }
 
