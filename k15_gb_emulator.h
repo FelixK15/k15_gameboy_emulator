@@ -288,14 +288,42 @@ struct GBEmulatorDebug
 };
 #endif
 
+struct GBEmulatorJoypad
+{
+    union
+    {
+        struct 
+        {
+            uint8_t a       : 1;
+            uint8_t b       : 1;
+            uint8_t select  : 1;
+            uint8_t start   : 1;
+        };
+
+        uint8_t actionButtonMask = 0;
+    };
+
+    union
+    {
+        struct 
+        {
+            uint8_t right   : 1;
+            uint8_t left    : 1;
+            uint8_t up      : 1;
+            uint8_t down    : 1;
+        };
+
+        uint8_t dpadButtonMask = 0;
+    };
+};
+
 struct GBEmulatorInstance
 {
     GBCpuState*         pCpuState;
     GBPpuState*         pPpuState;
     GBMemoryMapper*     pMemoryMapper;
 
-    uint8_t             actionButtonFlags;
-    uint8_t             directionButtonFlags;
+    GBEmulatorJoypad    joypad;
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
     GBEmulatorDebug     debug;
@@ -957,8 +985,8 @@ void resetEmulatorInstance(GBEmulatorInstance* pEmulatorInstance)
         mapRomMemory( pMemoryMapper, pMemoryMapper->pRomMemoryBaseAddress );
     }
 
-    pEmulatorInstance->actionButtonFlags    = 0x0F;
-    pEmulatorInstance->directionButtonFlags = 0x0F;
+    pEmulatorInstance->joypad.actionButtonMask  = 0;
+    pEmulatorInstance->joypad.dpadButtonMask    = 0;
 }
 
 GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
@@ -3120,7 +3148,7 @@ void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
     }
 }
 
-void handleInput( GBMemoryMapper* pMemoryMapper, uint8_t actionButtonFlags, uint8_t directionButtonFlags )
+void handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypad joypad )
 {
     if( pMemoryMapper->lastAddressWrittenTo == 0xFF00 )
     {
@@ -3129,14 +3157,16 @@ void handleInput( GBMemoryMapper* pMemoryMapper, uint8_t actionButtonFlags, uint
         const uint8_t selectActionButtons       = ( joypadValue & (1 << 5) ) == 0;
         const uint8_t selectDirectionButtons    = ( joypadValue & (1 << 4) ) == 0;
 
-        //FK: Write joypad values to 0xFF00 ()
+        //FK: Write joypad values to 0xFF00
         if( selectActionButtons )
         {
-            pMemoryMapper->pBaseAddress[0xFF00] =( joypadValue & 0xF0 ) | actionButtonFlags;
+            //FK: Flip button mask since in our world bit set = input pressed. It's reversed in the gameboy world, though
+            pMemoryMapper->pBaseAddress[0xFF00] =( joypadValue & 0xF0 ) | ~joypad.actionButtonMask;
         }
         else if( selectDirectionButtons )
         {
-            pMemoryMapper->pBaseAddress[0xFF00] =( joypadValue & 0xF0 ) | directionButtonFlags;
+            //FK: Flip button mask since in our world bit set = input pressed. It's reversed in the gameboy world, though
+            pMemoryMapper->pBaseAddress[0xFF00] =( joypadValue & 0xF0 ) | ~joypad.dpadButtonMask;
         }
     }
 }
@@ -3202,7 +3232,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
     const uint8_t cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
     checkDMAState( pCpuState, pMemoryMapper, cycleCost );
-    handleInput( pMemoryMapper, pEmulatorInstance->actionButtonFlags, pEmulatorInstance->directionButtonFlags );
+    handleInput( pMemoryMapper, pEmulatorInstance->joypad );
     tickPPU( pCpuState, pEmulatorInstance->pPpuState, cycleCost );
 
     return cycleCost;

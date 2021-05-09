@@ -60,6 +60,8 @@ void K15_WindowClosed(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
+	GBEmulatorJoypad joypad;
+
 	if( message == WM_KEYDOWN )
 	{
 		if((lparam & (1 >> 30)) == 0)
@@ -67,29 +69,29 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			switch(wparam)
 			{
 				case VK_DOWN:
-					directionInput &= ~(1 << 3);
+					joypad.down = 1;
 					break;
 				case VK_UP:
-					directionInput &= ~(1 << 2);
+					joypad.up = 1;
 					break;
 				case VK_LEFT:
-					directionInput &= ~(1 << 1);
+					joypad.left = 1;
 					break;
 				case VK_RIGHT:
-					directionInput &= ~(1 << 0);
+					joypad.right = 1;
 					break;
 
 				case VK_CONTROL:
-					buttonInput &= ~(1 << 3);
+					joypad.start = 1;
 					break;
 				case VK_MENU:
-					directionInput &= ~(1 << 2);
+					joypad.select = 1;
 					break;
 				case 'A':
-					directionInput &= ~(1 << 1);
+					joypad.a = 1;
 					break;
 				case 'S':
-					directionInput &= ~(1 << 0);
+					joypad.b = 1;
 					break;
 			}
 		}
@@ -99,32 +101,34 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		switch(wparam)
 		{
 			case VK_DOWN:
-				directionInput |= (1 << 3);
+				joypad.down = 0;
 				break;
 			case VK_UP:
-				directionInput |= (1 << 2);
+				joypad.up = 0;
 				break;
 			case VK_LEFT:
-				directionInput |= (1 << 1);
+				joypad.left = 0;
 				break;
 			case VK_RIGHT:
-				directionInput |= (1 << 0);
+				joypad.right = 0;
 				break;
 
 			case VK_CONTROL:
-				buttonInput |= (1 << 3);
+				joypad.start = 0;
 				break;
 			case VK_MENU:
-				directionInput |= (1 << 2);
+				joypad.select = 0;
 				break;
 			case 'A':
-				directionInput |= (1 << 1);
+				joypad.a = 0;
 				break;
 			case 'S':
-				directionInput |= (1 << 0);
+				joypad.b = 0;
 				break;
 		}
 	}
+
+	//FK: TODO set joypad state in controller...
 }
 
 void K15_MouseButtonInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
