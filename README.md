@@ -23,7 +23,7 @@ All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h`
 - [ ] Test Tetris
 - [x] Add IMGUI dependency to be able to add debug features
   - [ ] Add breakpoints
-  - [ ] Add conditional breakpoints
+  - [x] Add conditional breakpoints
   - [ ] Add code stepping
   - [ ] Add memory inspection
   - [ ] Add VRAM viewer
