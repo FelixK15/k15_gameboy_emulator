@@ -34,6 +34,10 @@ uint8_t* pGameboyVideoBuffer 		= nullptr;
 HANDLE gbThreadHandle 				= INVALID_HANDLE_VALUE;
 HANDLE gbFrameSyncEvent 			= INVALID_HANDLE_VALUE;
 HANDLE gbFrameFinishedEvent 		= INVALID_HANDLE_VALUE;
+HANDLE gbEmulatorResetEvent			= INVALID_HANDLE_VALUE;
+
+uint8_t directionInput				= 0x0F;
+uint8_t buttonInput					= 0x0F;
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
 
@@ -56,7 +60,71 @@ void K15_WindowClosed(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
+	if( message == WM_KEYDOWN )
+	{
+		if((lparam & (1 >> 30)) == 0)
+		{
+			switch(wparam)
+			{
+				case VK_DOWN:
+					directionInput &= ~(1 << 3);
+					break;
+				case VK_UP:
+					directionInput &= ~(1 << 2);
+					break;
+				case VK_LEFT:
+					directionInput &= ~(1 << 1);
+					break;
+				case VK_RIGHT:
+					directionInput &= ~(1 << 0);
+					break;
 
+				case VK_CONTROL:
+					buttonInput &= ~(1 << 3);
+					break;
+				case VK_MENU:
+					directionInput &= ~(1 << 2);
+					break;
+				case 'A':
+					directionInput &= ~(1 << 1);
+					break;
+				case 'S':
+					directionInput &= ~(1 << 0);
+					break;
+			}
+		}
+	}
+	else if( message == WM_KEYUP )
+	{
+		switch(wparam)
+		{
+			case VK_DOWN:
+				directionInput |= (1 << 3);
+				break;
+			case VK_UP:
+				directionInput |= (1 << 2);
+				break;
+			case VK_LEFT:
+				directionInput |= (1 << 1);
+				break;
+			case VK_RIGHT:
+				directionInput |= (1 << 0);
+				break;
+
+			case VK_CONTROL:
+				buttonInput |= (1 << 3);
+				break;
+			case VK_MENU:
+				directionInput |= (1 << 2);
+				break;
+			case 'A':
+				directionInput |= (1 << 1);
+				break;
+			case 'S':
+				directionInput |= (1 << 0);
+				break;
+		}
+	}
 }
 
 void K15_MouseButtonInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
@@ -164,7 +232,7 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 	return hwnd;
 }
 
-void renderVideoRam(const uint8_t* pVideoRam)
+void renderGbFrameBuffer(const uint8_t* pVideoRam)
 {
 	//FK: greenish hue of gameboy lcd
 	constexpr float gbRGBMapping[3] = {
@@ -179,12 +247,13 @@ void renderVideoRam(const uint8_t* pVideoRam)
 		0.5f,
 		0.25f
 	};
-	const size_t tileDataTableSizeInBytes = 0x1000;
 
 	int x = 0;
 	int y = 0;
 
-	for( size_t tileIndex = 0; tileIndex < tileDataTableSizeInBytes; )
+	#if 1
+
+	for( size_t tileIndex = 0; tileIndex < 0x1000; )
 	{
 		for( size_t pixely = 0; pixely < 8; ++pixely )
 		{
@@ -226,6 +295,8 @@ void renderVideoRam(const uint8_t* pVideoRam)
 			y+=8;
 		}
 	}
+
+	#endif
 }
 
 GBEmulatorInstance* pEmulatorInstance = nullptr;
@@ -238,27 +309,32 @@ DWORD WINAPI emulatorThreadEntryPoint(LPVOID pParameter)
 	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
 	pEmulatorInstance = createEmulatorInstance(pEmulatorInstanceMemory);
 
-	startEmulation( pEmulatorInstance, pRomData );
+	loadRom( pEmulatorInstance, pRomData );
 
 	uint32_t totalCycleCount = 0;
 
 	while(true)
 	{
 		const uint8_t cycleCount = runSingleInstruction( pEmulatorInstance );
-		tickPPU( pEmulatorInstance, cycleCount );
-	
 		if( cycleCount == 0 )
 		{
 			__debugbreak();
 		}
 
-		totalCycleCount += cycleCount;
-		if( totalCycleCount >= 70224 )
+		const DWORD waitResult = WaitForSingleObject(gbEmulatorResetEvent, 0);
+		if( waitResult == WAIT_OBJECT_0 )
 		{
-			totalCycleCount -= 70224;
+			resetEmulatorInstance( pEmulatorInstance );
+			totalCycleCount = 0;
+			continue;
+		}
 
-			const uint8_t* pVideoRam = pEmulatorInstance->pMemoryMapper->pVideoRAM;
-			renderVideoRam( pVideoRam );
+		totalCycleCount += cycleCount;
+		if( totalCycleCount >= gbCyclerPerFrame )
+		{
+			totalCycleCount -= gbCyclerPerFrame;
+
+			renderGbFrameBuffer( pEmulatorInstance->pMemoryMapper->pVideoRAM );
 
 			//FK: Tell main thread that the GB frame is finished
 			SetEvent(gbFrameFinishedEvent);
@@ -334,11 +410,14 @@ void setup(HWND hwnd)
 
 	uint8_t* pRomData = (uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
 
-	gbFrameFinishedEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyFrameFinished");
+	gbFrameFinishedEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyFrameFinishedEvent");
 	assert( gbFrameFinishedEvent != INVALID_HANDLE_VALUE );
 
 	gbFrameSyncEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyFrameSyncEvent");
 	assert( gbFrameSyncEvent != INVALID_HANDLE_VALUE );
+
+	gbEmulatorResetEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyResetEvent");
+	assert( gbEmulatorResetEvent != INVALID_HANDLE_VALUE );
 
 	gbThreadHandle = CreateThread( nullptr, 0, emulatorThreadEntryPoint, pRomData, 0, nullptr );
 	assert( gbThreadHandle != INVALID_HANDLE_VALUE );
@@ -456,7 +535,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		}
 
 
-		const DWORD waitResult = WaitForSingleObject(gbFrameSyncEvent, 0);
+		const DWORD waitResult = WaitForSingleObject(gbFrameFinishedEvent, 0);
 		if( waitResult == WAIT_OBJECT_0 )
 		{
 			//FK: GB frame finished, upload gb framebuffer to texture
@@ -465,9 +544,15 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 
 		//FK: UI
 		{
+			GBUiData uiData = {};
 			ImGui_ImplOpenGL2_NewFrame();
 			ImGui_ImplWin32_NewFrame();
-			doUiFrame(pEmulatorInstance);
+			doUiFrame(pEmulatorInstance, &uiData);
+
+			if( uiData.resetEmulator )
+			{
+				SetEvent( gbEmulatorResetEvent );
+			}
 		}
 	
 		doFrame(hwnd);

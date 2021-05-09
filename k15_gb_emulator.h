@@ -1,8 +1,10 @@
 #include "stdint.h"
 #include "stdio.h"
 
-#define K15_PRINT_DISASSEMBLY
-#define K15_BREAK_ON_UNKNOWN_INSTRUCTION
+#define K15_PRINT_DISASSEMBLY                   0   //FK: Enabling this slows the emulation way down because of all the printf calls -> get better IMGUI solution
+#define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
+#define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
+
 
 #include "k15_gb_opcodes.h"
 
@@ -19,19 +21,23 @@
 #   define debugBreak
 #endif
 
+static constexpr uint32_t   gbCyclerPerFrame                   = 70224u;
+static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
+static constexpr uint8_t    gbDMACycleCount                    = 160u;
+static constexpr uint8_t    gbTileResolution                   = 8u;  //FK: Tiles are 8x8 pixels
+static constexpr uint8_t    gbHorizontalResolutionInPixels     = 160u;
+static constexpr uint8_t    gbVerticalResolutuionInPixels      = 144u;
+static constexpr uint8_t    gbHorizontalResolutionInTiles      = gbHorizontalResolutionInPixels / gbTileResolution;
+static constexpr uint8_t    gbVerticalResolutuionInTiles       = gbVerticalResolutuionInPixels / gbTileResolution;
+static constexpr uint8_t    gbBGTileCount                      = 32u; //FK: BG maps are 32x32 tiles
+static constexpr uint8_t    gbTileSizeInBytes                  = 16u; //FK: 8x8 pixels with 2bpp
+static constexpr size_t     gbFrameBufferSizeInBytes           = gbHorizontalResolutionInTiles * gbVerticalResolutuionInTiles * gbTileSizeInBytes;
+
 struct GBCpuState
 {
     uint8_t* pIE;
     uint8_t* pIF;
     uint8_t* pStack;
-    uint16_t programCounter;
-
-    struct
-    {
-        uint8_t IME     : 1;
-        uint8_t halt    : 1;
-        uint8_t _pad    : 6;
-    } flags;
 
     struct
     {
@@ -39,7 +45,19 @@ struct GBCpuState
         {
             struct
             {
-                uint8_t F;
+                union
+                {
+                    struct 
+                    {
+                        uint8_t NOP : 4;
+                        uint8_t C   : 1;
+                        uint8_t H   : 1;
+                        uint8_t N   : 1;
+                        uint8_t Z   : 1;
+                    };
+                    
+                    uint8_t value;
+                } F;
                 uint8_t A;
             };
 
@@ -79,23 +97,21 @@ struct GBCpuState
             uint16_t HL;
         };
 
-        union
-        {
-            struct 
-            {
-                uint8_t Z   : 1;
-                uint8_t N   : 1;
-                uint8_t H   : 1;
-                uint8_t C   : 1;
-                uint8_t NOP : 4;
-            };
-            
-            uint8_t value;
-        } Flags;
-
         uint16_t SP;
 
     } registers;
+
+    uint16_t lastOpcodeAddress;
+    uint16_t dmaAddress;
+    uint16_t programCounter;
+    uint8_t  dmaCycleCount;
+    uint8_t  lastOpcode;
+    struct
+    {
+        uint8_t IME     : 1;
+        uint8_t halt    : 1;
+        uint8_t dma     : 1;
+    } flags;
 };
 
 enum GBCartridgeType : uint8_t
@@ -156,17 +172,21 @@ struct GBObjectAttributes
 
 struct GBMemoryMapper
 {
-    uint8_t*    pBaseAddress;
-    uint8_t*    pRomBank0;
-    uint8_t*    pRomBankSwitch;
-    uint8_t*    pVideoRAM;
-    uint8_t*    pRamBankSwitch;
-    uint8_t*    pLowRam;
-    uint8_t*    pLowRamEcho;
-    uint8_t*    pSpriteAttributes;
-    uint8_t*    IOPorts;
-    uint8_t*    pHighRam;
-    uint8_t*    pInterruptRegister;
+    const uint8_t*      pRomMemoryBaseAddress;
+    uint8_t*            pBaseAddress;
+    uint8_t*            pRomBank0;
+    uint8_t*            pRomBankSwitch;
+    uint8_t*            pVideoRAM;
+    uint8_t*            pRamBankSwitch;
+    uint8_t*            pLowRam;
+    uint8_t*            pLowRamEcho;
+    uint8_t*            pSpriteAttributes;
+    uint8_t*            IOPorts;
+    uint8_t*            pHighRam;
+    uint8_t*            pInterruptRegister;
+    uint16_t            lastAddressWrittenTo;
+    uint16_t            lastAddressReadFrom;
+    uint8_t             lastValueWritten;
 };
 
 struct GBRomHeader
@@ -238,8 +258,9 @@ struct GBPpuState
     GBObjectAttributes* pOAM;
     GBLcdControl*       pLcdControl;
     GBPalette*          pPalettes;
-    uint8_t*            pBackgroundOrWindowTiles[2];
+    uint8_t*            pBackgroundOrWindowTileIds[2];
     uint8_t*            pTileBlocks[3];
+    uint8_t             frameBufferInGBPixels[gbFrameBufferSizeInBytes];
     uint8_t             objectAttributeCapacity;
 };
 
@@ -248,11 +269,37 @@ struct GBEmulatorSettings
     uint8_t spriteCountPerScanline;
 };
 
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+struct GBEmulatorDebugSettings
+{
+    uint8_t enableBreakAtProgramCounter         : 1;
+    uint8_t enableBreakAtOpcode                 : 1;
+    uint8_t enableBreakAtMemoryReadFromAddress  : 1;
+    uint8_t enableBreakAtMemoryWriteToAddress   : 1;
+};
+
+struct GBEmulatorDebug
+{
+    GBEmulatorDebugSettings     settings;
+    uint16_t                    breakAtProgramCounter;
+    uint16_t                    breakAtMemoryReadFromAddress;
+    uint16_t                    breakAtMemoryWriteToAddress;
+    uint8_t                     breakAtOpcode;
+};
+#endif
+
 struct GBEmulatorInstance
 {
     GBCpuState*         pCpuState;
     GBPpuState*         pPpuState;
     GBMemoryMapper*     pMemoryMapper;
+
+    uint8_t             actionButtonFlags;
+    uint8_t             directionButtonFlags;
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+    GBEmulatorDebug     debug;
+#endif
 };
 
 //FK: specify function implementation tailored to specific cpu architectures
@@ -289,10 +336,10 @@ struct GBEmulatorInstance
         const uint8_t compareResult = pCpuState->registers.A - value;
         const x86Flags flagsRegister = readCpuFlagsX86();
 
-        pCpuState->registers.Flags.N = 1;
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.C = flagsRegister.carry;
-        pCpuState->registers.Flags.H = flagsRegister.adjust;
+        pCpuState->registers.F.N = 1;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.C = flagsRegister.carry;
+        pCpuState->registers.F.H = flagsRegister.adjust;
     }
 
     void increment8BitValueX86( GBCpuState* pCpuState, uint8_t* pValueAddress )
@@ -300,9 +347,9 @@ struct GBEmulatorInstance
         ++*pValueAddress;
         const x86Flags flagsRegister = readCpuFlagsX86();
         
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.H = flagsRegister.adjust;
-        pCpuState->registers.Flags.N = 1;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.H = flagsRegister.adjust;
+        pCpuState->registers.F.N = 0;
     }
 
     void decrement8BitValueX86( GBCpuState* pCpuState, uint8_t* pValueAddress )
@@ -310,9 +357,9 @@ struct GBEmulatorInstance
         --*pValueAddress;
         const x86Flags flagsRegister = readCpuFlagsX86();
         
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.H = flagsRegister.adjust;
-        pCpuState->registers.Flags.N = 1;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.H = flagsRegister.adjust;
+        pCpuState->registers.F.N = 1;
     }
 
     void increment16BitValueX86( GBCpuState* pCpuState, uint16_t* pValueAddress )
@@ -320,9 +367,9 @@ struct GBEmulatorInstance
         ++*pValueAddress;
         const x86Flags flagsRegister = readCpuFlagsX86();
         
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.H = flagsRegister.adjust;
-        pCpuState->registers.Flags.N = 1;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.H = flagsRegister.adjust;
+        pCpuState->registers.F.N = 0;
     }
 
     void decrement16BitValueX86( GBCpuState* pCpuState, uint16_t* pValueAddress )
@@ -330,9 +377,9 @@ struct GBEmulatorInstance
         --*pValueAddress;
         const x86Flags flagsRegister = readCpuFlagsX86();
         
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.H = flagsRegister.adjust;
-        pCpuState->registers.Flags.N = 1;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.H = flagsRegister.adjust;
+        pCpuState->registers.F.N = 1;
     }
 
     void addValue8BitX86( GBCpuState* pCpuState, uint8_t value )
@@ -341,10 +388,10 @@ struct GBEmulatorInstance
         
         const x86Flags flagsRegister = readCpuFlagsX86();
         
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.C = flagsRegister.carry;
-        pCpuState->registers.Flags.H = flagsRegister.parity;
-        pCpuState->registers.Flags.N = 0;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.C = flagsRegister.carry;
+        pCpuState->registers.F.H = flagsRegister.parity;
+        pCpuState->registers.F.N = 0;
     }
 
     void addValue16BitX86( GBCpuState* pCpuState, uint16_t value )
@@ -353,10 +400,10 @@ struct GBEmulatorInstance
         
         const x86Flags flagsRegister = readCpuFlagsX86();
         
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.C = flagsRegister.carry;
-        pCpuState->registers.Flags.H = flagsRegister.parity;
-        pCpuState->registers.Flags.N = 0;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.C = flagsRegister.carry;
+        pCpuState->registers.F.H = flagsRegister.parity;
+        pCpuState->registers.F.N = 0;
     }
 
     void subValue8BitX86( GBCpuState* pCpuState, uint8_t value )
@@ -365,10 +412,10 @@ struct GBEmulatorInstance
         
         const x86Flags flagsRegister = readCpuFlagsX86();
         
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.C = flagsRegister.carry;
-        pCpuState->registers.Flags.H = flagsRegister.parity;
-        pCpuState->registers.Flags.N = 0;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.C = flagsRegister.carry;
+        pCpuState->registers.F.H = flagsRegister.parity;
+        pCpuState->registers.F.N = 1;
     }
 
     void subValue16BitX86( GBCpuState* pCpuState, uint16_t value )
@@ -377,10 +424,10 @@ struct GBEmulatorInstance
         
         const x86Flags flagsRegister = readCpuFlagsX86();
         
-        pCpuState->registers.Flags.Z = flagsRegister.zero;
-        pCpuState->registers.Flags.C = flagsRegister.carry;
-        pCpuState->registers.Flags.H = flagsRegister.parity;
-        pCpuState->registers.Flags.N = 0;
+        pCpuState->registers.F.Z = flagsRegister.zero;
+        pCpuState->registers.F.C = flagsRegister.carry;
+        pCpuState->registers.F.H = flagsRegister.parity;
+        pCpuState->registers.F.N = 1;
     }
 
     uint8_t rotateThroughCarryLeftX86( GBCpuState* pCpuState, uint8_t value )
@@ -392,8 +439,8 @@ struct GBEmulatorInstance
             mov value, bl
         }
 
-        pCpuState->registers.Flags.N = 0;
-        pCpuState->registers.Flags.H = 0;
+        pCpuState->registers.F.N = 0;
+        pCpuState->registers.F.H = 0;
         return value;
     }
 
@@ -406,16 +453,16 @@ struct GBEmulatorInstance
             mov value, bl
         }
 
-        pCpuState->registers.Flags.N = 0;
-        pCpuState->registers.Flags.H = 0;
+        pCpuState->registers.F.N = 0;
+        pCpuState->registers.F.H = 0;
         return value;
     }
 
     uint8_t rotateLeftX86( GBCpuState* pCpuState, uint8_t value )
     {
-        pCpuState->registers.Flags.C = (value << 0);
-        pCpuState->registers.Flags.N = 0;
-        pCpuState->registers.Flags.H = 0;
+        pCpuState->registers.F.C = (value << 0);
+        pCpuState->registers.F.N = 0;
+        pCpuState->registers.F.H = 0;
 
         __asm
         {
@@ -429,9 +476,9 @@ struct GBEmulatorInstance
 
     uint8_t rotateRightX86( GBCpuState* pCpuState, uint8_t value )
     {
-        pCpuState->registers.Flags.C = (value << 7);
-        pCpuState->registers.Flags.N = 0;
-        pCpuState->registers.Flags.H = 0;
+        pCpuState->registers.F.C = (value << 7);
+        pCpuState->registers.F.N = 0;
+        pCpuState->registers.F.H = 0;
         
         __asm
         {
@@ -647,11 +694,13 @@ struct GBEmulatorInstance
 
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
+    pMemoryMapper->lastAddressReadFrom = addressOffset;
     return pMemoryMapper->pBaseAddress[addressOffset];
 }
 
 uint16_t read16BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
+    pMemoryMapper->lastAddressReadFrom = addressOffset;
     const uint8_t ls = read8BitValueFromAddress( pMemoryMapper, addressOffset + 0);
     const uint8_t hs = read8BitValueFromAddress( pMemoryMapper, addressOffset + 1);
     return (hs << 8u) | (ls << 0u);
@@ -664,32 +713,27 @@ uint8_t* getMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset
 
 void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint8_t value )
 {
-    const uint8_t startDMATransfer = (addressOffset == 0xFF46);
+    pMemoryMapper->lastValueWritten     = value;
+    pMemoryMapper->lastAddressWrittenTo = addressOffset;
+    pMemoryMapper->pBaseAddress[addressOffset] = value;
 
-    if( startDMATransfer )
+    if( addressOffset == 0xFF80 )
     {
-        const uint16_t sourceAddress = value * 0x100;
-        uint8_t* pSource        = getMemoryAddress(pMemoryMapper, sourceAddress);
-        uint8_t* pDestination   = getMemoryAddress(pMemoryMapper, 0xFE00);
-        memcpy( pDestination, pSource, 0x9F );
+        int i = 0;
+        i++;
     }
-    else
+
+    //FK: Echo 8kB internal Ram
+    if( addressOffset >= 0xC000 && addressOffset < 0xDE00 )
     {
+        addressOffset += 0x2000;
         pMemoryMapper->pBaseAddress[addressOffset] = value;
-
-        //FK: Echo 8kB internal Ram
-        if( addressOffset >= 0xC000 && addressOffset < 0xDE00 )
-        {
-            addressOffset += 0x2000;
-            pMemoryMapper->pBaseAddress[addressOffset] = value;
-        }
-        else if( addressOffset >= 0xE000 && addressOffset < 0xFE00 )
-        {
-            addressOffset -= 0x2000;
-            pMemoryMapper->pBaseAddress[addressOffset] = value;
-        }
     }
-   
+    else if( addressOffset >= 0xE000 && addressOffset < 0xFE00 )
+    {
+        addressOffset -= 0x2000;
+        pMemoryMapper->pBaseAddress[addressOffset] = value;
+    }
 }
 
 GBRomHeader getGBRomHeader(const uint8_t* pRomMemory)
@@ -726,6 +770,8 @@ size_t mapRomSizeToByteSize(uint8_t romSize)
 
 void mapRomMemory( GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory )
 {
+    pMemoryMapper->pRomMemoryBaseAddress = pRomMemory;
+
     const GBRomHeader romHeader = getGBRomHeader(pRomMemory);
     const size_t romSizeInBytes = mapRomSizeToByteSize(romHeader.romSize);
     switch(romHeader.cartridgeType)
@@ -757,28 +803,39 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
 
     //FK: TODO: Make the following values user defined
     //FK: A value of 11h indicates CGB (or GBA) hardware
-    pState->registers.A = 0x11;
+    //pState->registers.A = 0x11;
+
+    pState->registers.A = 0x1;
 
     //FK: examine Bit 0 of the CPUs B-Register to separate between CGB (bit cleared) and GBA (bit set)
-    pState->registers.B = 0x1;
+    //pState->registers.B = 0x1;
+    pState->registers.B = 0x0;
 
-    pState->registers.F = 0xB0;
-    pState->registers.C = 0x13;
-    pState->registers.DE = 0x00D8;
-    pState->registers.HL = 0x014D;
+    //FK: Start fetching instructions at address $1000
+    pState->programCounter = 0x0100;
+
+    pState->registers.F.value   = 0xB0;
+    pState->registers.C         = 0x13;
+    pState->registers.DE        = 0x00D8;
+    pState->registers.HL        = 0x014D;
 
     pState->pIE = pMemoryMapper->pBaseAddress + 0xFFFF;
     pState->pIF = pMemoryMapper->pBaseAddress + 0xFF0F;
 
+    pState->lastOpcodeAddress = 0x0000;
+    pState->lastOpcode = 0;
+    pState->dmaCycleCount = 0;
+
+    pState->flags.dma   = 0;
     pState->flags.IME   = 1;
     pState->flags.halt  = 0;
 }
 
 uint8_t shiftLeft( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->registers.Flags.N = 0;
-    pCpuState->registers.Flags.H = 0;
-    pCpuState->registers.Flags.C = (value << 0);
+    pCpuState->registers.F.N = 0;
+    pCpuState->registers.F.H = 0;
+    pCpuState->registers.F.C = (value << 0);
 
     value = (value << 1);
     return value;
@@ -786,9 +843,9 @@ uint8_t shiftLeft( GBCpuState* pCpuState, uint8_t value )
 
 uint8_t shiftRight( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->registers.Flags.N = 0;
-    pCpuState->registers.Flags.H = 0;
-    pCpuState->registers.Flags.C = (value << 7);
+    pCpuState->registers.F.N = 0;
+    pCpuState->registers.F.H = 0;
+    pCpuState->registers.F.C = (value << 7);
 
     value = (value >> 1);
     return value;
@@ -796,9 +853,9 @@ uint8_t shiftRight( GBCpuState* pCpuState, uint8_t value )
 
 uint8_t shiftRightKeepMSB( GBCpuState* pCpuState, uint8_t value )
 {
-    pCpuState->registers.Flags.N = 0;
-    pCpuState->registers.Flags.H = 0;
-    pCpuState->registers.Flags.C = (value << 7);
+    pCpuState->registers.F.N = 0;
+    pCpuState->registers.F.H = 0;
+    pCpuState->registers.F.C = (value << 7);
 
     const uint8_t msb = value & (1 << 7);
     value = (value >> 1) | msb;
@@ -813,9 +870,9 @@ uint8_t swapNibbles( GBCpuState* pCpuState, uint8_t value )
 
 void testBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
 {
-    pCpuState->registers.Flags.Z = (value >> bitIndex);
-    pCpuState->registers.Flags.N = 0;
-    pCpuState->registers.Flags.H = 1;
+    pCpuState->registers.F.Z = (value >> bitIndex);
+    pCpuState->registers.F.N = 0;
+    pCpuState->registers.F.H = 1;
 }
 
 uint8_t resetBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
@@ -830,10 +887,14 @@ uint8_t setBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
     return value;
 }
 
+void resetMemoryMapper( GBMemoryMapper* pMapper )
+{
+    memset(pMapper->pBaseAddress, 0, 0xFFFF);
+}
+
 void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
 {
-    memset(pMemory, 0, 0xFFFF);
-
+    pMapper->pRomMemoryBaseAddress  = 0x0000;
     pMapper->pBaseAddress           = pMemory;
     pMapper->pRomBank0              = pMemory;
     pMapper->pRomBankSwitch         = pMemory + 0x4000;
@@ -845,28 +906,37 @@ void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
     pMapper->IOPorts                = pMemory + 0xFF00;
     pMapper->pHighRam               = pMemory + 0xFF80;
     pMapper->pInterruptRegister     = pMemory + 0xFFFF;
+
+    resetMemoryMapper( pMapper );
 }
 
 void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
 {
-    pPpuState->pOAM                         = (GBObjectAttributes*)(pMemoryMapper->pBaseAddress + 0xFE00);
-    pPpuState->pLcdControl                  = (GBLcdControl*)(pMemoryMapper->pBaseAddress + 0xFF40);
-    pPpuState->pPalettes                    = (GBPalette*)(pMemoryMapper->pBaseAddress + 0xFF47);
-    pPpuState->pTileBlocks[0]               = pMemoryMapper->pBaseAddress + 0x8000;
-    pPpuState->pTileBlocks[1]               = pMemoryMapper->pBaseAddress + 0x8080;
-    pPpuState->pTileBlocks[2]               = pMemoryMapper->pBaseAddress + 0x9000;
-    pPpuState->pBackgroundOrWindowTiles[0]  = pMemoryMapper->pBaseAddress + 0x9800;
-    pPpuState->pBackgroundOrWindowTiles[1]  = pMemoryMapper->pBaseAddress + 0x9C00;
-    pPpuState->objectAttributeCapacity      = 40;
-    pPpuState->dotCounter                   = 0;
+    pPpuState->pOAM                             = (GBObjectAttributes*)(pMemoryMapper->pBaseAddress + 0xFE00);
+    pPpuState->pLcdControl                      = (GBLcdControl*)(pMemoryMapper->pBaseAddress + 0xFF40);
+    pPpuState->pPalettes                        = (GBPalette*)(pMemoryMapper->pBaseAddress + 0xFF47);
+    pPpuState->pTileBlocks[0]                   = pMemoryMapper->pBaseAddress + 0x8000;
+    pPpuState->pTileBlocks[1]                   = pMemoryMapper->pBaseAddress + 0x8080;
+    pPpuState->pTileBlocks[2]                   = pMemoryMapper->pBaseAddress + 0x9000;
+    pPpuState->pBackgroundOrWindowTileIds[0]    = pMemoryMapper->pBaseAddress + 0x9800;
+    pPpuState->pBackgroundOrWindowTileIds[1]    = pMemoryMapper->pBaseAddress + 0x9C00;
+    pPpuState->objectAttributeCapacity          = 40;
+    pPpuState->dotCounter                       = 0;
 
-    pPpuState->lcdRegisters.pStatus = (GBLcdStatus*)(pMemoryMapper->pBaseAddress + 0xFF40);
+    pPpuState->lcdRegisters.pStatus = (GBLcdStatus*)(pMemoryMapper->pBaseAddress + 0xFF41);
     pPpuState->lcdRegisters.pScy    = pMemoryMapper->pBaseAddress + 0xFF42;
     pPpuState->lcdRegisters.pScx    = pMemoryMapper->pBaseAddress + 0xFF43;
     pPpuState->lcdRegisters.pLy     = pMemoryMapper->pBaseAddress + 0xFF44;
     pPpuState->lcdRegisters.pLyc    = pMemoryMapper->pBaseAddress + 0xFF45;
     pPpuState->lcdRegisters.pWy     = pMemoryMapper->pBaseAddress + 0xFF4A;
     pPpuState->lcdRegisters.pWx     = pMemoryMapper->pBaseAddress + 0xFF4B;
+
+    //FK: set default state
+    pPpuState->pLcdControl->enable              = 1;
+    pPpuState->pLcdControl->bgAndWindowEnable   = 1;
+    pPpuState->pLcdControl->bgTileMapArea       = 1;
+    
+    pPpuState->lcdRegisters.pStatus->enableLycEqLyInterrupt = 1;
 }
 
 size_t calculateEmulatorInstanceMemoryRequirementsInBytes()
@@ -875,34 +945,72 @@ size_t calculateEmulatorInstanceMemoryRequirementsInBytes()
     return memoryRequirementsInBytes;
 }
 
+void resetEmulatorInstance(GBEmulatorInstance* pEmulatorInstance)
+{
+    resetMemoryMapper(pEmulatorInstance->pMemoryMapper );
+    initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
+    initPpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pPpuState);
+    
+    GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
+    if( pMemoryMapper->pRomMemoryBaseAddress != nullptr )
+    {
+        mapRomMemory( pMemoryMapper, pMemoryMapper->pRomMemoryBaseAddress );
+    }
+
+    pEmulatorInstance->actionButtonFlags    = 0x0F;
+    pEmulatorInstance->directionButtonFlags = 0x0F;
+}
+
 GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 {
     GBEmulatorInstance* pEmulatorInstance = (GBEmulatorInstance*)pEmulatorInstanceMemory;
     pEmulatorInstance->pCpuState     = (GBCpuState*)(pEmulatorInstance + 1);
     pEmulatorInstance->pMemoryMapper = (GBMemoryMapper*)(pEmulatorInstance->pCpuState + 1);
     pEmulatorInstance->pPpuState     = (GBPpuState*)(pEmulatorInstance->pMemoryMapper + 1);
-    
+
     uint8_t* pGBMemory = (uint8_t*)(pEmulatorInstance->pPpuState + 1);
-    initMemoryMapper(pEmulatorInstance->pMemoryMapper, pGBMemory );
-    initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
-    initPpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pPpuState);
+    initMemoryMapper( pEmulatorInstance->pMemoryMapper, pGBMemory );
+    
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES
+    pEmulatorInstance->debug.settings.enableBreakAtProgramCounter           = 0;
+    pEmulatorInstance->debug.settings.enableBreakAtOpcode                   = 0;
+    pEmulatorInstance->debug.settings.enableBreakAtMemoryReadFromAddress    = 0;
+    pEmulatorInstance->debug.settings.enableBreakAtMemoryWriteToAddress     = 0;
+    pEmulatorInstance->debug.breakAtProgramCounter                          = 0x0000;
+    pEmulatorInstance->debug.breakAtMemoryReadFromAddress                   = 0x0000;
+    pEmulatorInstance->debug.breakAtMemoryWriteToAddress                    = 0x0000;
+    pEmulatorInstance->debug.breakAtOpcode                                  = 0x00;
+#endif
+
+    resetEmulatorInstance(pEmulatorInstance);
     return pEmulatorInstance;
 }
 
 uint8_t* getVideoRam( GBEmulatorInstance* pEmulator)
 {
-    return pEmulator->pPpuState->pBackgroundOrWindowTiles[0];
+    return pEmulator->pPpuState->pBackgroundOrWindowTileIds[0];
 }
 
-void startEmulation( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
+void loadRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
 {
     mapRomMemory(pEmulator->pMemoryMapper, pRomMemory);
+}
 
-    GBCpuState* pCpuState           = pEmulator->pCpuState;
-    GBMemoryMapper* pMemoryMapper   = pEmulator->pMemoryMapper;
+void pushPixelsFromTileData(uint8_t* pScanline, const uint16_t tileData)
+{
+    const uint8_t pixels[] = {
+        (uint8_t)((tileData >> 0 | tileData >>  8) & 0x3),
+        (uint8_t)((tileData >> 1 | tileData >>  9) & 0x3),
+        (uint8_t)((tileData >> 2 | tileData >> 10) & 0x3),
+        (uint8_t)((tileData >> 3 | tileData >> 11) & 0x3),
+        (uint8_t)((tileData >> 4 | tileData >> 12) & 0x3),
+        (uint8_t)((tileData >> 5 | tileData >> 13) & 0x3),
+        (uint8_t)((tileData >> 6 | tileData >> 14) & 0x3),
+        (uint8_t)((tileData >> 7 | tileData >> 15) & 0x3)
+    };
 
-    //FK: Start fetching instructions at address $1000
-    pCpuState->programCounter    = 0x0100;
+    *pScanline++ = pixels[0] << 6 | pixels[1] << 4 | pixels[2] << 2 | pixels[3] << 0;
+    *pScanline   = pixels[4] << 6 | pixels[5] << 4 | pixels[6] << 2 | pixels[7] << 0;
 }
 
 void pushSpritePixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
@@ -939,37 +1047,43 @@ void pushSpritePixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint
     }
 }
 
-void pushPixelsFromTileData(uint8_t* pScanline, const uint16_t tileData)
+uint32_t interleaveGbPixelBytes(uint8_t* pScanlineData, const uint16_t* pScanlinePixelData)
 {
-    const uint8_t pixels[] = {
-        (uint8_t)((tileData >> 0 | tileData >>  8) & 0x3),
-        (uint8_t)((tileData >> 1 | tileData >>  9) & 0x3),
-        (uint8_t)((tileData >> 2 | tileData >> 10) & 0x3),
-        (uint8_t)((tileData >> 3 | tileData >> 11) & 0x3),
-        (uint8_t)((tileData >> 4 | tileData >> 12) & 0x3),
-        (uint8_t)((tileData >> 5 | tileData >> 13) & 0x3),
-        (uint8_t)((tileData >> 6 | tileData >> 14) & 0x3),
-        (uint8_t)((tileData >> 7 | tileData >> 15) & 0x3)
-    };
+    const uint32_t selectorMask = 0b01010101010101010101010101010101;
+    uint32_t pixels = 0;
+    const uint16_t a = pScanlinePixelData[0];
+    const uint16_t b = pScanlinePixelData[1];
+    __asm
+    {
+        mov		bx, a
+        mov		cx, b
+        mov 	edx, selectorMask
+        pdep 	ebx, ebx, edx		; extract bits from lsb pixel byte
+        shl		edx, 1				; shift selectorMask to bit extract bits from second tile byte
+        pdep 	ecx, ecx, edx		; extract bits from msb pixel byte
+        or		ebx, ecx			; or them together to get one pixel tile row
+        mov 	pixels, ebx	
+    }
 
-    *pScanline++ = pixels[0] << 6 | pixels[1] << 4 | pixels[2] << 2 | pixels[3] << 0;
-    *pScanline   = pixels[4] << 6 | pixels[5] << 4 | pixels[6] << 2 | pixels[7] << 0;
+    return pixels;
 }
 
 void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
-    constexpr uint8_t horizontalTileCount = 32; //FK: Window and Background tile maps are 32x32 tiles
-
-    const uint8_t* pWindowTiles     = pPpuState->pBackgroundOrWindowTiles[ pPpuState->pLcdControl->windowTileMapArea ];
-    const uint8_t* pBackgroundTiles = pPpuState->pBackgroundOrWindowTiles[ pPpuState->pLcdControl->bgTileMapArea ];
+    const uint8_t* pWindowTileIds      = pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->windowTileMapArea ];
+    const uint8_t* pBackgroundTileIds  = pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->bgTileMapArea ];
     const uint8_t wy = *pPpuState->lcdRegisters.pWy;
     const uint8_t sx = *pPpuState->lcdRegisters.pScx;
     const uint8_t sy = *pPpuState->lcdRegisters.pScy;
-    uint8_t scanlineTileIndices[horizontalTileCount] = {}; //FK: Store the participating tiles for this scanline
-    uint8_t* pScanlineTileIndices = scanlineTileIndices;
 
-    const uint16_t startTileIndex = scanlineYCoordinate * horizontalTileCount * 16;
-    const uint16_t endTileIndex = startTileIndex + horizontalTileCount * 16;
+    //FK: Store the participating tiles for this scanline
+    uint8_t scanlineTileIds[gbBGTileCount] = {}; 
+    uint8_t* pScanlineTileIds = scanlineTileIds;
+
+    //FK: Calculate the tile row that intersects with the current scanline
+    const uint8_t  scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
+    const uint16_t startTileIndex = scanlineYCoordinateInTileSpace * gbBGTileCount;
+    const uint16_t endTileIndex = startTileIndex + gbBGTileCount;
 
     if( wy <= scanlineYCoordinate && pPpuState->pLcdControl->windowEnable )
     {
@@ -980,12 +1094,12 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
             if( x >= wx )
             {
                 //FK: get tile from window tile map
-                *pScanlineTileIndices++ = pWindowTiles[tileIndex];
+                *pScanlineTileIds++ = pWindowTileIds[tileIndex];
             }
             else if( x >= sx )
             {
                 //FK: get tile from background tile map
-                *pScanlineTileIndices++ = pBackgroundTiles[tileIndex];
+                *pScanlineTileIds++ = pBackgroundTileIds[tileIndex];
             }
         }
     }
@@ -994,60 +1108,68 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
         for( uint16_t tileIndex = startTileIndex; tileIndex < endTileIndex; ++tileIndex )
         {
             //FK: get tile from background tile map
-            const uint8_t x = tileIndex * 8;
-
-            if( x >= sx )
-            {
-                *pScanlineTileIndices++ = pBackgroundTiles[tileIndex];
-            }
+            *pScanlineTileIds++ = pBackgroundTileIds[tileIndex];
         }
     }
 
-    const uint8_t scanlineTileOffset = (scanlineYCoordinate - startTileIndex / 32);
+    //FK: Get the y position of the top most pixel inside the tile row that the current scanline is in
+    const uint8_t tileRowStartYPos  = startTileIndex / gbBGTileCount * gbTileResolution;
 
+    //FK: Get the y offset inside the tile row to where the scanline currently is.
+    const uint8_t tileRowYOffset    = scanlineYCoordinate - tileRowStartYPos;
+    
+    uint32_t scanlinePixelData[5] = {0};
     //FK: Determine tile addressing mode
     if( pPpuState->pLcdControl->bgAndWindowTileDataArea )
     {
         //FK: 0x8000 addressing mode
-        for( uint8_t scanlineTileIndex = 0; scanlineTileIndex < horizontalTileCount; ++scanlineTileIndex )
+        for( uint8_t tileIdIndex = 0; tileIdIndex < 20; ++tileIdIndex )
         {
-            const uint8_t tileIndex     = pScanlineTileIndices[scanlineTileIndex];
-            const uint16_t* pTileData   = (uint16_t*)(pPpuState->pTileBlocks + tileIndex);
-            pTileData += scanlineTileOffset;
+            const uint8_t tileIndex = scanlineTileIds[tileIdIndex];
+            
+            //FK: Get pixel data of top most pixel line of current tile
+            const uint8_t* pTilePixelData = pPpuState->pTileBlocks[0] + tileIndex * gbTileSizeInBytes;
 
-            pushPixelsFromTileData(pScanline, *pTileData);
-            pScanline += 2;
+            //FK: Get pixel data of this tile for the current scanline
+            const uint16_t tileScanlinePixels = pTilePixelData[0] << 8 | pTilePixelData[1] << 0;
+
+            const uint8_t pixelShift = 16 - ( ( tileIdIndex % 2 ) << 4 );
+            const uint8_t pixelDataIndex = tileIdIndex >> 1;
+            scanlinePixelData[pixelDataIndex] |= tileScanlinePixels << pixelShift;
         }
     }
     else
     {
+        #if 0
         //FK: 0x8080 addressing mode
         for( uint8_t scanlineTileIndex = 0; scanlineTileIndex < horizontalTileCount; ++scanlineTileIndex )
         {
             const int8_t tileIndex      = (int8_t)pScanlineTileIndices[scanlineTileIndex];
-            const uint8_t* pTileData    = pPpuState->pTileBlocks[2] + tileIndex;
+            const uint8_t* pTileData    = pPpuState->pTileBlocks[2] + tileIndex * gbTileSizeInBytes;
             pTileData += scanlineTileOffset;
 
             pushPixelsFromTileData(pScanline, *pTileData);
             pScanline += 2;
         }
+        #endif
     }
+
+    interleaveGbPixelBytes(pScanline, (const uint16_t*)scanlinePixelData);
 }
 
-void pushScanline( GBEmulatorInstance* pEmulator, uint8_t scanlineYCoordinate )
+void pushScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
-    GBPpuState* pPpuState = pEmulator->pPpuState;
-    uint8_t scanlineInGBPixels[20]; //FK: 20byte = 160gb pixels (1gb pixel = 2bit)
-
     if( pPpuState->pLcdControl->bgAndWindowEnable )
     {
-        pushBackgroundOrWindowPixelsToScanline( scanlineInGBPixels, pPpuState, scanlineYCoordinate );
+        pushBackgroundOrWindowPixelsToScanline( pPpuState->frameBufferInGBPixels, pPpuState, scanlineYCoordinate );
     }
 
+#if 0
     if( pPpuState->pLcdControl->objEnable )
     {
         pushSpritePixelsToScanline( scanlineInGBPixels, pPpuState, scanlineYCoordinate );
     }
+#endif
 }
 
 void triggerInterrupt( GBCpuState* pCpuState, uint8_t interruptFlag )
@@ -1055,11 +1177,8 @@ void triggerInterrupt( GBCpuState* pCpuState, uint8_t interruptFlag )
     *pCpuState->pIE |= interruptFlag;
 }
 
-void tickPPU( GBEmulatorInstance* pEmulator, const uint8_t cycleCount )
+void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
 {
-    GBPpuState* pPpuState = pEmulator->pPpuState;
-    GBCpuState* pCpuState = pEmulator->pCpuState;
-
     GBLcdStatus* pLcdStatus = pPpuState->lcdRegisters.pStatus;
     uint8_t ly = *pPpuState->lcdRegisters.pLy;
     uint8_t lcdMode = pLcdStatus->mode;
@@ -1074,7 +1193,7 @@ void tickPPU( GBEmulatorInstance* pEmulator, const uint8_t cycleCount )
         pPpuState->dotCounter -= 80;
 
         lcdMode = 3;
-        pushScanline(pEmulator, ly);
+        pushScanline( pPpuState, ly );
     }
     else if( lcdMode == 3 && pPpuState->dotCounter >= 168 )
     {
@@ -1352,22 +1471,10 @@ uint8_t handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
     return cycleCost;
 }
 
-uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
+uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode )
 {
-    GBMemoryMapper* pMemoryMapper   = pEmulator->pMemoryMapper;
-    GBCpuState* pCpuState           = pEmulator->pCpuState;
-
-    triggerPendingInterrupts( pCpuState, pMemoryMapper );
-
-    if( pCpuState->flags.halt )
-    {
-        return 0u;
-    }
-
-    uint8_t cycleCost = 0u;
-    const uint8_t opcode = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
-
-#ifdef K15_PRINT_DISASSEMBLY
+    uint8_t cycleCost = 0;
+#if K15_PRINT_DISASSEMBLY == 1
     printOpcodeDisassembly( pCpuState, pMemoryMapper, opcode );
 #endif
 
@@ -1401,19 +1508,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //CALL nz, nn
                 case 0xC4:
-                    condition = pCpuState->registers.Flags.Z == 0;
+                    condition = pCpuState->registers.F.Z == 0;
                     break;
                 //CALL nc, nn
                 case 0xCC:
-                    condition = pCpuState->registers.Flags.C == 0;
+                    condition = pCpuState->registers.F.C == 0;
                     break;
                 //CALL z, nn
                 case 0xD4:
-                    condition = pCpuState->registers.Flags.Z == 1;
+                    condition = pCpuState->registers.F.Z == 1;
                     break;
                 //CALL c, nn
                 case 0xDC:
-                    condition = pCpuState->registers.Flags.C == 1;
+                    condition = pCpuState->registers.F.C == 1;
                     break;
             }
 
@@ -2039,18 +2146,18 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //JP nz nn
                 case 0xC2:
-                    condition = pCpuState->registers.Flags.Z == 0;
+                    condition = pCpuState->registers.F.Z == 0;
                     break;
                 //JP nc nn
                 case 0xD2:
-                    condition = pCpuState->registers.Flags.C == 0;
+                    condition = pCpuState->registers.F.C == 0;
                     break;
                 //JP z nn
                 case 0xCA:
-                    condition = pCpuState->registers.Flags.Z == 1;
+                    condition = pCpuState->registers.F.Z == 1;
                     break;
                 //JP c nn
-                    condition = pCpuState->registers.Flags.C == 1;
+                    condition = pCpuState->registers.F.C == 1;
                     break;
             }
 
@@ -2086,19 +2193,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //JR nz
                 case 0x20:
-                    condition = pCpuState->registers.Flags.Z == 0;
+                    condition = pCpuState->registers.F.Z == 0;
                     break;
                 //JR nc
                 case 0x30:
-                    condition = pCpuState->registers.Flags.C == 0;
+                    condition = pCpuState->registers.F.C == 0;
                     break;
                 //JR z
                 case 0x28:
-                    condition = pCpuState->registers.Flags.Z == 1;
+                    condition = pCpuState->registers.F.Z == 1;
                     break;
                 //JR c
                 case 0x38:
-                    condition = pCpuState->registers.Flags.C == 1;
+                    condition = pCpuState->registers.F.C == 1;
                     break;
             }
 
@@ -2164,8 +2271,8 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             }
             
             pCpuState->registers.A            = pCpuState->registers.A ^ operand;
-            pCpuState->registers.Flags.value  = 0x0;
-            pCpuState->registers.Flags.Z      = (pCpuState->registers.A == 0);
+            pCpuState->registers.F.value  = 0x0;
+            pCpuState->registers.F.Z      = (pCpuState->registers.A == 0);
             
             break;
         }
@@ -2232,8 +2339,8 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             }
 
             pCpuState->registers.A = pCpuState->registers.A | operand;
-            pCpuState->registers.Flags.value  = 0x0;
-            pCpuState->registers.Flags.Z      = (pCpuState->registers.A == 0);
+            pCpuState->registers.F.value  = 0x0;
+            pCpuState->registers.F.Z      = (pCpuState->registers.A == 0);
             break;
         }
 
@@ -2299,8 +2406,10 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             }
 
             pCpuState->registers.A = pCpuState->registers.A & operand;
-            pCpuState->registers.Flags.value  = 0x0;
-            pCpuState->registers.Flags.Z      = (pCpuState->registers.A == 0);
+            pCpuState->registers.F.N      = 0;
+            pCpuState->registers.F.H      = 1;
+            pCpuState->registers.F.C      = 0;
+            pCpuState->registers.F.Z      = (pCpuState->registers.A == 0);
             break;
         }
 
@@ -2708,22 +2817,22 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
             {
                 //RET NZ
                 case 0xC0:
-                    condition = pCpuState->registers.Flags.Z == 0;
+                    condition = pCpuState->registers.F.Z == 0;
                     break;
 
                 //RET NC
                 case 0xD0:
-                    condition = pCpuState->registers.Flags.C == 0;
+                    condition = pCpuState->registers.F.C == 0;
                     break;
 
                 //RET NZ
                 case 0xC8:
-                    condition = pCpuState->registers.Flags.Z == 1;
+                    condition = pCpuState->registers.F.Z == 1;
                     break;
 
                 //RET NC
                 case 0xD8:
-                    condition = pCpuState->registers.Flags.C == 1;
+                    condition = pCpuState->registers.F.C == 1;
                     break;
             }
 
@@ -2772,9 +2881,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         // CPL
         case 0x2F:
         {
-            pCpuState->registers.A = pCpuState->registers.A ^ 0xFF;
-            pCpuState->registers.Flags.N = 1;
-            pCpuState->registers.Flags.H = 1;
+            pCpuState->registers.A = ~pCpuState->registers.A;
+            pCpuState->registers.F.N = 1;
+            pCpuState->registers.F.H = 1;
             cycleCost = 4;
             break;
         }
@@ -2782,9 +2891,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //CCF
         case 0x3F:
         {
-            pCpuState->registers.Flags.C = !pCpuState->registers.Flags.C;
-            pCpuState->registers.Flags.N = 0;
-            pCpuState->registers.Flags.H = 0;
+            pCpuState->registers.F.C = !pCpuState->registers.F.C;
+            pCpuState->registers.F.N = 0;
+            pCpuState->registers.F.H = 0;
             cycleCost = 4;
             break;
         }
@@ -2792,9 +2901,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
         //SCF
         case 0x37:
         {
-            pCpuState->registers.Flags.C = 1;
-            pCpuState->registers.Flags.N = 0;
-            pCpuState->registers.Flags.H = 0;
+            pCpuState->registers.F.C = 1;
+            pCpuState->registers.F.N = 0;
+            pCpuState->registers.F.H = 0;
             cycleCost = 4;
             break;
         }
@@ -2974,10 +3083,127 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulator )
 
         default:
             printf( "not implemented opcode '0x%.2hhX'\n", opcode );
-#ifdef K15_BREAK_ON_UNKNOWN_INSTRUCTION
+#if K15_BREAK_ON_UNKNOWN_INSTRUCTION == 1
             debugBreak();
 #endif
     }
+
+    return cycleCost;
+}
+
+void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t cycleCostOfLastOpCode )
+{
+    if( pCpuState->flags.dma )
+    {
+        pCpuState->dmaCycleCount += cycleCostOfLastOpCode;
+        if( pCpuState->dmaCycleCount >= gbDMACycleCount )
+        {
+            pCpuState->flags.dma = 0;
+        }
+    }
+
+    const uint8_t startDMATransfer = ( pMemoryMapper->lastAddressWrittenTo == 0xFF46 );
+    if( startDMATransfer )
+    {
+        //FK: Cpu can only write to HRAM during DMA transfer
+        pCpuState->flags.dma = 1;
+
+        //FK: Copy sprite attributes from dma address to OAM 
+        const uint16_t dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
+        memcpy( pMemoryMapper->pSpriteAttributes, pMemoryMapper->pBaseAddress + dmaAddress, gbOAMSizeInBytes );
+
+        //FK: Count up to 160 cycles for the dma flag to be reset
+        pCpuState->dmaCycleCount = 0;
+
+        //FK: hack to not run into an endless DMA loop
+        pMemoryMapper->lastAddressWrittenTo = 0x0000;
+    }
+}
+
+void handleInput( GBMemoryMapper* pMemoryMapper, uint8_t actionButtonFlags, uint8_t directionButtonFlags )
+{
+    if( pMemoryMapper->lastAddressWrittenTo == 0xFF00 )
+    {
+        //FK: bit 7&6 aren't used so we'll set them (mimicing bgb)
+        const uint8_t joypadValue               = 0xC0 | pMemoryMapper->lastValueWritten & 0x30;
+        const uint8_t selectActionButtons       = ( joypadValue & (1 << 5) ) == 0;
+        const uint8_t selectDirectionButtons    = ( joypadValue & (1 << 4) ) == 0;
+
+        //FK: Write joypad values to 0xFF00 ()
+        if( selectActionButtons )
+        {
+            pMemoryMapper->pBaseAddress[0xFF00] =( joypadValue & 0xF0 ) | actionButtonFlags;
+        }
+        else if( selectDirectionButtons )
+        {
+            pMemoryMapper->pBaseAddress[0xFF00] =( joypadValue & 0xF0 ) | directionButtonFlags;
+        }
+    }
+}
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+uint8_t checkDebugBreakCondition( GBEmulatorInstance* pEmulatorInstance )
+{
+    GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
+    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
+
+    if( pEmulatorInstance->debug.settings.enableBreakAtProgramCounter &&
+        pEmulatorInstance->debug.breakAtProgramCounter == pCpuState->lastOpcodeAddress )
+    {
+        return 1;
+    }
+
+    if( pEmulatorInstance->debug.settings.enableBreakAtOpcode &&
+        pEmulatorInstance->debug.breakAtOpcode == pCpuState->lastOpcode )
+    {
+        return 1;
+    }
+
+    if( pEmulatorInstance->debug.settings.enableBreakAtMemoryReadFromAddress &&
+        pEmulatorInstance->debug.breakAtMemoryReadFromAddress == pMemoryMapper->lastAddressReadFrom )
+    {
+        return 1;   
+    }
+
+    if( pEmulatorInstance->debug.settings.enableBreakAtMemoryWriteToAddress &&
+        pEmulatorInstance->debug.breakAtMemoryWriteToAddress == pMemoryMapper->lastAddressWrittenTo )
+    {
+        return 1;   
+    }
+
+    return 0;
+}
+#endif
+
+uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
+{
+    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
+    GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
+
+    triggerPendingInterrupts( pCpuState, pMemoryMapper );
+
+    if( pCpuState->flags.halt )
+    {
+        return 0;
+    }
+
+    const uint16_t opcodeAddress = pCpuState->programCounter++;
+    const uint8_t opcode         = read8BitValueFromAddress( pMemoryMapper, opcodeAddress );
+        
+    pCpuState->lastOpcodeAddress = opcodeAddress;
+    pCpuState->lastOpcode        = opcode;
+    
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+    if( checkDebugBreakCondition( pEmulatorInstance ) )
+    {
+        debugBreak();
+    }
+#endif
+
+    const uint8_t cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
+    checkDMAState( pCpuState, pMemoryMapper, cycleCost );
+    handleInput( pMemoryMapper, pEmulatorInstance->actionButtonFlags, pEmulatorInstance->directionButtonFlags );
+    tickPPU( pCpuState, pEmulatorInstance->pPpuState, cycleCost );
 
     return cycleCost;
 }
