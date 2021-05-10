@@ -1,7 +1,7 @@
 #include "stdint.h"
 #include "stdio.h"
 
-#define K15_PRINT_DISASSEMBLY                   0   //FK: Enabling this slows the emulation way down because of all the printf calls -> get better IMGUI solution
+#define K15_PRINT_DISASSEMBLY                   1   //FK: Enabling this slows the emulation way down because of all the printf calls -> get better IMGUI solution
 #define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
 
@@ -743,12 +743,6 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
     pMemoryMapper->lastValueWritten     = value;
     pMemoryMapper->lastAddressWrittenTo = addressOffset;
     pMemoryMapper->pBaseAddress[addressOffset] = value;
-
-    if( addressOffset == 0xFF80 )
-    {
-        int i = 0;
-        i++;
-    }
 
     //FK: Echo 8kB internal Ram
     if( addressOffset >= 0xC000 && addressOffset < 0xDE00 )
