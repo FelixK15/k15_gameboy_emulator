@@ -19,6 +19,7 @@ All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h`
 
 - [x] Implement opcodes to get into tetris copyright text
 - [x] Display video ram and show the tetris tileset
+- [ ] Emulate correct frame timings
 - [ ] Implement opcodes to get into tetris menu and start a game
 - [ ] Test Tetris
 - [x] Add IMGUI dependency to be able to add debug features
