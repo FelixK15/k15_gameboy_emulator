@@ -128,7 +128,6 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		}
 	}
 
-	//FK: TODO set joypad state in controller...
 }
 
 void K15_MouseButtonInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
@@ -236,7 +235,7 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 	return hwnd;
 }
 
-void renderGbFrameBuffer(const uint8_t* pVideoRam)
+void renderGbFrameBuffer(const uint8_t* pFrameBuffer)
 {
 	//FK: greenish hue of gameboy lcd
 	constexpr float gbRGBMapping[3] = {
@@ -257,46 +256,28 @@ void renderGbFrameBuffer(const uint8_t* pVideoRam)
 
 	#if 1
 
-	for( size_t tileIndex = 0; tileIndex < 0x1000; )
+	for( size_t y = 0; y < gbVerticalResolutionInPixels; ++y )
 	{
-		for( size_t pixely = 0; pixely < 8; ++pixely )
+		for( size_t x = 0; x < gbHorizontalResolutionInPixels; x += 4 )
 		{
-			const uint8_t pixelLineLSB 	 = pVideoRam[tileIndex + 0];
-			const uint8_t pixelLineMSB 	 = pVideoRam[tileIndex + 1];
-			const uint16_t pixels	 	= generateGbPixelsForTileLine(pixelLineLSB, pixelLineMSB);
+			const size_t frameBufferPixelIndex 	= (x + y*gbHorizontalResolutionInPixels)/4;
+			const uint8_t pixels	 			= pFrameBuffer[frameBufferPixelIndex];
 			
-			for( uint8_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
+			for( uint8_t pixelIndex = 0; pixelIndex < 4; ++pixelIndex )
 			{
-				const uint32_t vbIndex = x + pixelIndex + (y+pixely)*gbScreenWidth;
-				
-				const uint8_t pixelShift = (15 - pixelIndex * 2) - 1;
-				const uint16_t pixelMask = (uint16_t)(0x3 << pixelShift);
-
-				const uint8_t pixelMSBShift = pixelShift + 0;
-				const uint8_t pixelLSBShift = pixelShift + 1;
-				const uint8_t pixelMSB = (uint8_t)(( pixels & pixelMask ) >> pixelMSBShift & 0x1);
-				const uint8_t pixelLSB = (uint8_t)(( pixels & pixelMask ) >> pixelLSBShift & 0x1);
-				const uint8_t pixelValue = pixelMSB << 1 |
-										   pixelLSB << 0;
+				const uint8_t pixelValue = pixels >> ( ( 3 - pixelIndex ) * 2 ) & 0x3;
 
 				//FK: Map gameboy pixels to rgb pixels
 				const float intensity = pixelIntensity[ pixelValue ];
 				const float r = intensity * gbRGBMapping[0];
 				const float g = intensity * gbRGBMapping[1];
 				const float b = intensity * gbRGBMapping[2];
-				pGameboyVideoBuffer[vbIndex * 3 + 0] = (uint8_t)r;
-				pGameboyVideoBuffer[vbIndex * 3 + 1] = (uint8_t)g;
-				pGameboyVideoBuffer[vbIndex * 3 + 2] = (uint8_t)b;
+
+				const size_t videoBufferPixelIndex = ( x + pixelIndex + y * gbHorizontalResolutionInPixels ) * 3;
+				pGameboyVideoBuffer[videoBufferPixelIndex + 0] = (uint8_t)r;
+				pGameboyVideoBuffer[videoBufferPixelIndex + 1] = (uint8_t)g;
+				pGameboyVideoBuffer[videoBufferPixelIndex + 2] = (uint8_t)b;
 			}
-
-			tileIndex += 2;
-		}
-
-		x+=8;
-		if( x==8*16)
-		{
-			x=0;
-			y+=8;
 		}
 	}
 
@@ -338,7 +319,7 @@ DWORD WINAPI emulatorThreadEntryPoint(LPVOID pParameter)
 		{
 			totalCycleCount -= gbCyclerPerFrame;
 
-			renderGbFrameBuffer( pEmulatorInstance->pMemoryMapper->pVideoRAM );
+			renderGbFrameBuffer( pEmulatorInstance->pPpuState->pGBFrameBuffer );
 
 			//FK: Tell main thread that the GB frame is finished
 			SetEvent(gbFrameFinishedEvent);

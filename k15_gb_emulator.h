@@ -5,7 +5,6 @@
 #define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
 
-
 #include "k15_gb_opcodes.h"
 
 #define Kbyte(x) (x)*1024
@@ -26,12 +25,41 @@ static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                    = 160u;
 static constexpr uint8_t    gbTileResolution                   = 8u;  //FK: Tiles are 8x8 pixels
 static constexpr uint8_t    gbHorizontalResolutionInPixels     = 160u;
-static constexpr uint8_t    gbVerticalResolutuionInPixels      = 144u;
+static constexpr uint8_t    gbVerticalResolutionInPixels       = 144u;
 static constexpr uint8_t    gbHorizontalResolutionInTiles      = gbHorizontalResolutionInPixels / gbTileResolution;
-static constexpr uint8_t    gbVerticalResolutuionInTiles       = gbVerticalResolutuionInPixels / gbTileResolution;
+static constexpr uint8_t    gbVerticalResolutuionInTiles       = gbVerticalResolutionInPixels / gbTileResolution;
 static constexpr uint8_t    gbBGTileCount                      = 32u; //FK: BG maps are 32x32 tiles
 static constexpr uint8_t    gbTileSizeInBytes                  = 16u; //FK: 8x8 pixels with 2bpp
-static constexpr size_t     gbFrameBufferSizeInBytes           = gbHorizontalResolutionInTiles * gbVerticalResolutuionInTiles * gbTileSizeInBytes;
+static constexpr size_t     gbFrameBufferSizeInBytes           = (gbVerticalResolutionInPixels * gbHorizontalResolutionInPixels)/4;
+static constexpr size_t     gbMappedMemorySizeInBytes          = 0x10000;
+struct GBEmulatorJoypad
+{
+    union
+    {
+        struct 
+        {
+            uint8_t a       : 1;
+            uint8_t b       : 1;
+            uint8_t select  : 1;
+            uint8_t start   : 1;
+        };
+
+        uint8_t actionButtonMask = 0;
+    };
+
+    union
+    {
+        struct 
+        {
+            uint8_t right   : 1;
+            uint8_t left    : 1;
+            uint8_t up      : 1;
+            uint8_t down    : 1;
+        };
+
+        uint8_t dpadButtonMask = 0;
+    };
+};
 
 struct GBCpuState
 {
@@ -260,7 +288,7 @@ struct GBPpuState
     GBPalette*          pPalettes;
     uint8_t*            pBackgroundOrWindowTileIds[2];
     uint8_t*            pTileBlocks[3];
-    uint8_t             frameBufferInGBPixels[gbFrameBufferSizeInBytes];
+    uint8_t*            pGBFrameBuffer;
     uint8_t             objectAttributeCapacity;
 };
 
@@ -287,35 +315,6 @@ struct GBEmulatorDebug
     uint8_t                     breakAtOpcode;
 };
 #endif
-
-struct GBEmulatorJoypad
-{
-    union
-    {
-        struct 
-        {
-            uint8_t a       : 1;
-            uint8_t b       : 1;
-            uint8_t select  : 1;
-            uint8_t start   : 1;
-        };
-
-        uint8_t actionButtonMask = 0;
-    };
-
-    union
-    {
-        struct 
-        {
-            uint8_t right   : 1;
-            uint8_t left    : 1;
-            uint8_t up      : 1;
-            uint8_t down    : 1;
-        };
-
-        uint8_t dpadButtonMask = 0;
-    };
-};
 
 struct GBEmulatorInstance
 {
@@ -938,6 +937,12 @@ void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
     resetMemoryMapper( pMapper );
 }
 
+void initPpuFrameBuffer( GBPpuState* pPpuState, uint8_t* pMemory )
+{
+    pPpuState->pGBFrameBuffer = pMemory;
+    memset(pPpuState->pGBFrameBuffer, 0, gbFrameBufferSizeInBytes);
+}
+
 void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
 {
     pPpuState->pOAM                             = (GBObjectAttributes*)(pMemoryMapper->pBaseAddress + 0xFE00);
@@ -965,11 +970,13 @@ void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
     pPpuState->pLcdControl->bgTileMapArea       = 1;
     
     pPpuState->lcdRegisters.pStatus->enableLycEqLyInterrupt = 1;
+
+    memset(pPpuState->pGBFrameBuffer, 0, gbFrameBufferSizeInBytes);
 }
 
 size_t calculateEmulatorInstanceMemoryRequirementsInBytes()
 {
-    const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + sizeof(GBMemoryMapper) + sizeof(GBPpuState) + 0x10000;
+    const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + sizeof(GBMemoryMapper) + sizeof(GBPpuState) + gbMappedMemorySizeInBytes + gbFrameBufferSizeInBytes;
     return memoryRequirementsInBytes;
 }
 
@@ -998,7 +1005,10 @@ GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 
     uint8_t* pGBMemory = (uint8_t*)(pEmulatorInstance->pPpuState + 1);
     initMemoryMapper( pEmulatorInstance->pMemoryMapper, pGBMemory );
-    
+
+    uint8_t* pFramebufferMemory = (uint8_t*)(pGBMemory + gbMappedMemorySizeInBytes);
+    initPpuFrameBuffer( pEmulatorInstance->pPpuState, pFramebufferMemory );
+
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
     pEmulatorInstance->debug.settings.enableBreakAtProgramCounter           = 0;
     pEmulatorInstance->debug.settings.enableBreakAtOpcode                   = 0;
@@ -1075,25 +1085,42 @@ void pushSpritePixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint
     }
 }
 
-uint32_t interleaveGbPixelBytes(uint8_t* pScanlineData, const uint16_t* pScanlinePixelData)
+void interleaveGbPixelBytes(uint8_t* pScanlineData, const uint32_t* pScanlinePixelData)
 {
-    const uint32_t selectorMask = 0b01010101010101010101010101010101;
-    uint32_t pixels = 0;
-    const uint16_t a = pScanlinePixelData[0];
-    const uint16_t b = pScanlinePixelData[1];
-    __asm
+    //FK: First working version, code is messy af and should be optimized using SIMD.
+    size_t scanlineDataIndex = 0;
+    for( uint8_t i = 0; i < 10; ++i )
     {
-        mov		bx, a
-        mov		cx, b
-        mov 	edx, selectorMask
-        pdep 	ebx, ebx, edx		; extract bits from lsb pixel byte
-        shl		edx, 1				; shift selectorMask to bit extract bits from second tile byte
-        pdep 	ecx, ecx, edx		; extract bits from msb pixel byte
-        or		ebx, ecx			; or them together to get one pixel tile row
-        mov 	pixels, ebx	
-    }
+        const uint32_t pixelData = pScanlinePixelData[i];
+        const uint16_t pixelLineData[] ={
+            ( pixelData & 0xFFFF0000 ) >> 16,
+            ( pixelData & 0x0000FFFF ) >> 0,
+        };
 
-    return pixels;
+        for( uint8_t l = 0; l < 2; ++l )
+        {
+            const uint8_t lowByte  = pixelLineData[l] & 0x00FF;
+            const uint8_t highByte = (pixelLineData[l] & 0xFF00) >> 8;
+
+            uint8_t pixelShift = 6;
+            for( uint8_t k = 0; k < 8; ++k )
+            {
+                const uint8_t bitIndex = 7-k;
+                const uint8_t lsb = ( lowByte  >> bitIndex ) & 0x1;
+                const uint8_t msb = ( highByte >> bitIndex ) & 0x1;
+
+                pScanlineData[scanlineDataIndex] |= (lsb | msb << 1) << pixelShift;
+                pixelShift -= 2;
+                if( k == 3 )
+                {
+                    ++scanlineDataIndex;
+                    pixelShift = 6;
+                }
+            }
+
+            ++scanlineDataIndex;
+        }
+    }
 }
 
 void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
@@ -1146,7 +1173,7 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
     //FK: Get the y offset inside the tile row to where the scanline currently is.
     const uint8_t tileRowYOffset    = scanlineYCoordinate - tileRowStartYPos;
     
-    uint32_t scanlinePixelData[5] = {0};
+    uint32_t scanlinePixelData[10] = {0};
     //FK: Determine tile addressing mode
     if( pPpuState->pLcdControl->bgAndWindowTileDataArea )
     {
@@ -1156,10 +1183,10 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
             const uint8_t tileIndex = scanlineTileIds[tileIdIndex];
             
             //FK: Get pixel data of top most pixel line of current tile
-            const uint8_t* pTilePixelData = pPpuState->pTileBlocks[0] + tileIndex * gbTileSizeInBytes;
-
+            const uint8_t* pTileTopPixelData = pPpuState->pTileBlocks[0] + tileIndex * gbTileSizeInBytes;
+            const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
             //FK: Get pixel data of this tile for the current scanline
-            const uint16_t tileScanlinePixels = pTilePixelData[0] << 8 | pTilePixelData[1] << 0;
+            const uint16_t tileScanlinePixels = pTileScanlinePixelData[0] << 8 | pTileScanlinePixelData[1] << 0;
 
             const uint8_t pixelShift = 16 - ( ( tileIdIndex % 2 ) << 4 );
             const uint8_t pixelDataIndex = tileIdIndex >> 1;
@@ -1182,14 +1209,16 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
         #endif
     }
 
-    interleaveGbPixelBytes(pScanline, (const uint16_t*)scanlinePixelData);
+    interleaveGbPixelBytes(pScanline, scanlinePixelData);
 }
 
 void pushScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     if( pPpuState->pLcdControl->bgAndWindowEnable )
     {
-        pushBackgroundOrWindowPixelsToScanline( pPpuState->frameBufferInGBPixels, pPpuState, scanlineYCoordinate );
+        uint8_t* pFrameBufferScanline = pPpuState->pGBFrameBuffer + scanlineYCoordinate*gbHorizontalResolutionInPixels/4;
+        memset(pFrameBufferScanline, 0, gbHorizontalResolutionInPixels/4);
+        pushBackgroundOrWindowPixelsToScanline( pFrameBufferScanline, pPpuState, scanlineYCoordinate );
     }
 
 #if 0
@@ -1248,7 +1277,7 @@ void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleC
     {
         pPpuState->dotCounter -= 208;
 
-        if( ly == 145 )
+        if( ly == 144 )
         {
             lcdMode = 1;
             triggerLCDStatInterrupt = pLcdStatus->enableMode1VBlankInterrupt;
@@ -1266,7 +1295,7 @@ void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleC
             pPpuState->dotCounter -= 456;
             ++ly;
 
-            if( ly == 155 )
+            if( ly == 154 )
             {
                 ly = 0;
                 lcdMode = 2;
@@ -3204,6 +3233,11 @@ uint8_t checkDebugBreakCondition( GBEmulatorInstance* pEmulatorInstance )
     return 0;
 }
 #endif
+
+void setJoypad( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypad joypad )
+{
+    pEmulatorInstance->joypad = joypad;
+}
 
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
