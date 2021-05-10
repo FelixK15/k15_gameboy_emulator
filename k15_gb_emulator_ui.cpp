@@ -115,6 +115,7 @@ void doDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
 
 void doMemoryView(GBEmulatorInstance* pEmulatorInstance)
 {
+    #if 0
     const uint8_t* pBytes = pEmulatorInstance->pMemoryMapper->pBaseAddress;
 
     ImGui::Begin("Memory View" );
@@ -138,6 +139,7 @@ void doMemoryView(GBEmulatorInstance* pEmulatorInstance)
         ImGui::Text(pOpcode->pMnemonic);
     }
     ImGui::End();
+    #endif
 }
 
 void doUiFrame( GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData )

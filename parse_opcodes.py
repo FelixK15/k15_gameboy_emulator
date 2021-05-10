@@ -16,19 +16,24 @@ opcodesCSourceFileHandle = open("k15_gb_opcodes.h", "w")
 opcodesCSourceFileHandle.write("""struct GBOpcode
 {
     const char* pMnemonic;
-    uint8_t arguments;
+    uint8_t byteCount;
+    uint8_t cycleCosts[2];
 };
-
-static constexpr GBOpcode opcodeDisassembly[] = {
 """)
 
-counter = 0
+opcodesUnprefixed = "static constexpr GBOpcode unprefixedOpcodes[] = {\n"
+opcodesCBPrefixed = "static constexpr GBOpcode cbPrefixedOpcodes[] = {\n"
+
 for opcodeTable in opcodesTableIndex.items():
+    opcodeTableName = opcodeTable[0]
+    counter = 0
+
     for opcodeTableEntry in opcodeTable[1].items():
-        opcodeData = opcodeTableEntry[1]
-        mnemonic  = opcodeData["mnemonic"]
-        byteCount = opcodeData["bytes"]
-        operands  = opcodeData["operands"]
+        opcodeData      = opcodeTableEntry[1]
+        mnemonic        = opcodeData["mnemonic"]
+        byteCount       = opcodeData["bytes"]
+        operands        = opcodeData["operands"]
+        cycles          = opcodeData["cycles"]
 
         fullMnemonic = mnemonic
         for operand in operands:
@@ -44,10 +49,25 @@ for opcodeTable in opcodesTableIndex.items():
             else:
                 sourceCodeLine += ", "
 
-        counter += 1
-        sourceCodeLine += "{{ \"{mnemonic}\", {bytes} }}".format(mnemonic=fullMnemonic, bytes=byteCount)
-        
-        opcodesCSourceFileHandle.writelines(sourceCodeLine)
+        cycleCostValues = [cycles[0] if len(cycles) == 1 else cycles[1],0 if len(cycles) == 1 else cycles[0]]
+        cycleCost = ""
+        for cycle in cycleCostValues:
+            cycleCost += str(cycle)
+            cycleCost += ", "
 
+        cycleCost = cycleCost[:-2] #FK: Remove last ,
+
+        counter += 1
+        sourceCodeLine += "\t{{ \"{mnemonic}\", {bytes}, {{ {cycleCost} }} }}".format(mnemonic=fullMnemonic, bytes=byteCount, cycleCost=cycleCost)
+        
+        if opcodeTableName == "unprefixed":
+            opcodesUnprefixed += sourceCodeLine
+        else:
+            opcodesCBPrefixed += sourceCodeLine
+
+opcodesCSourceFileHandle.writelines(opcodesUnprefixed)
+opcodesCSourceFileHandle.write("};\n\n")
+
+opcodesCSourceFileHandle.writelines(opcodesCBPrefixed)
 opcodesCSourceFileHandle.write("};")
 
