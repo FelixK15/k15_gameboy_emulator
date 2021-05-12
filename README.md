@@ -4,6 +4,8 @@
 This project tries to emulate the Nintendo GameBoy and Nintendo GameBoy Color game system hardware accurately so that games for these game systems can be played on hardware
 that is natively not able to do so.
 
+![image](https://user-images.githubusercontent.com/7531672/118055437-68cb2500-b388-11eb-81a7-e7fa4ba3dee8.png)
+
 ## How do I build this software locally?
 
 Currently the codebase can only be build on a Windows machine with Microsoft Visual Studio installed.
@@ -23,9 +25,9 @@ All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h`
 - [ ] Implement opcodes to get into tetris menu and start a game
 - [ ] Test Tetris
 - [x] Add IMGUI dependency to be able to add debug features
-  - [ ] Add breakpoints
+  - [x] Add breakpoints
   - [x] Add conditional breakpoints
-  - [ ] Add code stepping
+  - [x] Add code stepping
   - [ ] Add memory inspection
   - [ ] Add VRAM viewer
 - [ ] Implement rom-switching
