@@ -24,17 +24,28 @@ typedef const char *(WINAPI * PFNWGLGETEXTENSIONSSTRINGEXTPROC) (void);
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "opengl32.lib")
 
-constexpr uint32_t gbScreenWidth 	= 160;
-constexpr uint32_t gbScreenHeight 	= 144;
-uint32_t screenWidth 				= 1024;
-uint32_t screenHeight 				= 768;
-GLuint gbScreenTexture 				= 0;
+char gameTitle[16] = {0};
+constexpr uint32_t gbScreenWidth 			 = 160;
+constexpr uint32_t gbScreenHeight 			 = 144;
+uint16_t breakpointAddress					 = 0;
+uint32_t frameTimeInMilliseconds			 = 0;
+uint32_t screenWidth 						 = 1920;
+uint32_t screenHeight 						 = 1080;
+GLuint gbScreenTexture 						 = 0;
+bool   showUi								 = true;
+constexpr uint32_t gbFrameTimeInMilliseconds = 16;
+
+float averageFrameTime = 0.0f;
 
 uint8_t* pGameboyVideoBuffer 		= nullptr;
 HANDLE gbThreadHandle 				= INVALID_HANDLE_VALUE;
 HANDLE gbFrameSyncEvent 			= INVALID_HANDLE_VALUE;
 HANDLE gbFrameFinishedEvent 		= INVALID_HANDLE_VALUE;
 HANDLE gbEmulatorResetEvent			= INVALID_HANDLE_VALUE;
+HANDLE gbEmulatorContinueEvent		= INVALID_HANDLE_VALUE;
+HANDLE gbEmulatorPauseEvent			= INVALID_HANDLE_VALUE;
+HANDLE gbEmulatorBreakEvent			= INVALID_HANDLE_VALUE;
+HANDLE gbEmulatorStepEvent			= INVALID_HANDLE_VALUE;
 
 uint8_t directionInput				= 0x0F;
 uint8_t buttonInput					= 0x0F;
@@ -92,6 +103,10 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 					break;
 				case 'S':
 					joypad.b = 1;
+					break;
+
+				case VK_F1:
+					showUi = !showUi;
 					break;
 			}
 		}
@@ -286,6 +301,53 @@ void renderGbFrameBuffer(const uint8_t* pFrameBuffer)
 
 GBEmulatorInstance* pEmulatorInstance = nullptr;
 
+void checkEventsFromMainThread( GBEmulatorInstance* pEmulatorInstance )
+{
+	//FK: This is super inefficient and should be addressed once debugging is
+	//	  properly implemented. A mutex guarded queue should work fine here
+	{
+		const DWORD waitResult = WaitForSingleObject(gbEmulatorResetEvent, 0);
+		if( waitResult == WAIT_OBJECT_0 )
+		{
+			resetEmulatorInstance( pEmulatorInstance );
+		}
+	}
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+	{
+		const DWORD waitResult = WaitForSingleObject(gbEmulatorBreakEvent, 0);
+		if( waitResult == WAIT_OBJECT_0 )
+		{
+			setEmulatorBreakpoint( pEmulatorInstance, breakpointAddress);
+		}
+	}
+
+	{
+		const DWORD waitResult = WaitForSingleObject(gbEmulatorContinueEvent, 0);
+		if( waitResult == WAIT_OBJECT_0 )
+		{
+			continueEmulatorExecution( pEmulatorInstance );
+		}
+	}
+	
+	{
+		const DWORD waitResult = WaitForSingleObject(gbEmulatorPauseEvent, 0);
+		if( waitResult == WAIT_OBJECT_0 )
+		{
+			pauseEmulatorExecution( pEmulatorInstance );
+		}
+	}
+
+	{
+		const DWORD waitResult = WaitForSingleObject(gbEmulatorStepEvent, 0);
+		if( waitResult == WAIT_OBJECT_0 )
+		{
+			runEmulatorForOneInstruction( pEmulatorInstance );
+		}
+	}
+#endif
+}
+
 DWORD WINAPI emulatorThreadEntryPoint(LPVOID pParameter)
 {
 	const size_t emulatorMemorySizeInBytes = calculateEmulatorInstanceMemoryRequirementsInBytes();
@@ -298,34 +360,44 @@ DWORD WINAPI emulatorThreadEntryPoint(LPVOID pParameter)
 
 	uint32_t totalCycleCount = 0;
 
+	LARGE_INTEGER freq;
+	QueryPerformanceFrequency(&freq);
+
+	LARGE_INTEGER start;
+	LARGE_INTEGER end;
+
+	start.QuadPart = 0;
+	end.QuadPart = 0;
+
 	while(true)
 	{
+		checkEventsFromMainThread( pEmulatorInstance );
+
 		const uint8_t cycleCount = runSingleInstruction( pEmulatorInstance );
-		if( cycleCount == 0 )
-		{
-			__debugbreak();
-		}
-
-		const DWORD waitResult = WaitForSingleObject(gbEmulatorResetEvent, 0);
-		if( waitResult == WAIT_OBJECT_0 )
-		{
-			resetEmulatorInstance( pEmulatorInstance );
-			totalCycleCount = 0;
-			continue;
-		}
-
 		totalCycleCount += cycleCount;
 		if( totalCycleCount >= gbCyclerPerFrame )
 		{
 			totalCycleCount -= gbCyclerPerFrame;
-
 			renderGbFrameBuffer( pEmulatorInstance->pPpuState->pGBFrameBuffer );
+
+			QueryPerformanceCounter(&end);
+
+			const uint32_t deltaTimeInMilliSeconds = (uint32_t)(((end.QuadPart-start.QuadPart)*1000)/freq.QuadPart);
+			InterlockedExchange(&frameTimeInMilliseconds, deltaTimeInMilliSeconds);
 
 			//FK: Tell main thread that the GB frame is finished
 			SetEvent(gbFrameFinishedEvent);
 
+			if( deltaTimeInMilliSeconds < gbFrameTimeInMilliseconds )
+			{
+				const uint32_t sleepTimeInMilliSeconds = gbFrameTimeInMilliseconds - deltaTimeInMilliSeconds;
+				Sleep(sleepTimeInMilliSeconds);
+			}
+
 			//FK: Wait for main thread to render latest frame so that frame buffer can be written to
 			WaitForSingleObject(gbFrameSyncEvent, INFINITE);
+			
+			QueryPerformanceCounter(&start);
 		}
 	}
 }
@@ -404,13 +476,25 @@ void setup(HWND hwnd)
 	gbEmulatorResetEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyResetEvent");
 	assert( gbEmulatorResetEvent != INVALID_HANDLE_VALUE );
 
+	gbEmulatorContinueEvent	= CreateEvent(nullptr, FALSE, FALSE, "GameBoyContinueEvent");
+	assert( gbEmulatorContinueEvent != INVALID_HANDLE_VALUE );
+
+	gbEmulatorPauseEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyPauseEvent");
+	assert( gbEmulatorPauseEvent != INVALID_HANDLE_VALUE );
+
+	gbEmulatorBreakEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyBreakEvent");
+	assert( gbEmulatorBreakEvent != INVALID_HANDLE_VALUE );
+
+	gbEmulatorStepEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyStepEvent");
+	assert( gbEmulatorStepEvent != INVALID_HANDLE_VALUE );
+
 	gbThreadHandle = CreateThread( nullptr, 0, emulatorThreadEntryPoint, pRomData, 0, nullptr );
 	assert( gbThreadHandle != INVALID_HANDLE_VALUE );
 	
 	pGameboyVideoBuffer = (uint8_t*)malloc(gbScreenHeight*gbScreenWidth*3);
 
 	const GBRomHeader header = getGBRomHeader(pRomData);
-	SetWindowText(hwnd, (LPCSTR)header.gameTitle);
+	memcpy(gameTitle, header.gameTitle, sizeof(header.gameTitle) );
 
 	glGenTextures(1, &gbScreenTexture);
 
@@ -431,6 +515,10 @@ void setup(HWND hwnd)
 
 void doFrame(HWND hwnd)
 {
+	char windowTitle[64];
+	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %d ms", gameTitle, frameTimeInMilliseconds );
+	SetWindowText(hwnd, (LPCSTR)windowTitle);
+
 	const float pixelUnitH = 1.0f/(float)screenWidth;
 	const float pixelUnitV = 1.0f/(float)screenHeight;
 	const float centerH = pixelUnitH*(0.5f*(float)screenWidth);
@@ -439,7 +527,7 @@ void doFrame(HWND hwnd)
 	const float gbSizeH = pixelUnitH*gbScreenWidth;
 	const float gbSizeV = pixelUnitV*gbScreenHeight;
 
-	const float scale = 4.0f;
+	const float scale = 5.0f;
 
 	const float left  		= -gbSizeH * scale;
 	const float right 		= +gbSizeH * scale;
@@ -469,8 +557,10 @@ void doFrame(HWND hwnd)
 		glVertex2f(left, bottom);
 	glEnd();
 
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 	ImGui::Render();
 	ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
+#endif
 
 	HDC deviceContext = GetDC(hwnd);
 	SwapBuffers(deviceContext);
@@ -479,13 +569,39 @@ void doFrame(HWND hwnd)
 	SetEvent(gbFrameSyncEvent);
 }
 
+void evaluateUiInput( const GBUiData* pUiData )
+{
+	if( pUiData->resetEmulator )
+	{
+		SetEvent( gbEmulatorResetEvent );
+	}
+
+	if( pUiData->continueEmulator )
+	{
+		SetEvent( gbEmulatorContinueEvent );
+	}
+
+	if( pUiData->pauseEmulator )
+	{
+		SetEvent( gbEmulatorPauseEvent );
+	}
+
+	if( pUiData->executeOneInstruction )
+	{
+		SetEvent( gbEmulatorStepEvent );
+	}
+
+	if( pUiData->breakAtProgramCounterAddress )
+	{
+		InterlockedExchange16( (SHORT*)&breakpointAddress, pUiData->breakpointProgramCounterAddress );
+		SetEvent( gbEmulatorBreakEvent );
+	}
+}
+
 int CALLBACK WinMain(HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine, int nShowCmd)
 {
-	LARGE_INTEGER performanceFrequency;
-	QueryPerformanceFrequency(&performanceFrequency);
-
 	allocateDebugConsole();
 
 	HWND hwnd = setupWindow(hInstance, screenWidth, screenHeight);
@@ -528,17 +644,22 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		}
 
 		//FK: UI
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 		{
 			GBUiData uiData = {};
 			ImGui_ImplOpenGL2_NewFrame();
 			ImGui_ImplWin32_NewFrame();
-			doUiFrame(pEmulatorInstance, &uiData);
 
-			if( uiData.resetEmulator )
+		    ImGui::NewFrame();
+			if( showUi )
 			{
-				SetEvent( gbEmulatorResetEvent );
+				doUiFrame(pEmulatorInstance, &uiData);
 			}
+			ImGui::EndFrame();
+
+			evaluateUiInput( &uiData );
 		}
+#endif
 	
 		doFrame(hwnd);
 	}

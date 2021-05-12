@@ -61,6 +61,23 @@ struct GBEmulatorJoypad
     };
 };
 
+struct GBCpuFlags
+{
+    union
+    {
+        struct
+        {
+            uint8_t NOP : 4;
+            uint8_t C   : 1;
+            uint8_t H   : 1;
+            uint8_t N   : 1;
+            uint8_t Z   : 1;
+        };
+
+        uint8_t value;
+    };
+};
+
 struct GBCpuState
 {
     uint8_t* pIE;
@@ -73,20 +90,8 @@ struct GBCpuState
         {
             struct
             {
-                union
-                {
-                    struct 
-                    {
-                        uint8_t NOP : 4;
-                        uint8_t C   : 1;
-                        uint8_t H   : 1;
-                        uint8_t N   : 1;
-                        uint8_t Z   : 1;
-                    };
-                    
-                    uint8_t value;
-                } F;
-                uint8_t A;
+                GBCpuFlags  F;
+                uint8_t     A;
             };
 
             uint16_t AF;
@@ -306,7 +311,16 @@ struct GBEmulatorDebugSettings
     uint8_t enableBreakAtMemoryWriteToAddress   : 1;
 };
 
-struct GBEmulatorDebug
+struct GBEmulatorGBDebug
+{
+    uint8_t pauseExecution          : 1;
+    uint8_t runForOneInstruction    : 1;
+    uint8_t pauseAtBreakpoint       : 1;
+
+    uint16_t breakpointAddress;
+};
+
+struct GBEmulatorHostDebug
 {
     GBEmulatorDebugSettings     settings;
     uint16_t                    breakAtProgramCounter;
@@ -325,7 +339,8 @@ struct GBEmulatorInstance
     GBEmulatorJoypad    joypad;
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    GBEmulatorDebug     debug;
+    GBEmulatorHostDebug     hostDebug;
+    GBEmulatorGBDebug       gbDebug;
 #endif
 };
 
@@ -990,6 +1005,29 @@ void resetEmulatorInstance(GBEmulatorInstance* pEmulatorInstance)
     pEmulatorInstance->joypad.dpadButtonMask    = 0;
 }
 
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES
+void setEmulatorBreakpoint(GBEmulatorInstance* pEmulatorInstance, uint16_t breakpointAddress)
+{
+    pEmulatorInstance->gbDebug.pauseAtBreakpoint = 1;
+    pEmulatorInstance->gbDebug.breakpointAddress = breakpointAddress;
+}
+
+void continueEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
+{
+    pEmulatorInstance->gbDebug.pauseExecution = 0;
+}
+
+void pauseEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
+{
+    pEmulatorInstance->gbDebug.pauseExecution = 1;
+}
+
+void runEmulatorForOneInstruction( GBEmulatorInstance* pEmulatorInstance )
+{
+    pEmulatorInstance->gbDebug.runForOneInstruction = 1;
+}
+#endif
+
 GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 {
     GBEmulatorInstance* pEmulatorInstance = (GBEmulatorInstance*)pEmulatorInstanceMemory;
@@ -1004,14 +1042,19 @@ GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     initPpuFrameBuffer( pEmulatorInstance->pPpuState, pFramebufferMemory );
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-    pEmulatorInstance->debug.settings.enableBreakAtProgramCounter           = 0;
-    pEmulatorInstance->debug.settings.enableBreakAtOpcode                   = 0;
-    pEmulatorInstance->debug.settings.enableBreakAtMemoryReadFromAddress    = 0;
-    pEmulatorInstance->debug.settings.enableBreakAtMemoryWriteToAddress     = 0;
-    pEmulatorInstance->debug.breakAtProgramCounter                          = 0x0000;
-    pEmulatorInstance->debug.breakAtMemoryReadFromAddress                   = 0x0000;
-    pEmulatorInstance->debug.breakAtMemoryWriteToAddress                    = 0x0000;
-    pEmulatorInstance->debug.breakAtOpcode                                  = 0x00;
+    pEmulatorInstance->hostDebug.settings.enableBreakAtProgramCounter           = 0;
+    pEmulatorInstance->hostDebug.settings.enableBreakAtOpcode                   = 0;
+    pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryReadFromAddress    = 0;
+    pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryWriteToAddress     = 0;
+    pEmulatorInstance->hostDebug.breakAtProgramCounter                          = 0x0000;
+    pEmulatorInstance->hostDebug.breakAtMemoryReadFromAddress                   = 0x0000;
+    pEmulatorInstance->hostDebug.breakAtMemoryWriteToAddress                    = 0x0000;
+    pEmulatorInstance->hostDebug.breakAtOpcode                                  = 0x00;
+
+    pEmulatorInstance->gbDebug.breakpointAddress    = 0x0000;
+    pEmulatorInstance->gbDebug.pauseAtBreakpoint    = 0;
+    pEmulatorInstance->gbDebug.pauseExecution       = 0;
+    pEmulatorInstance->gbDebug.runForOneInstruction = 0;
 #endif
 
     resetEmulatorInstance(pEmulatorInstance);
@@ -2876,6 +2919,126 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
+        //ADC
+        case 0x88:
+        case 0x89:
+        case 0x8A:
+        case 0x8B:
+        case 0x8C:
+        case 0x8D:
+        case 0x8E:
+        case 0x8F:
+        {
+            uint8_t value = 0;
+            switch(opcode)
+            {
+                //ADC B
+                case 0x88:
+                    value = pCpuState->registers.B;
+                    break;
+                //ADC C
+                case 0x89:
+                    value = pCpuState->registers.B;
+                    break;
+                //ADC D
+                case 0x8A:
+                    value = pCpuState->registers.B;
+                    break;
+                //ADC E
+                case 0x8B:
+                    value = pCpuState->registers.B;
+                    break;
+                //ADC H
+                case 0x8C:
+                    value = pCpuState->registers.B;
+                    break;
+                //ADC L
+                case 0x8D:
+                    value = pCpuState->registers.B;
+                    break;
+                //ADC (HL)
+                case 0x8E:
+                    value = read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.HL );
+                    break;
+                //ADC A
+                case 0x8F:
+                    value = pCpuState->registers.A;
+                    break;
+            }
+
+            pCpuState->registers.A = pCpuState->registers.A + pCpuState->registers.F.C + value;
+            
+            const x86Flags flags = readCpuFlagsX86();
+            pCpuState->registers.F.Z = flags.zero;
+            pCpuState->registers.F.C = flags.carry;
+            pCpuState->registers.F.H = flags.adjust;
+            pCpuState->registers.F.N = 0;
+            break;
+        }
+
+        //SBC
+        case 0x98:
+        case 0x99:
+        case 0x9A:
+        case 0x9B:
+        case 0x9C:
+        case 0x9D:
+        case 0x9E:
+        case 0x9F:
+        {
+            uint8_t value = 0;
+            switch(opcode)
+            {
+                //SBC B
+                case 0x98:
+                    value = pCpuState->registers.B;
+                    break;
+                //SBC C
+                case 0x99:
+                    value = pCpuState->registers.B;
+                    break;
+                //SBC D
+                case 0x9A:
+                    value = pCpuState->registers.B;
+                    break;
+                //SBC E
+                case 0x9B:
+                    value = pCpuState->registers.B;
+                    break;
+                //SBC H
+                case 0x9C:
+                    value = pCpuState->registers.B;
+                    break;
+                //SBC L
+                case 0x9D:
+                    value = pCpuState->registers.B;
+                    break;
+                //SBC (HL)
+                case 0x9E:
+                    value = read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.HL );
+                    break;
+                //SBC A
+                case 0x9F:
+                    value = pCpuState->registers.A;
+                    break;
+            }
+
+            pCpuState->registers.A = pCpuState->registers.A - pCpuState->registers.F.C - value;
+            
+            const x86Flags flags = readCpuFlagsX86();
+            pCpuState->registers.F.Z = flags.zero;
+            pCpuState->registers.F.C = flags.carry;
+            pCpuState->registers.F.H = flags.adjust;
+            pCpuState->registers.F.N = 1;
+            break;
+        }
+
+        //DAA
+        case 0x27:
+        {
+            break;
+        }
+
         //RLCA
         case 0x07:
         //RLA
@@ -3024,31 +3187,31 @@ void handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypad joypad )
 }
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-uint8_t checkDebugBreakCondition( GBEmulatorInstance* pEmulatorInstance )
+uint8_t checkHostCpuDebugBreakCondition( GBEmulatorInstance* pEmulatorInstance )
 {
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
 
-    if( pEmulatorInstance->debug.settings.enableBreakAtProgramCounter &&
-        pEmulatorInstance->debug.breakAtProgramCounter == pCpuState->lastOpcodeAddress )
+    if( pEmulatorInstance->hostDebug.settings.enableBreakAtProgramCounter &&
+        pEmulatorInstance->hostDebug.breakAtProgramCounter == pCpuState->lastOpcodeAddress )
     {
         return 1;
     }
 
-    if( pEmulatorInstance->debug.settings.enableBreakAtOpcode &&
-        pEmulatorInstance->debug.breakAtOpcode == pCpuState->lastOpcode )
+    if( pEmulatorInstance->hostDebug.settings.enableBreakAtOpcode &&
+        pEmulatorInstance->hostDebug.breakAtOpcode == pCpuState->lastOpcode )
     {
         return 1;
     }
 
-    if( pEmulatorInstance->debug.settings.enableBreakAtMemoryReadFromAddress &&
-        pEmulatorInstance->debug.breakAtMemoryReadFromAddress == pMemoryMapper->lastAddressReadFrom )
+    if( pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryReadFromAddress &&
+        pEmulatorInstance->hostDebug.breakAtMemoryReadFromAddress == pMemoryMapper->lastAddressReadFrom )
     {
         return 1;   
     }
 
-    if( pEmulatorInstance->debug.settings.enableBreakAtMemoryWriteToAddress &&
-        pEmulatorInstance->debug.breakAtMemoryWriteToAddress == pMemoryMapper->lastAddressWrittenTo )
+    if( pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryWriteToAddress &&
+        pEmulatorInstance->hostDebug.breakAtMemoryWriteToAddress == pMemoryMapper->lastAddressWrittenTo )
     {
         return 1;   
     }
@@ -3062,10 +3225,35 @@ void setJoypad( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypad joypad )
     pEmulatorInstance->joypad = joypad;
 }
 
+bool shouldExecuteNextInstruction( GBEmulatorInstance* pEmulatorInstance )
+{
+    bool executeNextInstruction = true;
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+    executeNextInstruction = !pEmulatorInstance->gbDebug.pauseExecution;
+    if( pEmulatorInstance->gbDebug.pauseAtBreakpoint )
+    {
+        executeNextInstruction = pEmulatorInstance->pCpuState->programCounter != pEmulatorInstance->gbDebug.breakpointAddress;
+    }
+
+    if( pEmulatorInstance->gbDebug.runForOneInstruction )
+    {
+        executeNextInstruction = true;
+    }
+#endif
+
+    return executeNextInstruction;
+}
+
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
+
+    if( !shouldExecuteNextInstruction( pEmulatorInstance ) )
+    {
+        return 0;
+    }
 
     triggerPendingInterrupts( pCpuState, pMemoryMapper );
 
@@ -3081,7 +3269,8 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     pCpuState->lastOpcode        = opcode;
     
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    if( checkDebugBreakCondition( pEmulatorInstance ) )
+    //FK: For when an opcode implementation needs to be double checked
+    if( checkHostCpuDebugBreakCondition( pEmulatorInstance ) )
     {
         debugBreak();
     }
@@ -3091,6 +3280,13 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     checkDMAState( pCpuState, pMemoryMapper, cycleCost ); 
     handleInput( pMemoryMapper, pEmulatorInstance->joypad );
     tickPPU( pCpuState, pEmulatorInstance->pPpuState, cycleCost );
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+    if( pEmulatorInstance->gbDebug.runForOneInstruction )
+    {
+        pEmulatorInstance->gbDebug.runForOneInstruction = 0;
+    }
+#endif
 
     return cycleCost;
 }

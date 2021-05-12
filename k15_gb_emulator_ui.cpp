@@ -1,18 +1,34 @@
+constexpr ImGuiInputTextFlags hexTextInputFlags = ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase;
+
 static struct GBDebugViewState
 {
-    char memoryReadAddressHexInput[5]   = { '0', '0', '0', '0', 0 };
-    char memoryWriteAddressHexInput[5]  = { '0', '0', '0', '0', 0 };
-    char programCounterHexInput[5]      = { '0', '0', '0', '0', 0 };
-    char opcodeHexInput[3]              = { '0', '0', 0 };
-    bool enableBreakAtProgramCounter    = false;
-    bool enableBreakAtOpcode            = false;
-    bool enableBreakAtMemoryWrite       = false;
-    bool enableBreakAtMemoryRead        = false;
+    struct
+    {
+        char memoryReadAddressHexInput[5]   = { '0', '0', '0', '0', 0 };
+        char memoryWriteAddressHexInput[5]  = { '0', '0', '0', '0', 0 };
+        char programCounterHexInput[5]      = { '0', '0', '0', '0', 0 };
+        char opcodeHexInput[3]              = { '0', '0', 0 };
+        bool enableBreakAtProgramCounter    = false;
+        bool enableBreakAtOpcode            = false;
+        bool enableBreakAtMemoryWrite       = false;
+        bool enableBreakAtMemoryRead        = false;
+    } hostCpu;
+
+    struct
+    {
+        char programCounterHexInput[5]      = { '0', '0', '0', '0', 0 };
+    } gbCpu;
+    
 } debugViewState;
 
 struct GBUiData
 {
-    uint8_t resetEmulator : 1;
+    uint8_t resetEmulator                   : 1;
+    uint8_t pauseEmulator                   : 1;
+    uint8_t continueEmulator                : 1;
+    uint8_t executeOneInstruction           : 1;
+    uint8_t breakAtProgramCounterAddress    : 1;
+    uint16_t breakpointProgramCounterAddress;
 };
 
 uint8_t parseStringToHexNibble( const char hexChar )
@@ -20,23 +36,12 @@ uint8_t parseStringToHexNibble( const char hexChar )
     switch( hexChar )
     {
         case 'A':
-            return 0xA;
-            break;
         case 'B':
-            return 0xB;
-            break;
         case 'C':
-            return 0xC;
-            break;
         case 'D':
-            return 0xD;
-            break;
         case 'E':
-            return 0xE;
-            break;
         case 'F':
-            return 0xF;
-            break;
+            return 0xA + hexChar - 'A';
     }
 
     return (hexChar - 0x30);
@@ -66,93 +71,370 @@ uint16_t parseStringToHex16Bit( const char* pString )
     return value;
 }
 
-void doDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
+void doHostCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
 {
-    constexpr ImGuiInputTextFlags hexTextInputFlags = ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase;
-    ImGui::Begin("Debug View");
-    ImGui::SetWindowSize(ImVec2(600.0f, 300.0f));
-        const bool resetEmulator = ImGui::Button("Reset emulator");
-        ImGui::Checkbox( "Enable break at program counter", &debugViewState.enableBreakAtProgramCounter );
-        ImGui::Checkbox( "Enable break at specific opcode", &debugViewState.enableBreakAtOpcode );
-        ImGui::Checkbox( "Enable break at memory write to address", &debugViewState.enableBreakAtMemoryWrite );
-        ImGui::Checkbox( "Enable break at memory read from address", &debugViewState.enableBreakAtMemoryRead );
-        const bool breakAtProgramCounterSet = ImGui::InputText( "Break at program counter (hex)", debugViewState.programCounterHexInput, sizeof( debugViewState.programCounterHexInput ), hexTextInputFlags );
-        const bool breakAtOpcodeSet         = ImGui::InputText( "Break at specific opcode (hex)", debugViewState.opcodeHexInput, sizeof( debugViewState.opcodeHexInput ), hexTextInputFlags );
-        const bool breakAtMemoryWriteSet    = ImGui::InputText( "Break at memory write to address (hex)", debugViewState.memoryWriteAddressHexInput, sizeof( debugViewState.memoryWriteAddressHexInput ), hexTextInputFlags );
-        const bool breakAtMemoryReadSet     = ImGui::InputText( "Break at memory read from address (hex)", debugViewState.memoryReadAddressHexInput, sizeof( debugViewState.memoryReadAddressHexInput ), hexTextInputFlags );
-    ImGui::End();
-
-    if( resetEmulator )
+    if(!ImGui::Begin("Host CPU Debug View"))
     {
-        pUiData->resetEmulator = 1;
+        ImGui::End();
+        return;
     }
 
+    ImGui::Text("Enable breaking the Host CPU to verify opcode integration");
+    ImGui::Separator();
+    ImGui::Checkbox( "Enable break at program counter", &debugViewState.hostCpu.enableBreakAtProgramCounter );
+    ImGui::Checkbox( "Enable break at specific opcode", &debugViewState.hostCpu.enableBreakAtOpcode );
+    ImGui::Checkbox( "Enable break at memory write to address", &debugViewState.hostCpu.enableBreakAtMemoryWrite );
+    ImGui::Checkbox( "Enable break at memory read from address", &debugViewState.hostCpu.enableBreakAtMemoryRead );
+    const bool breakAtProgramCounterSet = ImGui::InputText( "Break at program counter (hex)", debugViewState.hostCpu.programCounterHexInput, sizeof( debugViewState.hostCpu.programCounterHexInput ), hexTextInputFlags );
+    const bool breakAtOpcodeSet         = ImGui::InputText( "Break at specific opcode (hex)", debugViewState.hostCpu.opcodeHexInput, sizeof( debugViewState.hostCpu.opcodeHexInput ), hexTextInputFlags );
+    const bool breakAtMemoryWriteSet    = ImGui::InputText( "Break at memory write to address (hex)", debugViewState.hostCpu.memoryWriteAddressHexInput, sizeof( debugViewState.hostCpu.memoryWriteAddressHexInput ), hexTextInputFlags );
+    const bool breakAtMemoryReadSet     = ImGui::InputText( "Break at memory read from address (hex)", debugViewState.hostCpu.memoryReadAddressHexInput, sizeof( debugViewState.hostCpu.memoryReadAddressHexInput ), hexTextInputFlags );
+    
+    ImGui::End();
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
     if( breakAtProgramCounterSet )
     {
-        pEmulatorInstance->debug.breakAtProgramCounter = parseStringToHex16Bit( debugViewState.programCounterHexInput );
+        pEmulatorInstance->hostDebug.breakAtProgramCounter = parseStringToHex16Bit( debugViewState.hostCpu.programCounterHexInput );
     }
 
     if( breakAtOpcodeSet )
     {
-        pEmulatorInstance->debug.breakAtOpcode = parseStringToHex8Bit( debugViewState.opcodeHexInput );
+        pEmulatorInstance->hostDebug.breakAtOpcode = parseStringToHex8Bit( debugViewState.hostCpu.opcodeHexInput );
     }
 
     if( breakAtMemoryWriteSet )
     {
-        pEmulatorInstance->debug.breakAtMemoryWriteToAddress = parseStringToHex16Bit( debugViewState.memoryWriteAddressHexInput );
+        pEmulatorInstance->hostDebug.breakAtMemoryWriteToAddress = parseStringToHex16Bit( debugViewState.hostCpu.memoryWriteAddressHexInput );
     }
 
     if( breakAtMemoryReadSet )
     {
-        pEmulatorInstance->debug.breakAtMemoryReadFromAddress = parseStringToHex16Bit( debugViewState.memoryReadAddressHexInput );
+        pEmulatorInstance->hostDebug.breakAtMemoryReadFromAddress = parseStringToHex16Bit( debugViewState.hostCpu.memoryReadAddressHexInput );
     }
 
-    pEmulatorInstance->debug.settings.enableBreakAtProgramCounter           = debugViewState.enableBreakAtProgramCounter;
-    pEmulatorInstance->debug.settings.enableBreakAtOpcode                   = debugViewState.enableBreakAtOpcode;
-    pEmulatorInstance->debug.settings.enableBreakAtMemoryReadFromAddress    = debugViewState.enableBreakAtMemoryRead;
-    pEmulatorInstance->debug.settings.enableBreakAtMemoryWriteToAddress     = debugViewState.enableBreakAtMemoryWrite;
+    pEmulatorInstance->hostDebug.settings.enableBreakAtProgramCounter           = debugViewState.hostCpu.enableBreakAtProgramCounter;
+    pEmulatorInstance->hostDebug.settings.enableBreakAtOpcode                   = debugViewState.hostCpu.enableBreakAtOpcode;
+    pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryReadFromAddress    = debugViewState.hostCpu.enableBreakAtMemoryRead;
+    pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryWriteToAddress     = debugViewState.hostCpu.enableBreakAtMemoryWrite;
+#endif
 }
 
-void doMemoryView(GBEmulatorInstance* pEmulatorInstance)
+void doGbCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
 {
-    #if 0
+    if( !ImGui::Begin( "GB Cpu Debug View" ) )
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("Enable breaking the GB CPU");
+    ImGui::Separator();
+
+    if( ImGui::Button("Reset emulator") )
+    {
+        pUiData->resetEmulator = 1;
+    }
+
+    if( ImGui::Button("Pause execution") )
+    {
+        pUiData->pauseEmulator = 1;
+    }
+
+    if( ImGui::Button("continue execution") )
+    {
+        pUiData->continueEmulator = 1;
+    }
+
+    if( ImGui::Button("execute next instruction") )
+    {
+        pUiData->executeOneInstruction = 1;
+    }
+
+    if( ImGui::Button("break at program counter address") )
+    {
+        pUiData->breakAtProgramCounterAddress    = 1;
+        pUiData->breakpointProgramCounterAddress = parseStringToHex16Bit( debugViewState.gbCpu.programCounterHexInput )  ;   
+    }
+
+    ImGui::InputText( "Break at program counter (hex)", debugViewState.gbCpu.programCounterHexInput, sizeof( debugViewState.gbCpu.programCounterHexInput ), hexTextInputFlags );
+
+#if 0
+    //FK: TODO
+    ImGui::Text("Keybindings");
+    ImGui::Text("F5         - Continue execution");
+    ImGui::Text("SHIFT + F5 - Restart emulation (break on first instruction)");
+    ImGui::Text("F10        - Step into");
+    ImGui::Separator();
+#endif
+
+    ImGui::End();
+}
+
+void doCpuStateView(GBEmulatorInstance* pEmulatorInstance)
+{
+    if( !ImGui::Begin( "Cpu State View" ) )
+    {
+        ImGui::End();
+        return;
+    }
+
+    if( !ImGui::BeginTable("Register Table", 2, ImGuiTableFlags_BordersV ) )
+    {
+        ImGui::EndTable();
+        return;
+    }
+
+    const GBCpuState* pCpuState = pEmulatorInstance->pCpuState;
+    
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+
+    ImGui::Text("AF");                                  ImGui::TableNextColumn();
+    ImGui::Text("$%04hx", pCpuState->registers.AF);      ImGui::TableNextColumn();
+    ImGui::TableNextRow();  
+    ImGui::TableNextColumn();
+    
+    ImGui::Text("BC");                                  ImGui::TableNextColumn();
+    ImGui::Text("$%04hx", pCpuState->registers.BC);      ImGui::TableNextColumn();
+    ImGui::TableNextRow();  
+    ImGui::TableNextColumn();
+
+    ImGui::Text("DE");                                  ImGui::TableNextColumn();
+    ImGui::Text("$%04hx", pCpuState->registers.DE);      ImGui::TableNextColumn();
+    ImGui::TableNextRow();  
+    ImGui::TableNextColumn();
+
+    ImGui::Text("HL");                                  ImGui::TableNextColumn();
+    ImGui::Text("$%04hx", pCpuState->registers.HL);      ImGui::TableNextColumn();
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+
+    ImGui::Text("SP");                                  ImGui::TableNextColumn();
+    ImGui::Text("$%04hx", pCpuState->registers.SP);      ImGui::TableNextColumn();
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+
+    ImGui::Text("PC");                                  ImGui::TableNextColumn();
+    ImGui::Text("$%04hx", pCpuState->programCounter);    ImGui::TableNextColumn();
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+
+    ImGui::EndTable();
+
+    ImGui::Separator();
+
+    ImGui::Text("CPU Flags");
+    ImGui::RadioButton("Z", pCpuState->registers.F.Z);
+    ImGui::SameLine();
+    ImGui::RadioButton("C", pCpuState->registers.F.C);
+    
+    ImGui::RadioButton("H", pCpuState->registers.F.H);
+    ImGui::SameLine();
+    ImGui::RadioButton("N", pCpuState->registers.F.N);
+
+    ImGui::End();
+}
+
+void doPpuStateView(GBEmulatorInstance* pEmulatorInstance)
+{
+    if( !ImGui::Begin( "Ppu State View" ) )
+    {
+        ImGui::End();
+        return;
+    }
+
+    const GBPpuState* pPpuState = pEmulatorInstance->pPpuState;
+
+    if( ImGui::BeginTable("LCD Status Register Table", 2, ImGuiTableFlags_BordersV ) )
+    {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+
+        ImGui::Text("Mode");                                                                ImGui::TableNextColumn();
+        ImGui::Text("%d", pPpuState->lcdRegisters.pStatus->mode );                          ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+        
+        ImGui::Text("lyc flag");                                                            ImGui::TableNextColumn();
+        ImGui::Text("%d", pPpuState->lcdRegisters.pStatus->LycEqLyFlag);                    ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("LCD Stat HBlank Interrupt");                                           ImGui::TableNextColumn();
+        ImGui::Text("%d", pPpuState->lcdRegisters.pStatus->enableMode0HBlankInterrupt);     ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("LCD Stat VBlank Interrupt");                                           ImGui::TableNextColumn();
+        ImGui::Text("%d", pPpuState->lcdRegisters.pStatus->enableMode1VBlankInterrupt);     ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("LCD Stat OAM Interrupt");                                              ImGui::TableNextColumn();
+        ImGui::Text("%d", pPpuState->lcdRegisters.pStatus->enableMode2OAMInterrupt);        ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("LCD lyc==ly");                                                         ImGui::TableNextColumn();
+        ImGui::Text("%d", pPpuState->lcdRegisters.pStatus->enableLycEqLyInterrupt);         ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+    }
+
+    ImGui::EndTable();
+    ImGui::Separator();
+
+    if( ImGui::BeginTable("LCD Register Table", 2, ImGuiTableFlags_BordersV ) )
+    {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+
+        ImGui::Text("SCY");                                     ImGui::TableNextColumn();
+        ImGui::Text("$%02hx", *pPpuState->lcdRegisters.pScy);    ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("SCX");                                     ImGui::TableNextColumn();
+        ImGui::Text("$%02hx", *pPpuState->lcdRegisters.pScx);    ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("LY");                                     ImGui::TableNextColumn();
+        ImGui::Text("$%02hx", *pPpuState->lcdRegisters.pLy);    ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("LYC");                                     ImGui::TableNextColumn();
+        ImGui::Text("$%02hx", *pPpuState->lcdRegisters.pLyc);    ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("WY");                                     ImGui::TableNextColumn();
+        ImGui::Text("$%02hx", *pPpuState->lcdRegisters.pWy);    ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+
+        ImGui::Text("WX");                                     ImGui::TableNextColumn();
+        ImGui::Text("$%02hx", *pPpuState->lcdRegisters.pWx);    ImGui::TableNextColumn();
+        ImGui::TableNextRow();  
+        ImGui::TableNextColumn();
+    }
+
+    ImGui::EndTable();
+    ImGui::End();
+}
+
+void doInstructionView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
+{
+    static size_t opcodeCount = 0;
     const uint8_t* pBytes = pEmulatorInstance->pMemoryMapper->pBaseAddress;
 
-    ImGui::Begin("Memory View" );
-    while( ( pBytes - pEmulatorInstance->pMemoryMapper->pBaseAddress ) < 0x10000)
+    if( !ImGui::Begin( "Instruction View" ) )
     {
-        const uint16_t address = (uint16_t)( pBytes - pEmulatorInstance->pMemoryMapper->pBaseAddress );
-        ImGui::Text("%.4hx: ", address);
-
-        const GBOpcode* pOpcode = opcodeDisassembly + *pBytes;
-
-        ImGui::SameLine();
-        ImGui::Text("%.2hx", *pBytes++);
-
-        for( size_t opcodeArgs = 1; opcodeArgs < pOpcode->arguments; ++opcodeArgs )
-        {
-            ImGui::SameLine();
-            ImGui::Text(" %.2hx", *pBytes++);
-        }
-
-        ImGui::SameLine();
-        ImGui::Text(pOpcode->pMnemonic);
+        ImGui::End();
+        return;
     }
+
+    if( !ImGui::BeginTable("Opcode Table", 6, ImGuiTableFlags_BordersH ) )
+    {
+        ImGui::EndTable();
+        return;
+    }
+
+    ImGui::TableSetupColumn("Executed",     ImGuiTableColumnFlags_WidthFixed, 8.0f);
+    ImGui::TableSetupColumn("Breakpoint",   ImGuiTableColumnFlags_WidthFixed, 8.0f);
+    ImGui::TableSetupColumn("Address",      ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn("Opcode",       ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("Bytes",        ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("Cycle Count",  ImGuiTableColumnFlags_WidthFixed, 40.0f);
+
+    GBCpuState* pCpuState = pEmulatorInstance->pCpuState;
+
+    ImGuiListClipper clipper;
+    clipper.Begin( opcodeCount == 0 ? 0xFFFF : opcodeCount );
+
+    while( clipper.Step() )
+    {
+        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+        {
+            const uint8_t opcode = pBytes[row];
+            const GBOpcode* pOpcode = opcode == 0xCB ? cbPrefixedOpcodes + opcode : unprefixedOpcodes + opcode;
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+
+            if( row == pCpuState->programCounter )
+            {
+                ImGui::Text(">");
+            }
+            ImGui::TableNextColumn();
+
+#if 0
+//FK: TODO
+            if( debugViewState.breakpointSet )
+            {
+                if( debugViewState.breakpointAddress == row )
+                {
+                    ImGui::Text("x");
+                }
+            }
+#endif
+            ImGui::TableNextColumn();
+
+            ImGui::Text("$%04hx", row);
+            ImGui::TableNextColumn();
+
+            ImGui::Text(pOpcode->pMnemonic);
+            ImGui::TableNextColumn();
+
+            for( size_t byteIndex = 0; byteIndex < pOpcode->byteCount; ++byteIndex )
+            {
+                ImGui::Text("$%02hhx", pBytes[row + byteIndex]);
+                ImGui::SameLine();
+            }
+            ImGui::TableNextColumn();
+
+            if( pOpcode->cycleCosts[1] == 0)
+            {
+                ImGui::Text("%d", pOpcode->cycleCosts[0]);
+            }
+            else
+            {
+                ImGui::Text("%d/%d", pOpcode->cycleCosts[0], pOpcode->cycleCosts[1]);
+            }
+            ImGui::TableNextColumn();
+        }
+    }
+    ImGui::EndTable();
     ImGui::End();
-    #endif
+}
+
+void doInstructionView()
+{
+    if( !ImGui::Begin("Emulator UX Instruction") )
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::SetWindowFontScale(1.2f);
+    ImGui::Text("Toggle overlay UI with F1");
+    ImGui::Separator();
+    ImGui::Text("K15 GameBoy Emulator by FelixK15");
+    ImGui::Text("This program tries to emulate the hardware of a Nintendo GameBoy/Nintendo GameBoy Color.");
+    ImGui::Text("Current state of the project can be seen over at https://github.com/FelixK15/k15_gameboy_emulator");
+
+    ImGui::End();
 }
 
 void doUiFrame( GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData )
 {
-#if 1
-    ImGui::NewFrame();
-	doDebugView(pEmulatorInstance, pUiData);
-	ImGui::EndFrame();
-#else
-    //FK: WIP
-	ImGui::NewFrame();
-	doMemoryView(pEmulatorInstance);
-	ImGui::EndFrame();
-#endif
-
+    //ImGui::ShowDemoWindow();
+	doHostCpuDebugView(pEmulatorInstance, pUiData);
+    doGbCpuDebugView(pEmulatorInstance, pUiData);
+    doInstructionView(pEmulatorInstance, pUiData);
+    doCpuStateView(pEmulatorInstance);
+    doPpuStateView(pEmulatorInstance);
+    doInstructionView();
 }
