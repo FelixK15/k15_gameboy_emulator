@@ -362,15 +362,15 @@ void doInstructionView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
 
     while( clipper.Step() )
     {
-        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+        for (int byteIndex = clipper.DisplayStart; byteIndex < clipper.DisplayEnd; )
         {
-            const uint8_t opcode = pBytes[row];
+            const uint8_t opcode = pBytes[byteIndex];
             const GBOpcode* pOpcode = opcode == 0xCB ? cbPrefixedOpcodes + opcode : unprefixedOpcodes + opcode;
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
 
-            if( row == pCpuState->programCounter )
+            if( byteIndex == pCpuState->programCounter )
             {
                 ImGui::Text(">");
             }
@@ -388,15 +388,15 @@ void doInstructionView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
 #endif
             ImGui::TableNextColumn();
 
-            ImGui::Text("$%04hx", row);
+            ImGui::Text("$%04hx", byteIndex);
             ImGui::TableNextColumn();
 
             ImGui::Text(pOpcode->pMnemonic);
             ImGui::TableNextColumn();
 
-            for( size_t byteIndex = 0; byteIndex < pOpcode->byteCount; ++byteIndex )
+            for( size_t opcodeByteIndex = 0; opcodeByteIndex < pOpcode->byteCount; ++opcodeByteIndex )
             {
-                ImGui::Text("$%02hhx", pBytes[row + byteIndex]);
+                ImGui::Text("$%02hhx", pBytes[byteIndex++]);
                 ImGui::SameLine();
             }
             ImGui::TableNextColumn();
