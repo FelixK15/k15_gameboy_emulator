@@ -3295,6 +3295,11 @@ void runEmulator( GBEmulatorInstance* pInstance, uint8_t* pVBlank )
 {
 	static uint32_t totalCycleCount = 0;
 
+    if( pInstance->gbDebug.pauseAtBreakpoint && pInstance->gbDebug.breakpointAddress == pInstance->pCpuState->programCounter )
+    {
+        pInstance->gbDebug.pauseExecution = 1;
+    }
+
 	if( pInstance->gbDebug.runForOneInstruction )
 	{
 		const uint8_t cycleCount = runSingleInstruction( pInstance );
@@ -3311,14 +3316,10 @@ void runEmulator( GBEmulatorInstance* pInstance, uint8_t* pVBlank )
 	}
     else
     {
-        uint8_t runFrame = pInstance->gbDebug.runSingleFrame;
-        if( !runFrame )
-        {
-            runFrame = !pInstance->gbDebug.pauseExecution && !pInstance->gbDebug.pauseAtBreakpoint;
-        }
-
+        const uint8_t runFrame = pInstance->gbDebug.runSingleFrame || !pInstance->gbDebug.pauseExecution;
         if( runFrame )
         {
+            
             while( totalCycleCount < gbCyclesPerFrame )
 		    {
 		    	const uint8_t cycleCount = runSingleInstruction( pInstance );

@@ -453,7 +453,7 @@ void evaluateUiInput( const GBUiData* pUiData )
 
 	if( pUiData->breakAtProgramCounterAddress )
 	{
-		setEmulatorBreakpoint( pEmulatorInstance, breakpointAddress);
+		setEmulatorBreakpoint( pEmulatorInstance, pUiData->breakpointProgramCounterAddress );
 	}
 #endif
 }

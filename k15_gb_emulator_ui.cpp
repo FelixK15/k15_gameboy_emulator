@@ -131,6 +131,16 @@ void doGbCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
 
     ImGui::Text("Enable breaking the GB CPU");
     ImGui::Separator();
+    ImGui::Text("GB CPU currently ");
+    ImGui::SameLine();
+    if( pEmulatorInstance->gbDebug.pauseExecution )
+    {
+        ImGui::TextColored(ImVec4(0.7f, 0.0f, 0.2f, 1.0f), "halted");
+    }
+    else
+    {
+        ImGui::TextColored(ImVec4(0.01f, 0.7f, 0.1f, 1.0f), "running");
+    }
 
     if( ImGui::Button("Reset emulator") )
     {
@@ -157,13 +167,14 @@ void doGbCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
         pUiData->runSingleFrame = 1;
     }
 
-    if( ImGui::Button("break at program counter address") )
+    static bool breakAtPCAddress = false;
+    if( ImGui::Checkbox("break at program counter address", &breakAtPCAddress) )
     {
-        pUiData->breakAtProgramCounterAddress    = 1;
+        pUiData->breakAtProgramCounterAddress    = breakAtPCAddress;
         pUiData->breakpointProgramCounterAddress = parseStringToHex16Bit( debugViewState.gbCpu.programCounterHexInput )  ;   
     }
-
-    ImGui::InputText( "Break at program counter (hex)", debugViewState.gbCpu.programCounterHexInput, sizeof( debugViewState.gbCpu.programCounterHexInput ), hexTextInputFlags );
+    ImGui::SameLine();
+    ImGui::InputText( "", debugViewState.gbCpu.programCounterHexInput, sizeof( debugViewState.gbCpu.programCounterHexInput ), hexTextInputFlags );
 
 #if 0
     //FK: TODO
