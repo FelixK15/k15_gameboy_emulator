@@ -15,7 +15,7 @@ the project and output a `k15_win32_gb_emulator.exe`
 ## How do I navigate the codebase?
 
 The win32 entry point and interface is located in the `k15_win32_gb_emulator.cpp` file.
-All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h` with the main entry point being `runSingleInstruction()`.
+All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h` with the main entry point being `runEmulator()`.
 
 ## Current State and Goals
 
