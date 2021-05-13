@@ -15,40 +15,26 @@
 #include "k15_gb_emulator.h"
 #include "k15_gb_emulator_ui.cpp"
 
-typedef BOOL (WINAPI * PFNWGLSWAPINTERVALEXTPROC) (int interval);
-typedef int (WINAPI * PFNWGLGETSWAPINTERVALEXTPROC) (void);
-typedef const char *(WINAPI * PFNWGLGETEXTENSIONSSTRINGEXTPROC) (void);
-
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "opengl32.lib")
 
 char gameTitle[16] = {0};
-constexpr uint32_t gbScreenWidth 			 = 160;
-constexpr uint32_t gbScreenHeight 			 = 144;
-uint16_t breakpointAddress					 = 0;
-uint32_t frameTimeInMilliseconds			 = 0;
-uint32_t screenWidth 						 = 1920;
-uint32_t screenHeight 						 = 1080;
-GLuint gbScreenTexture 						 = 0;
-bool   showUi								 = true;
-constexpr uint32_t gbFrameTimeInMilliseconds = 16;
+constexpr uint32_t gbScreenWidth 			 	= 160;
+constexpr uint32_t gbScreenHeight 			 	= 144;
+constexpr uint32_t gbFrameTimeInMilliseconds 	= 16;
+uint16_t breakpointAddress					 	= 0;
+uint32_t screenWidth 						 	= 1920;
+uint32_t screenHeight 						 	= 1080;
+GLuint gbScreenTexture 						 	= 0;
+bool   showUi								 	= true;
+uint32_t deltaTimeInMilliSeconds 				= 0u;
 
-float averageFrameTime = 0.0f;
+uint8_t* pGameboyVideoBuffer 					= nullptr;
 
-uint8_t* pGameboyVideoBuffer 		= nullptr;
-HANDLE gbThreadHandle 				= INVALID_HANDLE_VALUE;
-HANDLE gbFrameSyncEvent 			= INVALID_HANDLE_VALUE;
-HANDLE gbFrameFinishedEvent 		= INVALID_HANDLE_VALUE;
-HANDLE gbEmulatorResetEvent			= INVALID_HANDLE_VALUE;
-HANDLE gbEmulatorContinueEvent		= INVALID_HANDLE_VALUE;
-HANDLE gbEmulatorPauseEvent			= INVALID_HANDLE_VALUE;
-HANDLE gbEmulatorBreakEvent			= INVALID_HANDLE_VALUE;
-HANDLE gbEmulatorStepEvent			= INVALID_HANDLE_VALUE;
-
-uint8_t directionInput				= 0x0F;
-uint8_t buttonInput					= 0x0F;
+uint8_t directionInput							= 0x0F;
+uint8_t buttonInput								= 0x0F;
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
 
@@ -269,8 +255,6 @@ void renderGbFrameBuffer(const uint8_t* pFrameBuffer)
 	int x = 0;
 	int y = 0;
 
-	#if 1
-
 	for( size_t y = 0; y < gbVerticalResolutionInPixels; ++y )
 	{
 		for( size_t x = 0; x < gbHorizontalResolutionInPixels; x += 4 )
@@ -295,112 +279,9 @@ void renderGbFrameBuffer(const uint8_t* pFrameBuffer)
 			}
 		}
 	}
-
-	#endif
 }
 
 GBEmulatorInstance* pEmulatorInstance = nullptr;
-
-void checkEventsFromMainThread( GBEmulatorInstance* pEmulatorInstance )
-{
-	//FK: This is super inefficient and should be addressed once debugging is
-	//	  properly implemented. A mutex guarded queue should work fine here
-	{
-		const DWORD waitResult = WaitForSingleObject(gbEmulatorResetEvent, 0);
-		if( waitResult == WAIT_OBJECT_0 )
-		{
-			resetEmulatorInstance( pEmulatorInstance );
-		}
-	}
-
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-	{
-		const DWORD waitResult = WaitForSingleObject(gbEmulatorBreakEvent, 0);
-		if( waitResult == WAIT_OBJECT_0 )
-		{
-			setEmulatorBreakpoint( pEmulatorInstance, breakpointAddress);
-		}
-	}
-
-	{
-		const DWORD waitResult = WaitForSingleObject(gbEmulatorContinueEvent, 0);
-		if( waitResult == WAIT_OBJECT_0 )
-		{
-			continueEmulatorExecution( pEmulatorInstance );
-		}
-	}
-	
-	{
-		const DWORD waitResult = WaitForSingleObject(gbEmulatorPauseEvent, 0);
-		if( waitResult == WAIT_OBJECT_0 )
-		{
-			pauseEmulatorExecution( pEmulatorInstance );
-		}
-	}
-
-	{
-		const DWORD waitResult = WaitForSingleObject(gbEmulatorStepEvent, 0);
-		if( waitResult == WAIT_OBJECT_0 )
-		{
-			runEmulatorForOneInstruction( pEmulatorInstance );
-		}
-	}
-#endif
-}
-
-DWORD WINAPI emulatorThreadEntryPoint(LPVOID pParameter)
-{
-	const size_t emulatorMemorySizeInBytes = calculateEmulatorInstanceMemoryRequirementsInBytes();
-
-	uint8_t* pRomData = (uint8_t*)pParameter;
-	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
-	pEmulatorInstance = createEmulatorInstance(pEmulatorInstanceMemory);
-
-	loadRom( pEmulatorInstance, pRomData );
-
-	uint32_t totalCycleCount = 0;
-
-	LARGE_INTEGER freq;
-	QueryPerformanceFrequency(&freq);
-
-	LARGE_INTEGER start;
-	LARGE_INTEGER end;
-
-	start.QuadPart = 0;
-	end.QuadPart = 0;
-
-	while(true)
-	{
-		checkEventsFromMainThread( pEmulatorInstance );
-
-		const uint8_t cycleCount = runSingleInstruction( pEmulatorInstance );
-		totalCycleCount += cycleCount;
-		if( totalCycleCount >= gbCyclerPerFrame )
-		{
-			totalCycleCount -= gbCyclerPerFrame;
-			renderGbFrameBuffer( pEmulatorInstance->pPpuState->pGBFrameBuffer );
-
-			QueryPerformanceCounter(&end);
-
-			const uint32_t deltaTimeInMilliSeconds = (uint32_t)(((end.QuadPart-start.QuadPart)*1000)/freq.QuadPart);
-			InterlockedExchange(&frameTimeInMilliseconds, deltaTimeInMilliSeconds);
-
-			//FK: Tell main thread that the GB frame is finished
-			SetEvent(gbFrameFinishedEvent);
-
-			if( deltaTimeInMilliSeconds < gbFrameTimeInMilliseconds )
-			{
-				const uint32_t sleepTimeInMilliSeconds = gbFrameTimeInMilliseconds - deltaTimeInMilliSeconds;
-				Sleep(sleepTimeInMilliSeconds);
-			}
-
-			//FK: Wait for main thread to render latest frame so that frame buffer can be written to
-			WaitForSingleObject(gbFrameSyncEvent, INFINITE);
-			
-			QueryPerformanceCounter(&start);
-		}
-	}
-}
 
 void setup(HWND hwnd)
 {	
@@ -433,15 +314,6 @@ void setup(HWND hwnd)
 
 	wglMakeCurrent(mainDC, glContext);
 	
-	//FK: it is assumed that these extension are always available
-	PFNWGLSWAPINTERVALEXTPROC       wglSwapIntervalEXT = (PFNWGLSWAPINTERVALEXTPROC) wglGetProcAddress("wglSwapIntervalEXT");;
-	PFNWGLGETSWAPINTERVALEXTPROC    wglGetSwapIntervalEXT = (PFNWGLGETSWAPINTERVALEXTPROC) wglGetProcAddress("wglGetSwapIntervalEXT");;
-	assert(wglSwapIntervalEXT != nullptr);
-	assert(wglGetSwapIntervalEXT != nullptr);
-
-	//FK: Enable vsync
-	wglSwapIntervalEXT(1);
-
 	//set default gl state
 	glShadeModel(GL_SMOOTH);
 
@@ -465,32 +337,13 @@ void setup(HWND hwnd)
 		return;
 	}
 
+	const size_t emulatorMemorySizeInBytes = calculateEmulatorInstanceMemoryRequirementsInBytes();
+
+	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
+	pEmulatorInstance = createEmulatorInstance(pEmulatorInstanceMemory);
+
 	uint8_t* pRomData = (uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
 
-	gbFrameFinishedEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyFrameFinishedEvent");
-	assert( gbFrameFinishedEvent != INVALID_HANDLE_VALUE );
-
-	gbFrameSyncEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyFrameSyncEvent");
-	assert( gbFrameSyncEvent != INVALID_HANDLE_VALUE );
-
-	gbEmulatorResetEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyResetEvent");
-	assert( gbEmulatorResetEvent != INVALID_HANDLE_VALUE );
-
-	gbEmulatorContinueEvent	= CreateEvent(nullptr, FALSE, FALSE, "GameBoyContinueEvent");
-	assert( gbEmulatorContinueEvent != INVALID_HANDLE_VALUE );
-
-	gbEmulatorPauseEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyPauseEvent");
-	assert( gbEmulatorPauseEvent != INVALID_HANDLE_VALUE );
-
-	gbEmulatorBreakEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyBreakEvent");
-	assert( gbEmulatorBreakEvent != INVALID_HANDLE_VALUE );
-
-	gbEmulatorStepEvent = CreateEvent(nullptr, FALSE, FALSE, "GameBoyStepEvent");
-	assert( gbEmulatorStepEvent != INVALID_HANDLE_VALUE );
-
-	gbThreadHandle = CreateThread( nullptr, 0, emulatorThreadEntryPoint, pRomData, 0, nullptr );
-	assert( gbThreadHandle != INVALID_HANDLE_VALUE );
-	
 	pGameboyVideoBuffer = (uint8_t*)malloc(gbScreenHeight*gbScreenWidth*3);
 
 	const GBRomHeader header = getGBRomHeader(pRomData);
@@ -511,12 +364,14 @@ void setup(HWND hwnd)
 
 	ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplOpenGL2_Init();
+
+	loadRom( pEmulatorInstance, pRomData );
 }
 
 void doFrame(HWND hwnd)
 {
 	char windowTitle[64];
-	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %d ms", gameTitle, frameTimeInMilliseconds );
+	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %d ms", gameTitle, deltaTimeInMilliSeconds );
 	SetWindowText(hwnd, (LPCSTR)windowTitle);
 
 	const float pixelUnitH = 1.0f/(float)screenWidth;
@@ -566,36 +421,41 @@ void doFrame(HWND hwnd)
 	SwapBuffers(deviceContext);
 
 	glClear(GL_COLOR_BUFFER_BIT);
-	SetEvent(gbFrameSyncEvent);
 }
 
 void evaluateUiInput( const GBUiData* pUiData )
 {
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 	if( pUiData->resetEmulator )
 	{
-		SetEvent( gbEmulatorResetEvent );
+		resetEmulatorInstance(pEmulatorInstance);
 	}
 
 	if( pUiData->continueEmulator )
 	{
-		SetEvent( gbEmulatorContinueEvent );
+		continueEmulatorExecution( pEmulatorInstance );
 	}
 
 	if( pUiData->pauseEmulator )
 	{
-		SetEvent( gbEmulatorPauseEvent );
+		pauseEmulatorExecution( pEmulatorInstance );
 	}
 
 	if( pUiData->executeOneInstruction )
 	{
-		SetEvent( gbEmulatorStepEvent );
+		runEmulatorForOneInstruction( pEmulatorInstance );
+	}
+
+	if( pUiData->runSingleFrame )
+	{
+		runEmulatorForOneFrame( pEmulatorInstance );
 	}
 
 	if( pUiData->breakAtProgramCounterAddress )
 	{
-		InterlockedExchange16( (SHORT*)&breakpointAddress, pUiData->breakpointProgramCounterAddress );
-		SetEvent( gbEmulatorBreakEvent );
+		setEmulatorBreakpoint( pEmulatorInstance, breakpointAddress);
 	}
+#endif
 }
 
 int CALLBACK WinMain(HINSTANCE hInstance,
@@ -616,6 +476,15 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	uint8_t loopRunning = true;
 	MSG msg = {0};
 
+	LARGE_INTEGER freq;
+	QueryPerformanceFrequency(&freq);
+
+	LARGE_INTEGER start;
+	LARGE_INTEGER end;
+
+	start.QuadPart = 0;
+	end.QuadPart = 0;
+
 	while (loopRunning)
 	{
 		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE) > 0)
@@ -635,10 +504,14 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			break;
 		}
 
+		QueryPerformanceCounter(&start);
 
-		const DWORD waitResult = WaitForSingleObject(gbFrameFinishedEvent, 0);
-		if( waitResult == WAIT_OBJECT_0 )
+		uint8_t vblank = 0;
+		runEmulator( pEmulatorInstance, &vblank );
+
+		if( vblank )
 		{
+			renderGbFrameBuffer( pEmulatorInstance->pPpuState->pGBFrameBuffer );
 			//FK: GB frame finished, upload gb framebuffer to texture
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 		}
@@ -662,6 +535,15 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 #endif
 	
 		doFrame(hwnd);
+
+		QueryPerformanceCounter(&end);
+		deltaTimeInMilliSeconds = (uint32_t)(((end.QuadPart-start.QuadPart)*1000)/freq.QuadPart);
+
+		if( deltaTimeInMilliSeconds < gbFrameTimeInMilliseconds )
+		{
+			const uint32_t sleepTimeInMilliSeconds = gbFrameTimeInMilliseconds - deltaTimeInMilliSeconds;
+			Sleep(sleepTimeInMilliSeconds);
+		}
 	}
 
 	DestroyWindow(hwnd);

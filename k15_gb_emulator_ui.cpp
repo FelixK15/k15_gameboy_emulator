@@ -27,6 +27,7 @@ struct GBUiData
     uint8_t pauseEmulator                   : 1;
     uint8_t continueEmulator                : 1;
     uint8_t executeOneInstruction           : 1;
+    uint8_t runSingleFrame                  : 1;
     uint8_t breakAtProgramCounterAddress    : 1;
     uint16_t breakpointProgramCounterAddress;
 };
@@ -149,6 +150,11 @@ void doGbCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
     if( ImGui::Button("execute next instruction") )
     {
         pUiData->executeOneInstruction = 1;
+    }
+
+    if( ImGui::Button("execute single frame") )
+    {
+        pUiData->runSingleFrame = 1;
     }
 
     if( ImGui::Button("break at program counter address") )

@@ -20,7 +20,7 @@
 #   define debugBreak
 #endif
 
-static constexpr uint32_t   gbCyclerPerFrame                   = 70224u;
+static constexpr uint32_t   gbCyclesPerFrame                   = 70224u;
 static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                    = 160u;
 static constexpr uint8_t    gbTileResolution                   = 8u;  //FK: Tiles are 8x8 pixels
@@ -315,6 +315,7 @@ struct GBEmulatorGBDebug
 {
     uint8_t pauseExecution          : 1;
     uint8_t runForOneInstruction    : 1;
+    uint8_t runSingleFrame          : 1;
     uint8_t pauseAtBreakpoint       : 1;
 
     uint16_t breakpointAddress;
@@ -734,6 +735,14 @@ struct GBEmulatorInstance
 #   define generateGbPixelsForTileLine     generateGbPixelsForTileLineSoftware
 #endif
 
+//FK: Quick and dirty debugging
+void dumpBinData( const char* pFileName, void* pData, size_t sizeInBytes )
+{
+    FILE* pFileHandle = fopen(pFileName, "wb");
+    fwrite(pData, 1, sizeInBytes, pFileHandle);
+    fclose(pFileHandle);
+}
+
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
     pMemoryMapper->lastAddressReadFrom = addressOffset;
@@ -1026,6 +1035,11 @@ void runEmulatorForOneInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->gbDebug.runForOneInstruction = 1;
 }
+
+void runEmulatorForOneFrame( GBEmulatorInstance* pEmulatorInstance )
+{
+    pEmulatorInstance->gbDebug.runSingleFrame = 1;
+}
 #endif
 
 GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
@@ -1055,6 +1069,7 @@ GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     pEmulatorInstance->gbDebug.pauseAtBreakpoint    = 0;
     pEmulatorInstance->gbDebug.pauseExecution       = 0;
     pEmulatorInstance->gbDebug.runForOneInstruction = 0;
+    pEmulatorInstance->gbDebug.runSingleFrame       = 0;
 #endif
 
     resetEmulatorInstance(pEmulatorInstance);
@@ -1210,7 +1225,7 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
     //FK: Get the y offset inside the tile row to where the scanline currently is.
     const uint8_t tileRowYOffset    = scanlineYCoordinate - tileRowStartYPos;
     
-    uint32_t scanlinePixelData[10] = {0};
+    uint32_t scanlinePixelData[10] = {};
     //FK: Determine tile addressing mode
     if( pPpuState->pLcdControl->bgAndWindowTileDataArea )
     {
@@ -1228,12 +1243,33 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
             const uint8_t pixelShift = 16 - ( ( tileIdIndex % 2 ) << 4 );
             const uint8_t pixelDataIndex = tileIdIndex >> 1;
             scanlinePixelData[pixelDataIndex] |= tileScanlinePixels << pixelShift;
+
+//FK: Debug code for release only bug
+#if 0
+            static uint8_t tries = 20;
+            if( tileIdIndex == 1)
+            {
+                //printf("scanline: %d\n", scanlineYCoordinate);
+                if( scanlineYCoordinate == 9 && --tries == 0 )
+                {
+                    static uint8_t print = 1;
+                    if( print )
+                    {
+                        printf("tileIndex: %d\n", tileIndex);
+                        printf("pixelShift: %d\n", pixelShift);
+                        printf("pixelDataIndex: %d\n", pixelDataIndex);
+                        printf("tileScanlinePixels: %d\n", tileScanlinePixels);
+                        print = 0;
+                    }
+                }
+            }
+#endif
         }
     }
     else
     {
-        #if 0
-        //FK: 0x8080 addressing mode
+#if 0
+        //FK: TODO: 0x8080 addressing mode 
         for( uint8_t scanlineTileIndex = 0; scanlineTileIndex < horizontalTileCount; ++scanlineTileIndex )
         {
             const int8_t tileIndex      = (int8_t)pScanlineTileIndices[scanlineTileIndex];
@@ -1243,7 +1279,7 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
             pushPixelsFromTileData(pScanline, *pTileData);
             pScanline += 2;
         }
-        #endif
+#endif
     }
 
     interleaveGbPixelBytes(pScanline, scanlinePixelData);
@@ -1274,64 +1310,63 @@ void triggerInterrupt( GBCpuState* pCpuState, uint8_t interruptFlag )
 void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
 {
     GBLcdStatus* pLcdStatus = pPpuState->lcdRegisters.pStatus;
-    uint8_t ly = *pPpuState->lcdRegisters.pLy;
-    uint8_t lcdMode = pLcdStatus->mode;
-    const uint8_t lyc = *pPpuState->lcdRegisters.pLyc;
+    uint8_t* pLy   = pPpuState->lcdRegisters.pLy;
+    uint8_t* pLyc  = pPpuState->lcdRegisters.pLyc;
 
     uint8_t triggerLCDStatInterrupt = 0;
 
     pPpuState->dotCounter += cycleCount;
 
-    if( lcdMode == 2 && pPpuState->dotCounter >= 80 )
+    if( pLcdStatus->mode == 2 && pPpuState->dotCounter >= 80 )
     {
         pPpuState->dotCounter -= 80;
 
-        lcdMode = 3;
-        pushScanline( pPpuState, ly );
+        pLcdStatus->mode = 3;
+        pushScanline( pPpuState, *pLy );
     }
-    else if( lcdMode == 3 && pPpuState->dotCounter >= 172 )
+    else if( pLcdStatus->mode == 3 && pPpuState->dotCounter >= 172 )
     {
         pPpuState->dotCounter -= 172;
 
-        lcdMode = 0;
+        pLcdStatus->mode = 0;
         triggerLCDStatInterrupt = pLcdStatus->enableMode0HBlankInterrupt;
     }
-    else if( lcdMode == 0 && pPpuState->dotCounter >= 204 )
+    else if( pLcdStatus->mode == 0 && pPpuState->dotCounter >= 204 )
     {
         pPpuState->dotCounter -= 204;
-        ++ly;
+        ++*pLy;
 
-        if( ly == 144 )
+        if( *pLy == 144 )
         {
-            lcdMode = 1;
+            pLcdStatus->mode = 1;
             triggerLCDStatInterrupt = pLcdStatus->enableMode1VBlankInterrupt;
             triggerInterrupt( pCpuState, VBlankInterrupt );
         }
         else
         {
-            lcdMode = 2;
+            pLcdStatus->mode = 2;
         }
     }
-    else if( lcdMode == 1 )
+    else if( pLcdStatus->mode == 1 )
     {
         if (pPpuState->dotCounter >= 456 )
         {
             pPpuState->dotCounter -= 456;
-            ++ly;
-            if( ly == 154 )
+            ++*pLy;
+            if( *pLy == 154 )
             {
-                ly = 0;
-                lcdMode = 2;
+                *pLy = 0;
+                pLcdStatus->mode = 2;
                 triggerLCDStatInterrupt = pLcdStatus->enableMode2OAMInterrupt;
             }
         }
     }
 
-    if( *pPpuState->lcdRegisters.pLy != ly )
+    if( *pPpuState->lcdRegisters.pLy != *pLy )
     {
         if( pLcdStatus->enableLycEqLyInterrupt )
         {
-            if( pLcdStatus->LycEqLyFlag == 1 && ly == lyc )
+            if( pLcdStatus->LycEqLyFlag == 1 && *pLy == *pLyc )
             {
                 triggerLCDStatInterrupt = 1;
             }
@@ -1350,9 +1385,6 @@ void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleC
     {
         triggerInterrupt( pCpuState, LCDStatInterrupt );
     }
-
-    *pPpuState->lcdRegisters.pLy    = ly;
-    pLcdStatus->mode                = lcdMode;
 }
 
 void push16BitValueToStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint16_t value )
@@ -3225,35 +3257,10 @@ void setJoypad( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypad joypad )
     pEmulatorInstance->joypad = joypad;
 }
 
-bool shouldExecuteNextInstruction( GBEmulatorInstance* pEmulatorInstance )
-{
-    bool executeNextInstruction = true;
-
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    executeNextInstruction = !pEmulatorInstance->gbDebug.pauseExecution;
-    if( pEmulatorInstance->gbDebug.pauseAtBreakpoint )
-    {
-        executeNextInstruction = pEmulatorInstance->pCpuState->programCounter != pEmulatorInstance->gbDebug.breakpointAddress;
-    }
-
-    if( pEmulatorInstance->gbDebug.runForOneInstruction )
-    {
-        executeNextInstruction = true;
-    }
-#endif
-
-    return executeNextInstruction;
-}
-
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
-
-    if( !shouldExecuteNextInstruction( pEmulatorInstance ) )
-    {
-        return 0;
-    }
 
     triggerPendingInterrupts( pCpuState, pMemoryMapper );
 
@@ -3281,12 +3288,50 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     handleInput( pMemoryMapper, pEmulatorInstance->joypad );
     tickPPU( pCpuState, pEmulatorInstance->pPpuState, cycleCost );
 
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    if( pEmulatorInstance->gbDebug.runForOneInstruction )
-    {
-        pEmulatorInstance->gbDebug.runForOneInstruction = 0;
-    }
-#endif
-
     return cycleCost;
+}
+
+void runEmulator( GBEmulatorInstance* pInstance, uint8_t* pVBlank )
+{
+	static uint32_t totalCycleCount = 0;
+
+	if( pInstance->gbDebug.runForOneInstruction )
+	{
+		const uint8_t cycleCount = runSingleInstruction( pInstance );
+		totalCycleCount += cycleCount;
+		
+		if( totalCycleCount >= gbCyclesPerFrame )
+		{
+			*pVBlank = 1;
+			totalCycleCount -= gbCyclesPerFrame;
+		}
+
+		totalCycleCount = totalCycleCount + cycleCount % gbCyclesPerFrame;
+        pInstance->gbDebug.runForOneInstruction = 0;
+	}
+    else
+    {
+        uint8_t runFrame = pInstance->gbDebug.runSingleFrame;
+        if( !runFrame )
+        {
+            runFrame = !pInstance->gbDebug.pauseExecution && !pInstance->gbDebug.pauseAtBreakpoint;
+        }
+
+        if( runFrame )
+        {
+            while( totalCycleCount < gbCyclesPerFrame )
+		    {
+		    	const uint8_t cycleCount = runSingleInstruction( pInstance );
+		    	totalCycleCount += cycleCount;
+		    }
+
+		    *pVBlank = 1;
+		    totalCycleCount -= gbCyclesPerFrame;
+
+            if( pInstance->gbDebug.runSingleFrame )
+            {
+                pInstance->gbDebug.runSingleFrame = 0;
+            }
+        }
+    }
 }
