@@ -1,7 +1,6 @@
 #include "stdint.h"
 #include "stdio.h"
 
-#define K15_PRINT_DISASSEMBLY                   0   //FK: Enabling this slows the emulation way down because of all the printf calls -> get better IMGUI solution
 #define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
 
@@ -311,24 +310,23 @@ struct GBEmulatorDebugSettings
     uint8_t enableBreakAtMemoryWriteToAddress   : 1;
 };
 
-struct GBEmulatorGBDebug
+struct GBOpcodeHistoryElement
 {
-    uint8_t pauseExecution          : 1;
-    uint8_t continueExecution       : 1;
-    uint8_t runForOneInstruction    : 1;
-    uint8_t runSingleFrame          : 1;
-    uint8_t pauseAtBreakpoint       : 1;
-
-    uint16_t breakpointAddress;
+    uint8_t         opcode;
+    uint16_t        address;
 };
 
-struct GBEmulatorHostDebug
+struct GBEmulatorGBDebug
 {
-    GBEmulatorDebugSettings     settings;
-    uint16_t                    breakAtProgramCounter;
-    uint16_t                    breakAtMemoryReadFromAddress;
-    uint16_t                    breakAtMemoryWriteToAddress;
-    uint8_t                     breakAtOpcode;
+    uint8_t                     pauseExecution          : 1;
+    uint8_t                     continueExecution       : 1;
+    uint8_t                     runForOneInstruction    : 1;
+    uint8_t                     runSingleFrame          : 1;
+    uint8_t                     pauseAtBreakpoint       : 1;
+
+    uint16_t                    breakpointAddress;
+    uint8_t                     opcodeHistorySize;
+    GBOpcodeHistoryElement      opcodeHistory[0xFF];
 };
 #endif
 
@@ -354,7 +352,6 @@ struct GBEmulatorInstance
     GBEmulatorJoypad        joypad;
     GBEmulatorInstanceFlags flags;
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    GBEmulatorHostDebug     hostDebug;
     GBEmulatorGBDebug       gbDebug;
 #endif
 };
@@ -881,8 +878,6 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->pIE = pMemoryMapper->pBaseAddress + 0xFFFF;
     pState->pIF = pMemoryMapper->pBaseAddress + 0xFF0F;
 
-    pState->lastOpcodeAddress = 0x0000;
-    pState->lastOpcode = 0;
     pState->dmaCycleCount = 0;
 
     pState->flags.dma   = 0;
@@ -1070,21 +1065,14 @@ GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     initPpuFrameBuffer( pEmulatorInstance->pPpuState, pFramebufferMemory );
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-    pEmulatorInstance->hostDebug.settings.enableBreakAtProgramCounter           = 0;
-    pEmulatorInstance->hostDebug.settings.enableBreakAtOpcode                   = 0;
-    pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryReadFromAddress    = 0;
-    pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryWriteToAddress     = 0;
-    pEmulatorInstance->hostDebug.breakAtProgramCounter                          = 0x0000;
-    pEmulatorInstance->hostDebug.breakAtMemoryReadFromAddress                   = 0x0000;
-    pEmulatorInstance->hostDebug.breakAtMemoryWriteToAddress                    = 0x0000;
-    pEmulatorInstance->hostDebug.breakAtOpcode                                  = 0x00;
-
     pEmulatorInstance->gbDebug.breakpointAddress    = 0x0000;
     pEmulatorInstance->gbDebug.pauseAtBreakpoint    = 0;
     pEmulatorInstance->gbDebug.pauseExecution       = 0;
     pEmulatorInstance->gbDebug.runForOneInstruction = 0;
     pEmulatorInstance->gbDebug.runSingleFrame       = 0;
     pEmulatorInstance->gbDebug.continueExecution    = 0;
+    pEmulatorInstance->gbDebug.opcodeHistorySize    = 0;
+    memset( pEmulatorInstance->gbDebug.opcodeHistory, 0, sizeof( pEmulatorInstance->gbDebug.opcodeHistory ) );
 #endif
 
     resetEmulatorInstance(pEmulatorInstance);
@@ -1451,20 +1439,6 @@ void triggerPendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
     }
 }
 
-void printOpcodeDisassembly(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode)
-{
-    uint16_t programCounter = pCpuState->programCounter - 1;
-    const GBOpcode* pOpcode =  ( opcode == 0xCB ) ? cbPrefixedOpcodes + opcode : unprefixedOpcodes + opcode;
-
-    printf("0x%.4hX: ", programCounter);
-    for( uint8_t byteIndex = 0u; byteIndex < pOpcode->byteCount; ++byteIndex )
-    {
-        printf( "0x%.2hhX ", read8BitValueFromAddress(pMemoryMapper, programCounter++) );
-    }
-
-    printf(" - %s\n", pOpcode->pMnemonic);
-} 
-
 void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode)
 {
     uint8_t* pTarget = nullptr;
@@ -1609,10 +1583,6 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 {
     uint8_t opcodeCondition = 0;
     const GBOpcode* pOpcode = opcode == 0xCB ? cbPrefixedOpcodes + opcode : unprefixedOpcodes + opcode;
-
-#if K15_PRINT_DISASSEMBLY == 1
-    printOpcodeDisassembly( pCpuState, pMemoryMapper, opcode );
-#endif
 
     switch( opcode )
     {
@@ -3233,40 +3203,6 @@ void handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypad joypad )
     }
 }
 
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-uint8_t checkHostCpuDebugBreakCondition( GBEmulatorInstance* pEmulatorInstance )
-{
-    GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
-    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
-
-    if( pEmulatorInstance->hostDebug.settings.enableBreakAtProgramCounter &&
-        pEmulatorInstance->hostDebug.breakAtProgramCounter == pCpuState->lastOpcodeAddress )
-    {
-        return 1;
-    }
-
-    if( pEmulatorInstance->hostDebug.settings.enableBreakAtOpcode &&
-        pEmulatorInstance->hostDebug.breakAtOpcode == pCpuState->lastOpcode )
-    {
-        return 1;
-    }
-
-    if( pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryReadFromAddress &&
-        pEmulatorInstance->hostDebug.breakAtMemoryReadFromAddress == pMemoryMapper->lastAddressReadFrom )
-    {
-        return 1;   
-    }
-
-    if( pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryWriteToAddress &&
-        pEmulatorInstance->hostDebug.breakAtMemoryWriteToAddress == pMemoryMapper->lastAddressWrittenTo )
-    {
-        return 1;   
-    }
-
-    return 0;
-}
-#endif
-
 void setJoypad( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypad joypad )
 {
     pEmulatorInstance->joypad = joypad;
@@ -3286,16 +3222,20 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
     const uint16_t opcodeAddress = pCpuState->programCounter++;
     const uint8_t opcode         = read8BitValueFromAddress( pMemoryMapper, opcodeAddress );
-        
-    pCpuState->lastOpcodeAddress = opcodeAddress;
-    pCpuState->lastOpcode        = opcode;
     
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    //FK: For when an opcode implementation needs to be double checked
-    if( checkHostCpuDebugBreakCondition( pEmulatorInstance ) )
+    uint8_t opcodeHistoryIndex = pEmulatorInstance->gbDebug.opcodeHistorySize;
+    if( opcodeHistoryIndex == 0xFF )
     {
-        debugBreak();
+        opcodeHistoryIndex = 0xFE;
+        memcpy(pEmulatorInstance->gbDebug.opcodeHistory, pEmulatorInstance->gbDebug.opcodeHistory + 1, sizeof(GBOpcodeHistoryElement) * 0xFE);
     }
+
+    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].address = opcodeAddress;
+    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].opcode = opcode;
+    ++opcodeHistoryIndex;
+
+    pEmulatorInstance->gbDebug.opcodeHistorySize = opcodeHistoryIndex;
 #endif
 
     const uint8_t cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );

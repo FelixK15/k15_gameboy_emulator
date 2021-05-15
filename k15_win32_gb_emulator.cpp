@@ -13,7 +13,10 @@
 #include "imgui/imgui_impl_opengl2.cpp"
 
 #include "k15_gb_emulator.h"
-#include "k15_gb_emulator_ui.cpp"
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+#	include "k15_gb_emulator_ui.cpp"
+#endif
 
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")

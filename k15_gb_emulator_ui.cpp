@@ -61,55 +61,6 @@ uint16_t parseStringToHex16Bit( const char* pString )
     return value;
 }
 
-void doHostCpuDebugView( GBEmulatorInstance* pEmulatorInstance )
-{
-    if(!ImGui::Begin("Host CPU Debug View"))
-    {
-        ImGui::End();
-        return;
-    }
-
-    ImGui::Text("Enable breaking the Host CPU to verify opcode integration");
-    ImGui::Separator();
-    ImGui::Checkbox( "Enable break at program counter", &debugViewState.hostCpu.enableBreakAtProgramCounter );
-    ImGui::Checkbox( "Enable break at specific opcode", &debugViewState.hostCpu.enableBreakAtOpcode );
-    ImGui::Checkbox( "Enable break at memory write to address", &debugViewState.hostCpu.enableBreakAtMemoryWrite );
-    ImGui::Checkbox( "Enable break at memory read from address", &debugViewState.hostCpu.enableBreakAtMemoryRead );
-    const bool breakAtProgramCounterSet = ImGui::InputText( "Break at program counter (hex)", debugViewState.hostCpu.programCounterHexInput, sizeof( debugViewState.hostCpu.programCounterHexInput ), hexTextInputFlags );
-    const bool breakAtOpcodeSet         = ImGui::InputText( "Break at specific opcode (hex)", debugViewState.hostCpu.opcodeHexInput, sizeof( debugViewState.hostCpu.opcodeHexInput ), hexTextInputFlags );
-    const bool breakAtMemoryWriteSet    = ImGui::InputText( "Break at memory write to address (hex)", debugViewState.hostCpu.memoryWriteAddressHexInput, sizeof( debugViewState.hostCpu.memoryWriteAddressHexInput ), hexTextInputFlags );
-    const bool breakAtMemoryReadSet     = ImGui::InputText( "Break at memory read from address (hex)", debugViewState.hostCpu.memoryReadAddressHexInput, sizeof( debugViewState.hostCpu.memoryReadAddressHexInput ), hexTextInputFlags );
-    
-    ImGui::End();
-
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    if( breakAtProgramCounterSet )
-    {
-        pEmulatorInstance->hostDebug.breakAtProgramCounter = parseStringToHex16Bit( debugViewState.hostCpu.programCounterHexInput );
-    }
-
-    if( breakAtOpcodeSet )
-    {
-        pEmulatorInstance->hostDebug.breakAtOpcode = parseStringToHex8Bit( debugViewState.hostCpu.opcodeHexInput );
-    }
-
-    if( breakAtMemoryWriteSet )
-    {
-        pEmulatorInstance->hostDebug.breakAtMemoryWriteToAddress = parseStringToHex16Bit( debugViewState.hostCpu.memoryWriteAddressHexInput );
-    }
-
-    if( breakAtMemoryReadSet )
-    {
-        pEmulatorInstance->hostDebug.breakAtMemoryReadFromAddress = parseStringToHex16Bit( debugViewState.hostCpu.memoryReadAddressHexInput );
-    }
-
-    pEmulatorInstance->hostDebug.settings.enableBreakAtProgramCounter           = debugViewState.hostCpu.enableBreakAtProgramCounter;
-    pEmulatorInstance->hostDebug.settings.enableBreakAtOpcode                   = debugViewState.hostCpu.enableBreakAtOpcode;
-    pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryReadFromAddress    = debugViewState.hostCpu.enableBreakAtMemoryRead;
-    pEmulatorInstance->hostDebug.settings.enableBreakAtMemoryWriteToAddress     = debugViewState.hostCpu.enableBreakAtMemoryWrite;
-#endif
-}
-
 void doGbCpuDebugView( GBEmulatorInstance* pEmulatorInstance )
 {
     if( !ImGui::Begin( "GB Cpu Debug View" ) )
@@ -342,6 +293,8 @@ void doInstructionView( GBEmulatorInstance* pEmulatorInstance )
         return;
     }
 
+    
+
     if( !ImGui::BeginTable("Opcode Table", 6, ImGuiTableFlags_BordersH ) )
     {
         ImGui::EndTable();
@@ -416,6 +369,67 @@ void doInstructionView( GBEmulatorInstance* pEmulatorInstance )
     ImGui::End();
 }
 
+void doInstructionHistoryView( GBEmulatorInstance* pEmulatorInstance )
+{
+    if( !ImGui::Begin("Instruction History View") )
+    {
+        ImGui::End();
+        return;
+    }
+
+    if( !ImGui::BeginTable("Opcode Table", 4, ImGuiTableFlags_BordersH ) )
+    {
+        ImGui::EndTable();
+        return;
+    }
+
+    ImGui::TableSetupColumn("Address",      ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn("Opcode",       ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("Bytes",        ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("Cycle Count",  ImGuiTableColumnFlags_WidthFixed, 40.0f);
+
+    ImGuiListClipper clipper;
+    clipper.Begin( pEmulatorInstance->gbDebug.opcodeHistorySize );
+
+    while( clipper.Step() )
+    {
+        for ( int rowIndex = clipper.DisplayStart; rowIndex < clipper.DisplayEnd; ++rowIndex )
+        {
+            const GBOpcodeHistoryElement* pOpcodeHistoryElement = pEmulatorInstance->gbDebug.opcodeHistory + rowIndex;
+            const GBOpcode* pOpcode = pOpcodeHistoryElement->opcode == 0xCB ? cbPrefixedOpcodes + pOpcodeHistoryElement->opcode : unprefixedOpcodes + pOpcodeHistoryElement->opcode;
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+
+            ImGui::Text("$%04hx", pOpcodeHistoryElement->address);
+            ImGui::TableNextColumn();
+
+            ImGui::Text(pOpcode->pMnemonic);
+            ImGui::TableNextColumn();
+
+            const uint8_t* pOpcodeBytes = pEmulatorInstance->pMemoryMapper->pBaseAddress + pOpcodeHistoryElement->address;
+            for( size_t opcodeByteIndex = 0; opcodeByteIndex < pOpcode->byteCount; ++opcodeByteIndex )
+            {
+                ImGui::Text("$%02hhx", pOpcodeBytes[opcodeByteIndex++]);
+                ImGui::SameLine();
+            }
+            ImGui::TableNextColumn();
+
+            if( pOpcode->cycleCosts[1] == 0)
+            {
+                ImGui::Text("%d", pOpcode->cycleCosts[0]);
+            }
+            else
+            {
+                ImGui::Text("%d/%d", pOpcode->cycleCosts[0], pOpcode->cycleCosts[1]);
+            }
+            ImGui::TableNextColumn();
+        }
+    }
+    ImGui::EndTable();
+    ImGui::End();
+}
+
 void doEmulatorInstructionView()
 {
     if( !ImGui::Begin("Emulator UX Instruction") )
@@ -437,9 +451,9 @@ void doEmulatorInstructionView()
 void doUiFrame( GBEmulatorInstance* pEmulatorInstance )
 {
     //ImGui::ShowDemoWindow();
-	doHostCpuDebugView( pEmulatorInstance );
     doGbCpuDebugView( pEmulatorInstance );
     doInstructionView( pEmulatorInstance );
+    doInstructionHistoryView( pEmulatorInstance );
     doCpuStateView( pEmulatorInstance );
     doPpuStateView( pEmulatorInstance );
     doEmulatorInstructionView();
