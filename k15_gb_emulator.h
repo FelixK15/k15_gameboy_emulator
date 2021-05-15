@@ -14,23 +14,35 @@
 
 //FK: Compiler specific functions
 #ifdef _MSC_VER
+#include <intrin.h>
+#   define nop        __nop
 #   define debugBreak __debugbreak
 #else
 #   define debugBreak
 #endif
 
+#define breakPointHook() nop()
+
 static constexpr uint32_t   gbCyclesPerFrame                   = 70224u;
 static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                    = 160u;
+static constexpr uint8_t    gbSpriteHeight                     = 16u;
 static constexpr uint8_t    gbTileResolution                   = 8u;  //FK: Tiles are 8x8 pixels
+static constexpr uint8_t    gbHalfTileResolution               = gbTileResolution / 2;
 static constexpr uint8_t    gbHorizontalResolutionInPixels     = 160u;
 static constexpr uint8_t    gbVerticalResolutionInPixels       = 144u;
 static constexpr uint8_t    gbHorizontalResolutionInTiles      = gbHorizontalResolutionInPixels / gbTileResolution;
 static constexpr uint8_t    gbVerticalResolutuionInTiles       = gbVerticalResolutionInPixels / gbTileResolution;
 static constexpr uint8_t    gbBGTileCount                      = 32u; //FK: BG maps are 32x32 tiles
 static constexpr uint8_t    gbTileSizeInBytes                  = 16u; //FK: 8x8 pixels with 2bpp
-static constexpr size_t     gbFrameBufferSizeInBytes           = (gbVerticalResolutionInPixels * gbHorizontalResolutionInPixels)/4;
+static constexpr uint8_t    gbOpcodeHistoryBufferCapacity      = 255u;
+static constexpr uint8_t    gbObjectAttributeCapacity          = 40u;
+static constexpr uint8_t    gbBackgroundTileCountPerScanline   = 20u; //FK: 20 Background Tiles fit on one scanline (horizontally)
+static constexpr uint8_t    gbSpritesPerScanline               = 10u; //FK: the hardware allowed no more than 10 sprites per scanline
+static constexpr uint8_t    gbFrameBufferScanlineSizeInBytes   = gbHorizontalResolutionInPixels / 4;
+static constexpr size_t     gbFrameBufferSizeInBytes           = gbFrameBufferScanlineSizeInBytes * gbVerticalResolutionInPixels;
 static constexpr size_t     gbMappedMemorySizeInBytes          = 0x10000;
+
 struct GBEmulatorJoypad
 {
     union
@@ -293,7 +305,6 @@ struct GBPpuState
     uint8_t*            pBackgroundOrWindowTileIds[2];
     uint8_t*            pTileBlocks[3];
     uint8_t*            pGBFrameBuffer;
-    uint8_t             objectAttributeCapacity;
 };
 
 struct GBEmulatorSettings
@@ -326,7 +337,7 @@ struct GBEmulatorGBDebug
 
     uint16_t                    breakpointAddress;
     uint8_t                     opcodeHistorySize;
-    GBOpcodeHistoryElement      opcodeHistory[0xFF];
+    GBOpcodeHistoryElement      opcodeHistory[ gbOpcodeHistoryBufferCapacity ];
 };
 #endif
 
@@ -922,6 +933,12 @@ uint8_t swapNibbles( GBCpuState* pCpuState, uint8_t value )
     return value;
 }
 
+uint16_t swapBytesOf16BitValue( uint16_t value )
+{
+    value = ( value >> 8 ) | ( value << 8 );
+    return value;
+}
+
 void testBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
 {
     pCpuState->registers.F.Z = (value >> bitIndex);
@@ -964,10 +981,15 @@ void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
     resetMemoryMapper( pMapper );
 }
 
+void clearGBFrameBuffer( uint8_t* pGBFrameBuffer )
+{
+    memset( pGBFrameBuffer, 0, gbFrameBufferSizeInBytes );
+}
+
 void initPpuFrameBuffer( GBPpuState* pPpuState, uint8_t* pMemory )
 {
     pPpuState->pGBFrameBuffer = pMemory;
-    memset(pPpuState->pGBFrameBuffer, 0, gbFrameBufferSizeInBytes);
+    clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
 }
 
 void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
@@ -980,7 +1002,6 @@ void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
     pPpuState->pTileBlocks[2]                   = pMemoryMapper->pBaseAddress + 0x9000;
     pPpuState->pBackgroundOrWindowTileIds[0]    = pMemoryMapper->pBaseAddress + 0x9800;
     pPpuState->pBackgroundOrWindowTileIds[1]    = pMemoryMapper->pBaseAddress + 0x9C00;
-    pPpuState->objectAttributeCapacity          = 40;
     pPpuState->dotCounter                       = 0;
 
     pPpuState->lcdRegisters.pStatus = (GBLcdStatus*)(pMemoryMapper->pBaseAddress + 0xFF41);
@@ -997,8 +1018,7 @@ void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
     pPpuState->pLcdControl->bgTileMapArea       = 1;
     
     pPpuState->lcdRegisters.pStatus->enableLycEqLyInterrupt = 1;
-
-    memset(pPpuState->pGBFrameBuffer, 0, gbFrameBufferSizeInBytes);
+    clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
 }
 
 size_t calculateEmulatorInstanceMemoryRequirementsInBytes()
@@ -1089,33 +1109,38 @@ void loadRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
     mapRomMemory(pEmulator->pMemoryMapper, pRomMemory);
 }
 
-void pushPixelsFromTileData(uint8_t* pScanline, const uint16_t tileData)
+int qsort_sortSpritesByXCoordinate( void const* pSpriteA, void const* pSpriteB )
 {
-    const uint8_t pixels[] = {
-        (uint8_t)((tileData >> 0 | tileData >>  8) & 0x3),
-        (uint8_t)((tileData >> 1 | tileData >>  9) & 0x3),
-        (uint8_t)((tileData >> 2 | tileData >> 10) & 0x3),
-        (uint8_t)((tileData >> 3 | tileData >> 11) & 0x3),
-        (uint8_t)((tileData >> 4 | tileData >> 12) & 0x3),
-        (uint8_t)((tileData >> 5 | tileData >> 13) & 0x3),
-        (uint8_t)((tileData >> 6 | tileData >> 14) & 0x3),
-        (uint8_t)((tileData >> 7 | tileData >> 15) & 0x3)
+    const GBObjectAttributes* pOAMs[2] = {
+        (const GBObjectAttributes*)pSpriteA,
+        (const GBObjectAttributes*)pSpriteB
     };
 
-    *pScanline++ = pixels[0] << 6 | pixels[1] << 4 | pixels[2] << 2 | pixels[3] << 0;
-    *pScanline   = pixels[4] << 6 | pixels[5] << 4 | pixels[6] << 2 | pixels[7] << 0;
+    return (int)pOAMs[0]->x - (int)pOAMs[1]->x;
 }
 
-void pushSpritePixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
+void sortSpritesByXCoordinate( GBObjectAttributes* pSprites, uint8_t spriteCount )
+{
+    qsort( pSprites, spriteCount, sizeof(GBObjectAttributes), qsort_sortSpritesByXCoordinate );
+}
+
+void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     const uint8_t objHeight = pPpuState->pLcdControl->objSize == 0 ? 8 : 16;
 
     uint8_t spriteCounter = 0;
     GBObjectAttributes scanlineSprites[10] = {}; //FK: Max 10 sprites per scanline
-    for( size_t spriteIndex = 0u; spriteIndex < pPpuState->objectAttributeCapacity; ++spriteIndex )
+    for( size_t spriteIndex = 0u; spriteIndex < gbObjectAttributeCapacity; ++spriteIndex )
     {
         const GBObjectAttributes* pSprite = pPpuState->pOAM + spriteIndex;
-        if( pSprite->y <= scanlineYCoordinate && pSprite->y + objHeight >= scanlineYCoordinate )
+        if( pSprite->y < gbSpriteHeight || pSprite->y > gbVerticalResolutionInPixels + gbSpriteHeight )
+        {
+            //FK: Sprite is invisible
+            continue;
+        }
+
+        const uint8_t spriteTopPosition = pSprite->y - gbSpriteHeight;
+        if( spriteTopPosition <= scanlineYCoordinate && spriteTopPosition + objHeight >= scanlineYCoordinate )
         {
             scanlineSprites[spriteCounter++] = *pSprite;
             
@@ -1126,59 +1151,62 @@ void pushSpritePixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint
         }
     }
 
+    if( spriteCounter == 0 )
+    {
+        return;
+    }
+
+    if( spriteCounter > 1 )
+    {
+        //FK: TODO: This shouldn't happen in CGB mode
+        sortSpritesByXCoordinate( scanlineSprites, spriteCounter );
+    }
+
+    const uint8_t scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
+
+    uint8_t* pScanlinePixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
     for( size_t spriteIndex = 0; spriteIndex < spriteCounter; ++spriteIndex )
     {
         const GBObjectAttributes* pSprite = scanlineSprites + spriteIndex;
-        const uint8_t* pTile = pPpuState->pTileBlocks[0] + ( pSprite->tileIndex * 0x10 );
-        const uint8_t tileLine = *(pTile + ( pSprite->y - scanlineYCoordinate ));
-
-        if( pSprite->x >= 8 && pSprite->x <= 144 )
+        if( pSprite->x < 8 || pSprite->x >= 168 )
         {
-            const uint8_t scanlineByteIndex = (pSprite->x - 8) / 8;
-            pScanline[scanlineByteIndex] = tileLine;
+            //FK: Sprite is off screen
+            continue;
         }
-    }
-}
 
-void interleaveGbPixelBytes(uint8_t* pScanlineData, const uint32_t* pScanlinePixelData)
-{
-    //FK: First working version, code is messy af and should be optimized using SIMD.
-    size_t scanlineDataIndex = 0;
-    for( uint8_t i = 0; i < 10; ++i )
-    {
-        const uint32_t pixelData = pScanlinePixelData[i];
-        const uint16_t pixelLineData[] ={
-            ( pixelData & 0xFFFF0000 ) >> 16,
-            ( pixelData & 0x0000FFFF ) >> 0,
-        };
+        //FK: Get pixel data of top most pixel line of current tile
+        const uint8_t* pTileTopPixelData = pPpuState->pTileBlocks[0] + pSprite->tileIndex * gbTileSizeInBytes;
+        const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
+        //FK: Get pixel data of this tile for the current scanline
+        const uint8_t pixelDataMSB = pTileScanlinePixelData[0];
+        const uint8_t pixelDataLSB = pTileScanlinePixelData[1];
 
-        for( uint8_t l = 0; l < 2; ++l )
+        //FK: Pixel will be written interleaved here
+        uint8_t interleavedScanlinePixelData[2] = {0};
+        uint8_t scanlinePixelMask[2] = {0};
+        for( uint8_t scanlinePixelDataIndex = 0; scanlinePixelDataIndex < 2; ++scanlinePixelDataIndex )
         {
-            const uint8_t lowByte  = pixelLineData[l] & 0x00FF;
-            const uint8_t highByte = (pixelLineData[l] & 0xFF00) >> 8;
-
-            uint8_t pixelShift = 6;
-            for( uint8_t k = 0; k < 8; ++k )
+            const uint8_t startPixelIndex = scanlinePixelDataIndex * gbHalfTileResolution;
+            const uint8_t endPixelIndex = startPixelIndex + gbHalfTileResolution;
+            for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
             {
-                const uint8_t bitIndex = 7-k;
-                const uint8_t lsb = ( lowByte  >> bitIndex ) & 0x1;
-                const uint8_t msb = ( highByte >> bitIndex ) & 0x1;
-
-                pScanlineData[scanlineDataIndex] |= (lsb | msb << 1) << pixelShift;
-                pixelShift -= 2;
-                if( k == 3 )
-                {
-                    ++scanlineDataIndex;
-                    pixelShift = 6;
-                }
+                const uint8_t scanlinePixelShift        = 6 - (pixelIndex-startPixelIndex)*2;
+                const uint8_t pixelShift                = 7 - pixelIndex;
+                const uint8_t pixelMSB                  = ( pixelDataMSB >> pixelShift ) & 0x1;
+                const uint8_t pixelLSB                  = ( pixelDataLSB >> pixelShift ) & 0x1;
+                const uint8_t pixelData                 = pixelMSB << 1 | pixelLSB << 0;
+                scanlinePixelMask[ scanlinePixelDataIndex ]             |= ( pixelData == 0 ? 0x0 : 0x3 ) << scanlinePixelShift;
+                interleavedScanlinePixelData[ scanlinePixelDataIndex ]  |= ( pixelData << scanlinePixelShift );
             }
-
-            ++scanlineDataIndex;
         }
+
+        const uint8_t scanlinePixelIndex = ( pSprite->x - 8u ) / 4;
+        pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0] | ( pScanlinePixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[0] );
+        pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1] | ( pScanlinePixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[1] );
     }
 }
 
-void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
+void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     const uint8_t* pWindowTileIds      = pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->windowTileMapArea ];
     const uint8_t* pBackgroundTileIds  = pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->bgTileMapArea ];
@@ -1186,30 +1214,31 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
     const uint8_t sx = *pPpuState->lcdRegisters.pScx;
     const uint8_t sy = *pPpuState->lcdRegisters.pScy;
 
-    //FK: Store the participating tiles for this scanline
-    uint8_t scanlineTileIds[gbBGTileCount] = {}; 
-    uint8_t* pScanlineTileIds = scanlineTileIds;
-
     //FK: Calculate the tile row that intersects with the current scanline
+    //FK: TODO: implement sx/sy here
     const uint8_t  scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
     const uint16_t startTileIndex = scanlineYCoordinateInTileSpace * gbBGTileCount;
     const uint16_t endTileIndex = startTileIndex + gbBGTileCount;
 
+    uint8_t scanlineBackgroundTilesIds[ gbBGTileCount ] = { 0 };
+
     if( wy <= scanlineYCoordinate && pPpuState->pLcdControl->windowEnable )
     {
         const uint8_t wx = *pPpuState->lcdRegisters.pWx;
+        const uint8_t wy = *pPpuState->lcdRegisters.pWy;
+
         for( uint16_t tileIndex = startTileIndex; tileIndex < endTileIndex; ++tileIndex )
         {
             const uint8_t x = tileIndex * 8;
             if( x >= wx )
             {
                 //FK: get tile from window tile map
-                *pScanlineTileIds++ = pWindowTileIds[tileIndex];
+                scanlineBackgroundTilesIds[ tileIndex - startTileIndex ] = pWindowTileIds[ tileIndex ];
             }
             else if( x >= sx )
             {
                 //FK: get tile from background tile map
-                *pScanlineTileIds++ = pBackgroundTileIds[tileIndex];
+                scanlineBackgroundTilesIds[ tileIndex - startTileIndex ] = pBackgroundTileIds[ tileIndex ];
             }
         }
     }
@@ -1218,7 +1247,7 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
         for( uint16_t tileIndex = startTileIndex; tileIndex < endTileIndex; ++tileIndex )
         {
             //FK: get tile from background tile map
-            *pScanlineTileIds++ = pBackgroundTileIds[tileIndex];
+            scanlineBackgroundTilesIds[ tileIndex - startTileIndex ] = pBackgroundTileIds[ tileIndex ];
         }
     }
 
@@ -1227,82 +1256,72 @@ void pushBackgroundOrWindowPixelsToScanline( uint8_t* pScanline, GBPpuState* pPp
 
     //FK: Get the y offset inside the tile row to where the scanline currently is.
     const uint8_t tileRowYOffset    = scanlineYCoordinate - tileRowStartYPos;
-    
-    uint32_t scanlinePixelData[10] = {};
+
+    //FK: Assume 0x8000 addressing mode
+    const uint8_t* pTileData = pPpuState->pTileBlocks[0];
+
     //FK: Determine tile addressing mode
-    if( pPpuState->pLcdControl->bgAndWindowTileDataArea )
+    if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
     {
-        //FK: 0x8000 addressing mode
-        for( uint8_t tileIdIndex = 0; tileIdIndex < 20; ++tileIdIndex )
+        //FK: TODO: 0x8800 addressing mode  (actually uses 0x9000 as its base ptr)
+        pTileData = pPpuState->pTileBlocks[2];
+    }
+
+    uint8_t* pScanlinePixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+
+    for( uint8_t tileIdIndex = 0; tileIdIndex < gbBackgroundTileCountPerScanline; ++tileIdIndex )
+    {
+        const uint8_t tileIndex = scanlineBackgroundTilesIds[ tileIdIndex ];
+        
+        //FK: Get pixel data of top most pixel line of current tile
+        const uint8_t* pTileTopPixelData = pTileData + tileIndex * gbTileSizeInBytes;
+        const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
+        //FK: Get pixel data of this tile for the current scanline
+        const uint8_t pixelDataMSB = pTileScanlinePixelData[0];
+        const uint8_t pixelDataLSB = pTileScanlinePixelData[1];
+
+        //FK: Pixel will be written interleaved here
+        uint8_t interleavedScanlinePixelData[2] = {0};
+        for( uint8_t scanlinePixelDataIndex = 0; scanlinePixelDataIndex < 2; ++scanlinePixelDataIndex )
         {
-            const uint8_t tileIndex = scanlineTileIds[tileIdIndex];
-            
-            //FK: Get pixel data of top most pixel line of current tile
-            const uint8_t* pTileTopPixelData = pPpuState->pTileBlocks[0] + tileIndex * gbTileSizeInBytes;
-            const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
-            //FK: Get pixel data of this tile for the current scanline
-            const uint16_t tileScanlinePixels = pTileScanlinePixelData[0] << 8 | pTileScanlinePixelData[1] << 0;
-
-            const uint8_t pixelShift = 16 - ( ( tileIdIndex % 2 ) << 4 );
-            const uint8_t pixelDataIndex = tileIdIndex >> 1;
-            scanlinePixelData[pixelDataIndex] |= tileScanlinePixels << pixelShift;
-
-//FK: Debug code for release only bug
-#if 0
-            static uint8_t tries = 20;
-            if( tileIdIndex == 1)
+            const uint8_t startPixelIndex = scanlinePixelDataIndex * gbHalfTileResolution;
+            const uint8_t endPixelIndex = startPixelIndex + gbHalfTileResolution;
+            for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
             {
-                //printf("scanline: %d\n", scanlineYCoordinate);
-                if( scanlineYCoordinate == 9 && --tries == 0 )
-                {
-                    static uint8_t print = 1;
-                    if( print )
-                    {
-                        printf("tileIndex: %d\n", tileIndex);
-                        printf("pixelShift: %d\n", pixelShift);
-                        printf("pixelDataIndex: %d\n", pixelDataIndex);
-                        printf("tileScanlinePixels: %d\n", tileScanlinePixels);
-                        print = 0;
-                    }
-                }
+                const uint8_t scanlinePixelShift        = 6 - (pixelIndex-startPixelIndex)*2;
+                const uint8_t pixelShift                = 7 - pixelIndex;
+                const uint8_t pixelMSB                  = ( pixelDataMSB >> pixelShift ) & 0x1;
+                const uint8_t pixelLSB                  = ( pixelDataLSB >> pixelShift ) & 0x1;
+                const uint8_t pixelData                 = pixelMSB << 1 | pixelLSB << 0;
+                interleavedScanlinePixelData[ scanlinePixelDataIndex ] |= ( pixelData << scanlinePixelShift );
             }
-#endif
         }
-    }
-    else
-    {
-#if 0
-        //FK: TODO: 0x8080 addressing mode 
-        for( uint8_t scanlineTileIndex = 0; scanlineTileIndex < horizontalTileCount; ++scanlineTileIndex )
-        {
-            const int8_t tileIndex      = (int8_t)pScanlineTileIndices[scanlineTileIndex];
-            const uint8_t* pTileData    = pPpuState->pTileBlocks[2] + tileIndex * gbTileSizeInBytes;
-            pTileData += scanlineTileOffset;
 
-            pushPixelsFromTileData(pScanline, *pTileData);
-            pScanline += 2;
-        }
-#endif
+        const uint8_t scanlinePixelIndex = tileIdIndex * 2;
+        pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0];
+        pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1];
     }
+}
 
-    interleaveGbPixelBytes(pScanline, scanlinePixelData);
+void clearGBFrameBufferScanline( uint8_t* pGBFrameBuffer, uint8_t scanlineYCoordinate )
+{
+    memset( pGBFrameBuffer + scanlineYCoordinate * gbFrameBufferScanlineSizeInBytes, 0, gbFrameBufferScanlineSizeInBytes );
 }
 
 void pushScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
+    //FK: Clear scanline first, so we know what we're working with
+    clearGBFrameBufferScanline( pPpuState->pGBFrameBuffer, scanlineYCoordinate );
+
     if( pPpuState->pLcdControl->bgAndWindowEnable )
     {
-        uint8_t* pFrameBufferScanline = pPpuState->pGBFrameBuffer + scanlineYCoordinate*gbHorizontalResolutionInPixels/4;
-        memset(pFrameBufferScanline, 0, gbHorizontalResolutionInPixels/4);
-        pushBackgroundOrWindowPixelsToScanline( pFrameBufferScanline, pPpuState, scanlineYCoordinate );
+        pushBackgroundOrWindowPixelsToScanline( pPpuState, scanlineYCoordinate );
     }
 
-#if 0
     if( pPpuState->pLcdControl->objEnable )
     {
-        pushSpritePixelsToScanline( scanlineInGBPixels, pPpuState, scanlineYCoordinate );
+        pushSpritePixelsToScanline( pPpuState, scanlineYCoordinate );
     }
-#endif
 }
 
 void triggerInterrupt( GBCpuState* pCpuState, uint8_t interruptFlag )
@@ -1313,81 +1332,84 @@ void triggerInterrupt( GBCpuState* pCpuState, uint8_t interruptFlag )
 void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
 {
     GBLcdStatus* pLcdStatus = pPpuState->lcdRegisters.pStatus;
-    uint8_t* pLy   = pPpuState->lcdRegisters.pLy;
-    uint8_t* pLyc  = pPpuState->lcdRegisters.pLyc;
+    uint8_t lcdMode         = pPpuState->lcdRegisters.pStatus->mode;
+    uint8_t ly              = *pPpuState->lcdRegisters.pLy;
+    uint16_t lcdDotCounter  = pPpuState->dotCounter;
+    const uint8_t lyc       = *pPpuState->lcdRegisters.pLyc;
 
     uint8_t triggerLCDStatInterrupt = 0;
+    lcdDotCounter += cycleCount;
 
-    pPpuState->dotCounter += cycleCount;
-
-    if( pLcdStatus->mode == 2 && pPpuState->dotCounter >= 80 )
+    if( lcdMode == 2 && lcdDotCounter >= 80 )
     {
-        pPpuState->dotCounter -= 80;
+        lcdDotCounter -= 80;
 
-        pLcdStatus->mode = 3;
-        pushScanline( pPpuState, *pLy );
+        lcdMode = 3;
+        pushScanline( pPpuState, ly );
     }
-    else if( pLcdStatus->mode == 3 && pPpuState->dotCounter >= 172 )
+    else if( lcdMode == 3 && lcdDotCounter >= 172 )
     {
-        pPpuState->dotCounter -= 172;
+        lcdDotCounter -= 172;
 
-        pLcdStatus->mode = 0;
+        lcdMode = 0;
         triggerLCDStatInterrupt = pLcdStatus->enableMode0HBlankInterrupt;
     }
-    else if( pLcdStatus->mode == 0 && pPpuState->dotCounter >= 204 )
+    else if( lcdMode == 0 && lcdDotCounter >= 204 )
     {
-        pPpuState->dotCounter -= 204;
-        ++*pLy;
+        lcdDotCounter -= 204;
+        ++ly;
 
-        if( *pLy == 144 )
+        if( ly == 144 )
         {
-            pLcdStatus->mode = 1;
+            lcdMode = 1;
             triggerLCDStatInterrupt = pLcdStatus->enableMode1VBlankInterrupt;
             triggerInterrupt( pCpuState, VBlankInterrupt );
         }
         else
         {
-            pLcdStatus->mode = 2;
+            lcdMode = 2;
         }
     }
-    else if( pLcdStatus->mode == 1 )
+    else if( lcdMode == 1 )
     {
-        if (pPpuState->dotCounter >= 456 )
+        if( lcdDotCounter >= 456 )
         {
-            pPpuState->dotCounter -= 456;
-            ++*pLy;
-            if( *pLy == 154 )
+            lcdDotCounter -= 456;
+            ++ly;
+            if( ly == 154 )
             {
-                *pLy = 0;
-                pLcdStatus->mode = 2;
+                ly = 0;
+                lcdMode = 2;
                 triggerLCDStatInterrupt = pLcdStatus->enableMode2OAMInterrupt;
             }
         }
     }
 
-    if( *pPpuState->lcdRegisters.pLy != *pLy )
+    if( pLcdStatus->enableLycEqLyInterrupt )
     {
-        if( pLcdStatus->enableLycEqLyInterrupt )
+        if( pLcdStatus->LycEqLyFlag == 1 && ly == lyc )
         {
-            if( pLcdStatus->LycEqLyFlag == 1 && *pLy == *pLyc )
-            {
-                triggerLCDStatInterrupt = 1;
-            }
-
-            //FK: TODO: Check if this accurate...
-#if 0
-            else if ( pLcdStatus->LycEqLyFlag == 0 && ly != lyc )
-            {
-                triggerLCDStatInterrupt = 1;
-            }
-#endif
+            triggerLCDStatInterrupt = 1;
         }
+
+#if 0
+        //FK: TODO: Check if this accurate...
+        else if ( pLcdStatus->LycEqLyFlag == 0 && ly != lyc )
+        {
+            triggerLCDStatInterrupt = 1;
+        }
+#endif
     }
 
     if( triggerLCDStatInterrupt )
     {
         triggerInterrupt( pCpuState, LCDStatInterrupt );
     }
+
+    //FK: update ppu state
+    *pPpuState->lcdRegisters.pLy = ly;
+    pPpuState->dotCounter = lcdDotCounter;
+    pPpuState->lcdRegisters.pStatus->mode = lcdMode;
 }
 
 void push16BitValueToStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint16_t value )
@@ -3225,10 +3247,10 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
     uint8_t opcodeHistoryIndex = pEmulatorInstance->gbDebug.opcodeHistorySize;
-    if( opcodeHistoryIndex == 0xFF )
+    if( opcodeHistoryIndex == gbOpcodeHistoryBufferCapacity )
     {
-        opcodeHistoryIndex = 0xFE;
-        memcpy(pEmulatorInstance->gbDebug.opcodeHistory, pEmulatorInstance->gbDebug.opcodeHistory + 1, sizeof(GBOpcodeHistoryElement) * 0xFE);
+        opcodeHistoryIndex = (gbOpcodeHistoryBufferCapacity-1);
+        memcpy(pEmulatorInstance->gbDebug.opcodeHistory, pEmulatorInstance->gbDebug.opcodeHistory + 1, sizeof(GBOpcodeHistoryElement) * (gbOpcodeHistoryBufferCapacity-1));
     }
 
     pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].address = opcodeAddress;

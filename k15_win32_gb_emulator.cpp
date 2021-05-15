@@ -473,8 +473,6 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		}
 
 		QueryPerformanceCounter(&start);
-
-		uint8_t vblank = 0;
 		runEmulator( pEmulatorInstance );
 
 		if( pEmulatorInstance->flags.vblank )
