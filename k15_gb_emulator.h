@@ -14,14 +14,15 @@
 
 //FK: Compiler specific functions
 #ifdef _MSC_VER
-#include <intrin.h>
-#   define nop        __nop
+#   define breakPointHook() \
+__asm\
+{\
+    nop\
+}
 #   define debugBreak __debugbreak
 #else
 #   define debugBreak
 #endif
-
-#define breakPointHook() nop()
 
 static constexpr uint32_t   gbCyclesPerFrame                   = 70224u;
 static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
