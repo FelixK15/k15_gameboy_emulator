@@ -472,9 +472,9 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		QueryPerformanceCounter(&start);
 
 		uint8_t vblank = 0;
-		runEmulator( pEmulatorInstance, &vblank );
+		runEmulator( pEmulatorInstance );
 
-		if( vblank )
+		if( pEmulatorInstance->flags.vblank )
 		{
 			renderGbFrameBuffer( pEmulatorInstance->pPpuState->pGBFrameBuffer );
 			//FK: GB frame finished, upload gb framebuffer to texture

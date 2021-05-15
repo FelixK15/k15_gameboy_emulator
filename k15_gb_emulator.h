@@ -314,6 +314,7 @@ struct GBEmulatorDebugSettings
 struct GBEmulatorGBDebug
 {
     uint8_t pauseExecution          : 1;
+    uint8_t continueExecution       : 1;
     uint8_t runForOneInstruction    : 1;
     uint8_t runSingleFrame          : 1;
     uint8_t pauseAtBreakpoint       : 1;
@@ -331,14 +332,27 @@ struct GBEmulatorHostDebug
 };
 #endif
 
+struct GBEmulatorInstanceFlags
+{
+    union
+    {
+        struct 
+        {
+            uint8_t vblank : 1;
+        };
+
+        uint8_t value;
+    };
+};
+
 struct GBEmulatorInstance
 {
-    GBCpuState*         pCpuState;
-    GBPpuState*         pPpuState;
-    GBMemoryMapper*     pMemoryMapper;
+    GBCpuState*             pCpuState;
+    GBPpuState*             pPpuState;
+    GBMemoryMapper*         pMemoryMapper;
 
-    GBEmulatorJoypad    joypad;
-
+    GBEmulatorJoypad        joypad;
+    GBEmulatorInstanceFlags flags;
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
     GBEmulatorHostDebug     hostDebug;
     GBEmulatorGBDebug       gbDebug;
@@ -1023,7 +1037,7 @@ void setEmulatorBreakpoint(GBEmulatorInstance* pEmulatorInstance, uint16_t break
 
 void continueEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
 {
-    pEmulatorInstance->gbDebug.pauseExecution = 0;
+    pEmulatorInstance->gbDebug.continueExecution = 1;
 }
 
 void pauseEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
@@ -1070,6 +1084,7 @@ GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     pEmulatorInstance->gbDebug.pauseExecution       = 0;
     pEmulatorInstance->gbDebug.runForOneInstruction = 0;
     pEmulatorInstance->gbDebug.runSingleFrame       = 0;
+    pEmulatorInstance->gbDebug.continueExecution    = 0;
 #endif
 
     resetEmulatorInstance(pEmulatorInstance);
@@ -3291,11 +3306,21 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     return cycleCost;
 }
 
-void runEmulator( GBEmulatorInstance* pInstance, uint8_t* pVBlank )
+void runEmulator( GBEmulatorInstance* pInstance )
 {
 	static uint32_t totalCycleCount = 0;
 
-    if( pInstance->gbDebug.pauseAtBreakpoint && pInstance->gbDebug.breakpointAddress == pInstance->pCpuState->programCounter )
+    //FK: reset flags
+    pInstance->flags.value = 0;
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+    uint8_t runFrame = 0;
+    if( pInstance->gbDebug.continueExecution )
+    {
+        pInstance->gbDebug.continueExecution    = 0;
+        pInstance->gbDebug.pauseExecution       = 0;
+    }
+    else if( pInstance->gbDebug.pauseAtBreakpoint && pInstance->gbDebug.breakpointAddress == pInstance->pCpuState->programCounter )
     {
         pInstance->gbDebug.pauseExecution = 1;
     }
@@ -3307,7 +3332,7 @@ void runEmulator( GBEmulatorInstance* pInstance, uint8_t* pVBlank )
 		
 		if( totalCycleCount >= gbCyclesPerFrame )
 		{
-			*pVBlank = 1;
+            pInstance->flags.vblank = 1;
 			totalCycleCount -= gbCyclesPerFrame;
 		}
 
@@ -3316,23 +3341,23 @@ void runEmulator( GBEmulatorInstance* pInstance, uint8_t* pVBlank )
 	}
     else
     {
-        const uint8_t runFrame = pInstance->gbDebug.runSingleFrame || !pInstance->gbDebug.pauseExecution;
-        if( runFrame )
-        {
-            
-            while( totalCycleCount < gbCyclesPerFrame )
-		    {
-		    	const uint8_t cycleCount = runSingleInstruction( pInstance );
-		    	totalCycleCount += cycleCount;
-		    }
-
-		    *pVBlank = 1;
-		    totalCycleCount -= gbCyclesPerFrame;
-
-            if( pInstance->gbDebug.runSingleFrame )
-            {
-                pInstance->gbDebug.runSingleFrame = 0;
-            }
-        }
+        runFrame = pInstance->gbDebug.runSingleFrame || !pInstance->gbDebug.pauseExecution;
+        pInstance->gbDebug.runSingleFrame = 0;
     }
+
+    if( !runFrame )
+    {
+        return;
+    }
+
+#endif
+
+    while( totalCycleCount < gbCyclesPerFrame )
+    {
+        const uint8_t cycleCount = runSingleInstruction( pInstance );
+        totalCycleCount += cycleCount;
+    }
+
+    pInstance->flags.vblank = 1;
+    totalCycleCount -= gbCyclesPerFrame;
 }
