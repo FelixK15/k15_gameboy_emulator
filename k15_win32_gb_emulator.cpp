@@ -423,41 +423,6 @@ void doFrame(HWND hwnd)
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void evaluateUiInput( const GBUiData* pUiData )
-{
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-	if( pUiData->resetEmulator )
-	{
-		resetEmulatorInstance(pEmulatorInstance);
-	}
-
-	if( pUiData->continueEmulator )
-	{
-		continueEmulatorExecution( pEmulatorInstance );
-	}
-
-	if( pUiData->pauseEmulator )
-	{
-		pauseEmulatorExecution( pEmulatorInstance );
-	}
-
-	if( pUiData->executeOneInstruction )
-	{
-		runEmulatorForOneInstruction( pEmulatorInstance );
-	}
-
-	if( pUiData->runSingleFrame )
-	{
-		runEmulatorForOneFrame( pEmulatorInstance );
-	}
-
-	if( pUiData->breakAtProgramCounterAddress )
-	{
-		setEmulatorBreakpoint( pEmulatorInstance, pUiData->breakpointProgramCounterAddress );
-	}
-#endif
-}
-
 int CALLBACK WinMain(HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine, int nShowCmd)
@@ -519,18 +484,15 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		//FK: UI
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 		{
-			GBUiData uiData = {};
 			ImGui_ImplOpenGL2_NewFrame();
 			ImGui_ImplWin32_NewFrame();
 
 		    ImGui::NewFrame();
 			if( showUi )
 			{
-				doUiFrame(pEmulatorInstance, &uiData);
+				doUiFrame( pEmulatorInstance );
 			}
 			ImGui::EndFrame();
-
-			evaluateUiInput( &uiData );
 		}
 #endif
 	

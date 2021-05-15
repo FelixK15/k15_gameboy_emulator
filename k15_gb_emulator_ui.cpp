@@ -21,17 +21,6 @@ static struct GBDebugViewState
     
 } debugViewState;
 
-struct GBUiData
-{
-    uint8_t resetEmulator                   : 1;
-    uint8_t pauseEmulator                   : 1;
-    uint8_t continueEmulator                : 1;
-    uint8_t executeOneInstruction           : 1;
-    uint8_t runSingleFrame                  : 1;
-    uint8_t breakAtProgramCounterAddress    : 1;
-    uint16_t breakpointProgramCounterAddress;
-};
-
 uint8_t parseStringToHexNibble( const char hexChar )
 {
     switch( hexChar )
@@ -72,7 +61,7 @@ uint16_t parseStringToHex16Bit( const char* pString )
     return value;
 }
 
-void doHostCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
+void doHostCpuDebugView( GBEmulatorInstance* pEmulatorInstance )
 {
     if(!ImGui::Begin("Host CPU Debug View"))
     {
@@ -121,7 +110,7 @@ void doHostCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData
 #endif
 }
 
-void doGbCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
+void doGbCpuDebugView( GBEmulatorInstance* pEmulatorInstance )
 {
     if( !ImGui::Begin( "GB Cpu Debug View" ) )
     {
@@ -131,7 +120,7 @@ void doGbCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
 
     ImGui::Text("Enable breaking the GB CPU");
     ImGui::Separator();
-    ImGui::Text("GB CPU currently ");
+    ImGui::Text("GB CPU currently");
     ImGui::SameLine();
     if( pEmulatorInstance->gbDebug.pauseExecution )
     {
@@ -144,34 +133,34 @@ void doGbCpuDebugView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
 
     if( ImGui::Button("Reset emulator") )
     {
-        pUiData->resetEmulator = 1;
+        resetEmulatorInstance(pEmulatorInstance);
     }
 
     if( ImGui::Button("Pause execution") )
     {
-        pUiData->pauseEmulator = 1;
+        pauseEmulatorExecution( pEmulatorInstance );
     }
 
-    if( ImGui::Button("continue execution") )
+    if( ImGui::Button("Continue execution") )
     {
-        pUiData->continueEmulator = 1;
+        continueEmulatorExecution( pEmulatorInstance );
     }
 
-    if( ImGui::Button("execute next instruction") )
+    if( ImGui::Button("Execute next instruction") )
     {
-        pUiData->executeOneInstruction = 1;
+        runEmulatorForOneInstruction( pEmulatorInstance );
     }
 
-    if( ImGui::Button("execute single frame") )
+    if( ImGui::Button("Execute single frame") )
     {
-        pUiData->runSingleFrame = 1;
+        runEmulatorForOneFrame( pEmulatorInstance );
     }
 
     static bool breakAtPCAddress = false;
-    if( ImGui::Checkbox("break at program counter address", &breakAtPCAddress) )
+    if( ImGui::Checkbox("Break at program counter address", &breakAtPCAddress) )
     {
-        pUiData->breakAtProgramCounterAddress    = breakAtPCAddress;
-        pUiData->breakpointProgramCounterAddress = parseStringToHex16Bit( debugViewState.gbCpu.programCounterHexInput )  ;   
+        const uint16_t breakpointAddress = parseStringToHex16Bit( debugViewState.gbCpu.programCounterHexInput );
+		setEmulatorBreakpoint( pEmulatorInstance, breakpointAddress );
     }
     ImGui::SameLine();
     ImGui::InputText( "", debugViewState.gbCpu.programCounterHexInput, sizeof( debugViewState.gbCpu.programCounterHexInput ), hexTextInputFlags );
@@ -342,7 +331,7 @@ void doPpuStateView(GBEmulatorInstance* pEmulatorInstance)
     ImGui::End();
 }
 
-void doInstructionView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
+void doInstructionView( GBEmulatorInstance* pEmulatorInstance )
 {
     static size_t opcodeCount = 0;
     const uint8_t* pBytes = pEmulatorInstance->pMemoryMapper->pBaseAddress;
@@ -427,7 +416,7 @@ void doInstructionView(GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData)
     ImGui::End();
 }
 
-void doInstructionView()
+void doEmulatorInstructionView()
 {
     if( !ImGui::Begin("Emulator UX Instruction") )
     {
@@ -445,13 +434,13 @@ void doInstructionView()
     ImGui::End();
 }
 
-void doUiFrame( GBEmulatorInstance* pEmulatorInstance, GBUiData* pUiData )
+void doUiFrame( GBEmulatorInstance* pEmulatorInstance )
 {
     //ImGui::ShowDemoWindow();
-	doHostCpuDebugView(pEmulatorInstance, pUiData);
-    doGbCpuDebugView(pEmulatorInstance, pUiData);
-    doInstructionView(pEmulatorInstance, pUiData);
-    doCpuStateView(pEmulatorInstance);
-    doPpuStateView(pEmulatorInstance);
-    doInstructionView();
+	doHostCpuDebugView( pEmulatorInstance );
+    doGbCpuDebugView( pEmulatorInstance );
+    doInstructionView( pEmulatorInstance );
+    doCpuStateView( pEmulatorInstance );
+    doPpuStateView( pEmulatorInstance );
+    doEmulatorInstructionView();
 }
