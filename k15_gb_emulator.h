@@ -1181,7 +1181,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         {
             scanlineSprites[spriteCounter++] = *pSprite;
             
-            if( spriteCounter == 10 )
+            if( spriteCounter == gbSpritesPerScanline )
             {
                 break;
             }
@@ -1232,7 +1232,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
                 const uint8_t pixelMSB                  = ( pixelDataMSB >> pixelShift ) & 0x1;
                 const uint8_t pixelLSB                  = ( pixelDataLSB >> pixelShift ) & 0x1;
                 const uint8_t pixelData                 = pixelMSB << 1 | pixelLSB << 0;
-                scanlinePixelMask[ scanlinePixelDataIndex ]             |= ( pixelData == 0 ? 0x0 : 0x3 ) << scanlinePixelShift;
+                scanlinePixelMask[ scanlinePixelDataIndex ]             |= ( pixelData == 0 ? 0x3 : 0x0 ) << scanlinePixelShift;
                 interleavedScanlinePixelData[ scanlinePixelDataIndex ]  |= ( pixelData << scanlinePixelShift );
             }
         }
