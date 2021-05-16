@@ -794,24 +794,31 @@ uint8_t* getMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset
 
 void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint8_t value )
 {
-    if( addressOffset == 0xFF80) 
-    {
-        breakPointHook();
-    }
     pMemoryMapper->lastValueWritten     = value;
     pMemoryMapper->lastAddressWrittenTo = addressOffset;
 
-    //FK: Joypad input
-    if( addressOffset == 0xFF00 )
+    switch( addressOffset )
     {
-        const uint8_t currentValue = pMemoryMapper->pBaseAddress[addressOffset];
-        pMemoryMapper->pBaseAddress[addressOffset] = ( value & 0xF0 ) | ( currentValue & 0x0F );
-    }
-    else
-    {
-        pMemoryMapper->pBaseAddress[addressOffset] = value;
-    }
+        //FK: Joypad input
+        case 0xFF00:
+        {
+            const uint8_t currentValue = pMemoryMapper->pBaseAddress[addressOffset];
+            pMemoryMapper->pBaseAddress[addressOffset] = ( value & 0xF0 ) | ( currentValue & 0x0F );
+            break;
+        }
 
+        case 0xFF40:
+        {
+            //FK: LCD control - will be evaluated and written to memory in updatePPULcdControl
+            break;
+        }
+
+        default:
+        {
+            pMemoryMapper->pBaseAddress[addressOffset] = value;
+            break;
+        }
+    }
 
     //FK: Echo 8kB internal Ram
     if( addressOffset >= 0xC000 && addressOffset < 0xDE00 )
@@ -1359,9 +1366,28 @@ void triggerInterrupt( GBCpuState* pCpuState, uint8_t interruptFlag )
     *pCpuState->pIF |= interruptFlag;
 }
 
+void updatePPULcdControl( GBPpuState* pPpuState, GBLcdControl lcdControlValue )
+{
+    if( lcdControlValue.enable != pPpuState->pLcdControl->enable )
+    {
+        if( !lcdControlValue.enable )
+        {
+            clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
+        }
+    }
+
+    *pPpuState->pLcdControl = lcdControlValue;
+}
+
 void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
 {
     GBLcdStatus* pLcdStatus = pPpuState->lcdRegisters.pStatus;
+
+    if( !pPpuState->pLcdControl->enable )
+    {
+        return;
+    }
+
     uint8_t lcdMode         = pPpuState->lcdRegisters.pStatus->mode;
     uint8_t ly              = *pPpuState->lcdRegisters.pLy;
     uint16_t lcdDotCounter  = pPpuState->dotCounter;
@@ -3305,6 +3331,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
+    GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
 
     triggerPendingInterrupts( pCpuState, pMemoryMapper );
 
@@ -3339,6 +3366,14 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     if( handleInput( pMemoryMapper, pEmulatorInstance->joypadState ) )
     {
         triggerInterrupt( pCpuState, JoypadInterrupt );
+    }
+
+    //FK: LCD Control
+    if( pMemoryMapper->lastAddressWrittenTo == 0xFF40 )
+    {
+        GBLcdControl lcdControlValue;
+        memcpy(&lcdControlValue, &pMemoryMapper->lastValueWritten, sizeof(GBLcdControl) );
+        updatePPULcdControl( pPpuState, lcdControlValue );
     }
 
     return cycleCost;
