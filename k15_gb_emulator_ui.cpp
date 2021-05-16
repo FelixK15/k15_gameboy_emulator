@@ -376,16 +376,17 @@ void doInstructionHistoryView( GBEmulatorInstance* pEmulatorInstance )
         return;
     }
 
-    if( !ImGui::BeginTable("Opcode Table", 4, ImGuiTableFlags_BordersH ) )
+    if( !ImGui::BeginTable("Opcode Table", 5, ImGuiTableFlags_BordersH ) )
     {
         ImGui::EndTable();
         return;
     }
 
-    ImGui::TableSetupColumn("Address",      ImGuiTableColumnFlags_WidthFixed, 40.0f);
-    ImGui::TableSetupColumn("Opcode",       ImGuiTableColumnFlags_WidthFixed, 100.0f);
-    ImGui::TableSetupColumn("Bytes",        ImGuiTableColumnFlags_WidthFixed, 100.0f);
-    ImGui::TableSetupColumn("Cycle Count",  ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn("Address",              ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn("Opcode",               ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("Bytes",                ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("Cycle Count",          ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn("CPU Register State",   ImGuiTableColumnFlags_WidthFixed, 400.0f);
 
     ImGuiListClipper clipper;
     clipper.Begin( pEmulatorInstance->gbDebug.opcodeHistorySize );
@@ -422,6 +423,15 @@ void doInstructionHistoryView( GBEmulatorInstance* pEmulatorInstance )
             {
                 ImGui::Text("%d/%d", pOpcode->cycleCosts[0], pOpcode->cycleCosts[1]);
             }
+            ImGui::TableNextColumn();
+
+            ImGui::Text("AF: %04hx BC: %04hx DE: %04hx HL: %04hx SP: %04hx", 
+                pOpcodeHistoryElement->registers.AF,
+                pOpcodeHistoryElement->registers.BC,
+                pOpcodeHistoryElement->registers.DE,
+                pOpcodeHistoryElement->registers.HL,
+                pOpcodeHistoryElement->registers.SP);
+
             ImGui::TableNextColumn();
         }
     }

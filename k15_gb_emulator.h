@@ -92,66 +92,67 @@ struct GBCpuFlags
     };
 };
 
+struct GBCpuRegisters
+{
+    union
+    {
+        struct
+        {
+            GBCpuFlags  F;
+            uint8_t     A;
+        };
+
+        uint16_t AF;
+    };
+
+    union
+    {
+        struct
+        {
+            uint8_t C;
+            uint8_t B;
+        };
+
+        uint16_t BC;
+    };
+
+    union
+    {
+        struct
+        {
+            uint8_t E;
+            uint8_t D;
+        };
+
+        uint16_t DE;
+    };
+
+    union
+    {
+        struct
+        {
+            uint8_t L;
+            uint8_t H;
+        };
+
+        uint16_t HL;
+    };
+
+    uint16_t SP;
+};
+
 struct GBCpuState
 {
-    uint8_t* pIE;
-    uint8_t* pIF;
+    uint8_t*        pIE;
+    uint8_t*        pIF;
 
-    struct
-    {
-        union
-        {
-            struct
-            {
-                GBCpuFlags  F;
-                uint8_t     A;
-            };
+    GBCpuRegisters  registers;
 
-            uint16_t AF;
-        };
-
-        union
-        {
-            struct
-            {
-                uint8_t C;
-                uint8_t B;
-            };
-
-            uint16_t BC;
-        };
-
-        union
-        {
-            struct
-            {
-                uint8_t E;
-                uint8_t D;
-            };
-
-            uint16_t DE;
-        };
-
-        union
-        {
-            struct
-            {
-                uint8_t L;
-                uint8_t H;
-            };
-
-            uint16_t HL;
-        };
-
-        uint16_t SP;
-
-    } registers;
-
-    uint16_t lastOpcodeAddress;
-    uint16_t dmaAddress;
-    uint16_t programCounter;
-    uint8_t  dmaCycleCount;
-    uint8_t  lastOpcode;
+    uint16_t        lastOpcodeAddress;
+    uint16_t        dmaAddress;
+    uint16_t        programCounter;
+    uint8_t         dmaCycleCount;
+    uint8_t         lastOpcode;
     struct
     {
         uint8_t IME     : 1;
@@ -327,6 +328,7 @@ struct GBOpcodeHistoryElement
 {
     uint8_t         opcode;
     uint16_t        address;
+    GBCpuRegisters  registers;
 };
 
 struct GBEmulatorGBDebug
@@ -3322,8 +3324,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         memcpy(pEmulatorInstance->gbDebug.opcodeHistory, pEmulatorInstance->gbDebug.opcodeHistory + 1, sizeof(GBOpcodeHistoryElement) * (gbOpcodeHistoryBufferCapacity-1));
     }
 
-    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].address = opcodeAddress;
-    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].opcode = opcode;
+    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].address    = opcodeAddress;
+    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].opcode     = opcode;
+    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].registers  = pCpuState->registers;
     ++opcodeHistoryIndex;
 
     pEmulatorInstance->gbDebug.opcodeHistorySize = opcodeHistoryIndex;
