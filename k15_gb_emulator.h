@@ -2193,6 +2193,13 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
+        //LD SP, HL
+        case 0xF9:
+        {
+            pCpuState->registers.SP = pCpuState->registers.HL;
+            break;
+        }
+
         //JP nn
         case 0xC3:
         {
