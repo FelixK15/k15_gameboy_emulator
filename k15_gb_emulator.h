@@ -1063,6 +1063,7 @@ void resetEmulatorInstance(GBEmulatorInstance* pEmulatorInstance)
         mapRomMemory( pMemoryMapper, pMemoryMapper->pRomMemoryBaseAddress );
     }
 
+    pEmulatorInstance->gbDebug.continueExecution     = 1;
     pEmulatorInstance->joypadState.actionButtonMask  = 0;
     pEmulatorInstance->joypadState.dpadButtonMask    = 0;
 
@@ -1852,6 +1853,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x54:
         case 0x55:
         case 0x56:
+        case 0x57:
         case 0x58:
         case 0x59:
         case 0x5A:
@@ -2023,6 +2025,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     pTarget         = &pCpuState->registers.D;
                     value           = pCpuState->registers.L;
                     break;
+                //LD D, A
+                case 0x57:
+                    pTarget         = &pCpuState->registers.D;
+                    value           = pCpuState->registers.A;
+                    break;
                 //LD B, (HL)
                 case 0x56:
                     pTarget         = &pCpuState->registers.D;
@@ -2144,7 +2151,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                 case 0x6F:
                     pTarget         = &pCpuState->registers.L;
                     value           = pCpuState->registers.A;
-                    
+                    break;
                 //LD (HL), B
                 case 0x70:
                     pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
@@ -2805,7 +2812,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     break;
                 //SUB A, #
-                case 0xC6:
+                case 0xD6:
                     operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
                     break;
             }
@@ -3004,23 +3011,23 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
                 //ADC C
                 case 0x89:
-                    value = pCpuState->registers.B;
+                    value = pCpuState->registers.C;
                     break;
                 //ADC D
                 case 0x8A:
-                    value = pCpuState->registers.B;
+                    value = pCpuState->registers.D;
                     break;
                 //ADC E
                 case 0x8B:
-                    value = pCpuState->registers.B;
+                    value = pCpuState->registers.E;
                     break;
                 //ADC H
                 case 0x8C:
-                    value = pCpuState->registers.B;
+                    value = pCpuState->registers.H;
                     break;
                 //ADC L
                 case 0x8D:
-                    value = pCpuState->registers.B;
+                    value = pCpuState->registers.L;
                     break;
                 //ADC (HL)
                 case 0x8E:
@@ -3208,6 +3215,9 @@ void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         if( pCpuState->dmaCycleCount >= gbDMACycleCount )
         {
             pCpuState->flags.dma = 0;
+
+            //FK: Copy sprite attributes from dma address to OAM h
+            memcpy( pMemoryMapper->pSpriteAttributes, pMemoryMapper->pBaseAddress + pCpuState->dmaAddress, gbOAMSizeInBytes );
         }
     }
 
@@ -3217,9 +3227,7 @@ void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         //FK: Cpu can only write to HRAM during DMA transfer
         pCpuState->flags.dma = 1;
 
-        //FK: Copy sprite attributes from dma address to OAM 
-        const uint16_t dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
-        memcpy( pMemoryMapper->pSpriteAttributes, pMemoryMapper->pBaseAddress + dmaAddress, gbOAMSizeInBytes );
+        pCpuState->dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
 
         //FK: Count up to 160 cycles for the dma flag to be reset
         pCpuState->dmaCycleCount = 0;
