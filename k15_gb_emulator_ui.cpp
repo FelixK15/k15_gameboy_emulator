@@ -108,11 +108,10 @@ void doGbCpuDebugView( GBEmulatorInstance* pEmulatorInstance )
     }
 
     static bool breakAtPCAddress = false;
-    if( ImGui::Checkbox("Break at program counter address", &breakAtPCAddress) )
-    {
-        const uint16_t breakpointAddress = parseStringToHex16Bit( debugViewState.gbCpu.programCounterHexInput );
-		setEmulatorBreakpoint( pEmulatorInstance, breakpointAddress );
-    }
+    ImGui::Checkbox("Break at program counter address", &breakAtPCAddress);
+    const uint16_t breakpointAddress = parseStringToHex16Bit( debugViewState.gbCpu.programCounterHexInput );
+    setEmulatorBreakpoint( pEmulatorInstance, breakAtPCAddress, breakpointAddress );
+    
     ImGui::SameLine();
     ImGui::InputText( "", debugViewState.gbCpu.programCounterHexInput, sizeof( debugViewState.gbCpu.programCounterHexInput ), hexTextInputFlags );
 

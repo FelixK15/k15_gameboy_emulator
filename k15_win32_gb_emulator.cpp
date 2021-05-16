@@ -39,6 +39,8 @@ uint8_t* pGameboyVideoBuffer 					= nullptr;
 uint8_t directionInput							= 0x0F;
 uint8_t buttonInput								= 0x0F;
 
+GBEmulatorInstance* pEmulatorInstance 			= nullptr;
+
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
 
 void allocateDebugConsole()
@@ -60,7 +62,7 @@ void K15_WindowClosed(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	GBEmulatorJoypad joypad;
+	GBEmulatorJoypadState joypadState;
 
 	if( message == WM_KEYDOWN )
 	{
@@ -69,29 +71,29 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 			switch(wparam)
 			{
 				case VK_DOWN:
-					joypad.down = 1;
+					joypadState.down = 1;
 					break;
 				case VK_UP:
-					joypad.up = 1;
+					joypadState.up = 1;
 					break;
 				case VK_LEFT:
-					joypad.left = 1;
+					joypadState.left = 1;
 					break;
 				case VK_RIGHT:
-					joypad.right = 1;
+					joypadState.right = 1;
 					break;
 
 				case VK_CONTROL:
-					joypad.start = 1;
+					joypadState.start = 1;
 					break;
 				case VK_MENU:
-					joypad.select = 1;
+					joypadState.select = 1;
 					break;
 				case 'A':
-					joypad.a = 1;
+					joypadState.a = 1;
 					break;
 				case 'S':
-					joypad.b = 1;
+					joypadState.b = 1;
 					break;
 
 				case VK_F1:
@@ -105,33 +107,34 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		switch(wparam)
 		{
 			case VK_DOWN:
-				joypad.down = 0;
+				joypadState.down = 0;
 				break;
 			case VK_UP:
-				joypad.up = 0;
+				joypadState.up = 0;
 				break;
 			case VK_LEFT:
-				joypad.left = 0;
+				joypadState.left = 0;
 				break;
 			case VK_RIGHT:
-				joypad.right = 0;
+				joypadState.right = 0;
 				break;
 
 			case VK_CONTROL:
-				joypad.start = 0;
+				joypadState.start = 0;
 				break;
 			case VK_MENU:
-				joypad.select = 0;
+				joypadState.select = 0;
 				break;
 			case 'A':
-				joypad.a = 0;
+				joypadState.a = 0;
 				break;
 			case 'S':
-				joypad.b = 0;
+				joypadState.b = 0;
 				break;
 		}
 	}
 
+	setEmulatorJoypadState( pEmulatorInstance, joypadState );
 }
 
 void K15_MouseButtonInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
@@ -283,8 +286,6 @@ void renderGbFrameBuffer(const uint8_t* pFrameBuffer)
 		}
 	}
 }
-
-GBEmulatorInstance* pEmulatorInstance = nullptr;
 
 void setup(HWND hwnd)
 {	

@@ -44,16 +44,17 @@ static constexpr uint8_t    gbFrameBufferScanlineSizeInBytes   = gbHorizontalRes
 static constexpr size_t     gbFrameBufferSizeInBytes           = gbFrameBufferScanlineSizeInBytes * gbVerticalResolutionInPixels;
 static constexpr size_t     gbMappedMemorySizeInBytes          = 0x10000;
 
-struct GBEmulatorJoypad
+struct GBEmulatorJoypadState
 {
     union
     {
         struct 
         {
-            uint8_t a       : 1;
-            uint8_t b       : 1;
-            uint8_t select  : 1;
-            uint8_t start   : 1;
+            uint8_t a           : 1;
+            uint8_t b           : 1;
+            uint8_t select      : 1;
+            uint8_t start       : 1;
+            uint8_t _padding    : 4;
         };
 
         uint8_t actionButtonMask = 0;
@@ -63,10 +64,11 @@ struct GBEmulatorJoypad
     {
         struct 
         {
-            uint8_t right   : 1;
-            uint8_t left    : 1;
-            uint8_t up      : 1;
-            uint8_t down    : 1;
+            uint8_t right       : 1;
+            uint8_t left        : 1;
+            uint8_t up          : 1;
+            uint8_t down        : 1;
+            uint8_t _padding    : 4;
         };
 
         uint8_t dpadButtonMask = 0;
@@ -361,7 +363,7 @@ struct GBEmulatorInstance
     GBPpuState*             pPpuState;
     GBMemoryMapper*         pMemoryMapper;
 
-    GBEmulatorJoypad        joypad;
+    GBEmulatorJoypadState   joypadState;
     GBEmulatorInstanceFlags flags;
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
     GBEmulatorGBDebug       gbDebug;
@@ -768,6 +770,10 @@ void dumpBinData( const char* pFileName, void* pData, size_t sizeInBytes )
 
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
+    if( addressOffset == 0xFF80 )
+    {
+        breakPointHook();
+    }
     pMemoryMapper->lastAddressReadFrom = addressOffset;
     return pMemoryMapper->pBaseAddress[addressOffset];
 }
@@ -787,9 +793,24 @@ uint8_t* getMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset
 
 void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint8_t value )
 {
+    if( addressOffset == 0xFF80) 
+    {
+        breakPointHook();
+    }
     pMemoryMapper->lastValueWritten     = value;
     pMemoryMapper->lastAddressWrittenTo = addressOffset;
-    pMemoryMapper->pBaseAddress[addressOffset] = value;
+
+    //FK: Joypad input
+    if( addressOffset == 0xFF00 )
+    {
+        const uint8_t currentValue = pMemoryMapper->pBaseAddress[addressOffset];
+        pMemoryMapper->pBaseAddress[addressOffset] = ( value & 0xF0 ) | ( currentValue & 0x0F );
+    }
+    else
+    {
+        pMemoryMapper->pBaseAddress[addressOffset] = value;
+    }
+
 
     //FK: Echo 8kB internal Ram
     if( addressOffset >= 0xC000 && addressOffset < 0xDE00 )
@@ -930,19 +951,22 @@ uint8_t shiftRightKeepMSB( GBCpuState* pCpuState, uint8_t value )
 
 uint8_t swapNibbles( GBCpuState* pCpuState, uint8_t value )
 {
-    value = ( value >> 4) | ( value << 4 );
-    return value;
-}
+    const uint8_t highNibble = value & 0xF0;
+    const uint8_t lowNibble  = value & 0x0F;
+    value = lowNibble << 4 | highNibble << 0;
 
-uint16_t swapBytesOf16BitValue( uint16_t value )
-{
-    value = ( value >> 8 ) | ( value << 8 );
+    pCpuState->registers.F.Z = (value == 0);
+    pCpuState->registers.F.C = 0;
+    pCpuState->registers.F.N = 0;
+    pCpuState->registers.F.H = 0;
+
     return value;
 }
 
 void testBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
 {
-    pCpuState->registers.F.Z = (value >> bitIndex);
+    const uint8_t bitValue = (value >> bitIndex) & 0x1;
+    pCpuState->registers.F.Z = bitValue == 0;
     pCpuState->registers.F.N = 0;
     pCpuState->registers.F.H = 1;
 }
@@ -1040,14 +1064,17 @@ void resetEmulatorInstance(GBEmulatorInstance* pEmulatorInstance)
         mapRomMemory( pMemoryMapper, pMemoryMapper->pRomMemoryBaseAddress );
     }
 
-    pEmulatorInstance->joypad.actionButtonMask  = 0;
-    pEmulatorInstance->joypad.dpadButtonMask    = 0;
+    pEmulatorInstance->joypadState.actionButtonMask  = 0;
+    pEmulatorInstance->joypadState.dpadButtonMask    = 0;
+
+    //FK: Reset joypad value
+    pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF00] = 0x0F;
 }
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-void setEmulatorBreakpoint(GBEmulatorInstance* pEmulatorInstance, uint16_t breakpointAddress)
+void setEmulatorBreakpoint(GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress)
 {
-    pEmulatorInstance->gbDebug.pauseAtBreakpoint = 1;
+    pEmulatorInstance->gbDebug.pauseAtBreakpoint = pauseAtBreakpoint;
     pEmulatorInstance->gbDebug.breakpointAddress = breakpointAddress;
 }
 
@@ -1467,7 +1494,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
     uint8_t* pTarget = nullptr;
     uint8_t target = (opcode & 0x0F);
     const uint8_t operation = ( opcode & 0xF0 );
-    uint8_t bitIndex = (operation%0x40) * 2 + (target > 0x07);
+    uint8_t bitIndex = ((operation%0x40)/0x10) * 2 + (target > 0x07);
     target = target > 0x07 ? target - 0x07 : target;
     switch( target )
     {
@@ -1775,7 +1802,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        //LD c,a
+        //LD c, a
         case 0x4F:
         {
             pCpuState->registers.C = pCpuState->registers.A;
@@ -3203,32 +3230,59 @@ void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
     }
 }
 
-void handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypad joypad )
+uint8_t fixJoypadState( uint8_t joypadState )
+{
+    //FK: disallow simultaneous input of opposite dpad values
+    const uint8_t leftAndRight = joypadState & (1<<0) | joypadState & (1<<1);
+    const uint8_t upAndDown = ( joypadState & (1<<2) | joypadState & (1<<3) ) << 2;
+
+    if( leftAndRight == 0 )
+    {
+        joypadState |= 0x3; //FK: ignore both left and right
+    }
+
+    if( upAndDown == 0 )
+    {
+        joypadState |= 0xC; //FK: ignore both up and down
+    }
+
+    return joypadState;
+}
+
+bool handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypadState joypadState )
 {
     if( pMemoryMapper->lastAddressWrittenTo == 0xFF00 )
     {
         //FK: bit 7&6 aren't used so we'll set them (mimicing bgb)
-        const uint8_t joypadValue               = 0xC0 | pMemoryMapper->lastValueWritten & 0x30;
-        const uint8_t selectActionButtons       = ( joypadValue & (1 << 5) ) == 0;
-        const uint8_t selectDirectionButtons    = ( joypadValue & (1 << 4) ) == 0;
-
+        const uint8_t queryJoypadValue          = pMemoryMapper->pBaseAddress[0xFF00];
+        const uint8_t selectActionButtons       = ( queryJoypadValue & (1 << 5) ) == 0;
+        const uint8_t selectDirectionButtons    = ( queryJoypadValue & (1 << 4) ) == 0;
+        const uint8_t prevJoypadState           = ( queryJoypadValue & 0x0F ); 
+        uint8_t newJoypadState                  = 0;
         //FK: Write joypad values to 0xFF00
         if( selectActionButtons )
         {
             //FK: Flip button mask since in our world bit set = input pressed. It's reversed in the gameboy world, though
-            pMemoryMapper->pBaseAddress[0xFF00] =( joypadValue & 0xF0 ) | ~joypad.actionButtonMask;
+            newJoypadState = ~joypadState.actionButtonMask & 0x0F;
         }
         else if( selectDirectionButtons )
         {
             //FK: Flip button mask since in our world bit set = input pressed. It's reversed in the gameboy world, though
-            pMemoryMapper->pBaseAddress[0xFF00] =( joypadValue & 0xF0 ) | ~joypad.dpadButtonMask;
+            newJoypadState = ~joypadState.dpadButtonMask & 0x0F;
         }
+
+        newJoypadState = fixJoypadState( newJoypadState );
+        pMemoryMapper->pBaseAddress[0xFF00] = 0xC0 | ( queryJoypadValue & 0x30 ) | newJoypadState;
+
+        return prevJoypadState != newJoypadState;
     }
+
+    return 0;
 }
 
-void setJoypad( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypad joypad )
+void setEmulatorJoypadState( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypadState joypadState )
 {
-    pEmulatorInstance->joypad = joypad;
+    pEmulatorInstance->joypadState = joypadState;
 }
 
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
@@ -3263,8 +3317,12 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
     const uint8_t cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
     checkDMAState( pCpuState, pMemoryMapper, cycleCost ); 
-    handleInput( pMemoryMapper, pEmulatorInstance->joypad );
     tickPPU( pCpuState, pEmulatorInstance->pPpuState, cycleCost );
+
+    if( handleInput( pMemoryMapper, pEmulatorInstance->joypadState ) )
+    {
+        triggerInterrupt( pCpuState, JoypadInterrupt );
+    }
 
     return cycleCost;
 }
@@ -3283,23 +3341,19 @@ void runEmulator( GBEmulatorInstance* pInstance )
         pInstance->gbDebug.continueExecution    = 0;
         pInstance->gbDebug.pauseExecution       = 0;
     }
-    else if( pInstance->gbDebug.pauseAtBreakpoint && pInstance->gbDebug.breakpointAddress == pInstance->pCpuState->programCounter )
-    {
-        pInstance->gbDebug.pauseExecution = 1;
-    }
 
 	if( pInstance->gbDebug.runForOneInstruction )
 	{
-		const uint8_t cycleCount = runSingleInstruction( pInstance );
-		totalCycleCount += cycleCount;
-		
-		if( totalCycleCount >= gbCyclesPerFrame )
-		{
+        const uint8_t cycleCount = runSingleInstruction( pInstance );
+        totalCycleCount += cycleCount;
+        
+        if( totalCycleCount >= gbCyclesPerFrame )
+        {
             pInstance->flags.vblank = 1;
-			totalCycleCount -= gbCyclesPerFrame;
-		}
+            totalCycleCount -= gbCyclesPerFrame;
+        }
 
-		totalCycleCount = totalCycleCount + cycleCount % gbCyclesPerFrame;
+        totalCycleCount = totalCycleCount + cycleCount % gbCyclesPerFrame;
         pInstance->gbDebug.runForOneInstruction = 0;
 	}
     else
@@ -3319,6 +3373,12 @@ void runEmulator( GBEmulatorInstance* pInstance )
     {
         const uint8_t cycleCount = runSingleInstruction( pInstance );
         totalCycleCount += cycleCount;
+
+        if( pInstance->gbDebug.pauseAtBreakpoint && pInstance->gbDebug.breakpointAddress == pInstance->pCpuState->programCounter )
+        {
+            pInstance->gbDebug.pauseExecution = 1;
+            return;
+        }
     }
 
     pInstance->flags.vblank = 1;
