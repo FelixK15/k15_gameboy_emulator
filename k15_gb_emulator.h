@@ -96,7 +96,6 @@ struct GBCpuState
 {
     uint8_t* pIE;
     uint8_t* pIF;
-    uint8_t* pStack;
 
     struct
     {
@@ -1495,7 +1494,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
     uint8_t target = (opcode & 0x0F);
     const uint8_t operation = ( opcode & 0xF0 );
     uint8_t bitIndex = ((operation%0x40)/0x10) * 2 + (target > 0x07);
-    target = target > 0x07 ? target - 0x07 : target;
+    target = target > 0x07 ? target - 0x08 : target;
     switch( target )
     {
         case 0x00:
