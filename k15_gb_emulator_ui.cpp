@@ -87,33 +87,33 @@ void doGbCpuDebugView( GBEmulatorInstance* pEmulatorInstance )
 
     if( ImGui::Button("Reset emulator") )
     {
-        resetEmulatorInstance(pEmulatorInstance);
+        resetGBEmulatorInstance(pEmulatorInstance);
     }
 
     if( ImGui::Button("Pause execution") )
     {
-        pauseEmulatorExecution( pEmulatorInstance );
+        pauseGBEmulatorInstanceExecution( pEmulatorInstance );
     }
 
     if( ImGui::Button("Continue execution") )
     {
-        continueEmulatorExecution( pEmulatorInstance );
+        continueGBEmulatorInstanceExecution( pEmulatorInstance );
     }
 
     if( ImGui::Button("Execute next instruction") )
     {
-        runEmulatorForOneInstruction( pEmulatorInstance );
+        runGBEmulatorInstanceForOneInstruction( pEmulatorInstance );
     }
 
     if( ImGui::Button("Execute single frame") )
     {
-        runEmulatorForOneFrame( pEmulatorInstance );
+        runGBEmulatorInstanceForOneFrame( pEmulatorInstance );
     }
 
     static bool breakAtPCAddress = false;
     ImGui::Checkbox("Break at program counter address", &breakAtPCAddress);
     const uint16_t breakpointAddress = parseStringToHex16Bit( debugViewState.gbCpu.programCounterHexInput );
-    setEmulatorBreakpoint( pEmulatorInstance, breakAtPCAddress, breakpointAddress );
+    setGBEmulatorInstanceBreakpoint( pEmulatorInstance, breakAtPCAddress, breakpointAddress );
     
     ImGui::SameLine();
     ImGui::InputText( "", debugViewState.gbCpu.programCounterHexInput, sizeof( debugViewState.gbCpu.programCounterHexInput ), hexTextInputFlags );
@@ -328,11 +328,11 @@ void doEmulatorStateSaveLoadView( GBEmulatorInstance* pEmulatorInstance )
 
         if( saveIndex != ~0 )
         {
-            const size_t stateSaveMemorySizeInBytes = calculateEmulatorStateSizeInBytes( pEmulatorInstance );
+            const size_t stateSaveMemorySizeInBytes = calculateGBEmulatorStateSizeInBytes( pEmulatorInstance );
             uint8_t* pSaveStateMemory = ( uint8_t* )malloc( stateSaveMemorySizeInBytes );
             if( pSaveStateMemory != nullptr )
             {
-                storeEmulatorState( pEmulatorInstance, pSaveStateMemory, stateSaveMemorySizeInBytes );
+                storeGBEmulatorInstanceState( pEmulatorInstance, pSaveStateMemory, stateSaveMemorySizeInBytes );
 
                 char fileNameBuffer[64];
                 sprintf( fileNameBuffer, "state_%d.k15_gb_state.bin", saveIndex );
@@ -388,7 +388,7 @@ void doEmulatorStateSaveLoadView( GBEmulatorInstance* pEmulatorInstance )
                     fread( pStateContent, 1, fileSizeInBytes, pStateFileHandle );
                     fclose( pStateFileHandle );
 
-                    loadEmulatorState( pEmulatorInstance, pStateContent );
+                    loadGBEmulatorInstanceState( pEmulatorInstance, pStateContent );
                     free( pStateContent );
                 }
             }

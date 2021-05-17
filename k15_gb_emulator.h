@@ -445,7 +445,7 @@ size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySi
     return compressedMemorySizeInBytes;
 }
 
-size_t calculateEmulatorStateSizeInBytes( const GBEmulatorInstance* pEmulatorInstance )
+size_t calculateGBEmulatorStateSizeInBytes( const GBEmulatorInstance* pEmulatorInstance )
 {
     const size_t compressedVRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pVideoRAM,            0x2000 );
     const size_t compressedLRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pLowRam,              0x2000 );
@@ -500,7 +500,7 @@ size_t compressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource, si
     return compressedMemorySizeInBytes;
 }
 
-void storeEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t* pStateMemory, size_t stateMemorySizeInBytes )
+void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, uint8_t* pStateMemory, size_t stateMemorySizeInBytes )
 {
     const GBCpuState* pCpuState         = pEmulatorInstance->pCpuState;
     const GBPpuState* pPpuState         = pEmulatorInstance->pPpuState;
@@ -556,7 +556,7 @@ size_t uncompressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource )
     return compressedMemorySizeInBytes;
 }
 
-bool loadEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pStateMemory )
+bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pStateMemory )
 {
     uint32_t fourCC;
     memcpy( &fourCC, pStateMemory, sizeof( gbStateFourCC ) );
@@ -874,13 +874,13 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
 }
 
-size_t calculateEmulatorInstanceMemoryRequirementsInBytes()
+size_t calculateGBEmulatorInstanceMemoryRequirementsInBytes()
 {
     const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + sizeof(GBMemoryMapper) + sizeof(GBPpuState) + sizeof(GBTimerState) + gbMappedMemorySizeInBytes + gbFrameBufferSizeInBytes;
     return memoryRequirementsInBytes;
 }
 
-void resetEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
+void resetGBEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
 {
     resetMemoryMapper(pEmulatorInstance->pMemoryMapper );
     initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
@@ -902,34 +902,34 @@ void resetEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
 }
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-void setEmulatorBreakpoint( GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress )
+void setGBEmulatorInstanceBreakpoint( GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress )
 {
     pEmulatorInstance->gbDebug.pauseAtBreakpoint = pauseAtBreakpoint;
     pEmulatorInstance->gbDebug.breakpointAddress = breakpointAddress;
 }
 
-void continueEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
+void continueGBEmulatorInstanceExecution( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->gbDebug.continueExecution = 1;
 }
 
-void pauseEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
+void pauseGBEmulatorInstanceExecution( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->gbDebug.pauseExecution = 1;
 }
 
-void runEmulatorForOneInstruction( GBEmulatorInstance* pEmulatorInstance )
+void runGBEmulatorInstanceForOneInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->gbDebug.runForOneInstruction = 1;
 }
 
-void runEmulatorForOneFrame( GBEmulatorInstance* pEmulatorInstance )
+void runGBEmulatorInstanceForOneFrame( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->gbDebug.runSingleFrame = 1;
 }
 #endif
 
-GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
+GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 {
     GBEmulatorInstance* pEmulatorInstance = (GBEmulatorInstance*)pEmulatorInstanceMemory;
     pEmulatorInstance->pCpuState     = (GBCpuState*)(pEmulatorInstance + 1);
@@ -954,16 +954,11 @@ GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     memset( pEmulatorInstance->gbDebug.opcodeHistory, 0, sizeof( pEmulatorInstance->gbDebug.opcodeHistory ) );
 #endif
 
-    resetEmulatorInstance(pEmulatorInstance);
+    resetGBEmulatorInstance(pEmulatorInstance);
     return pEmulatorInstance;
 }
 
-uint8_t* getVideoRam( GBEmulatorInstance* pEmulator)
-{
-    return pEmulator->pPpuState->pBackgroundOrWindowTileIds[0];
-}
-
-void loadRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
+void loadGBEmulatorInstanceRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
 {
     mapRomMemory(pEmulator->pMemoryMapper, pRomMemory);
 }
@@ -3393,7 +3388,7 @@ bool handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypadState joypadSta
     return 0;
 }
 
-void setEmulatorJoypadState( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypadState joypadState )
+void setGBEmulatorInstanceJoypadState( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypadState joypadState )
 {
     pEmulatorInstance->joypadState = joypadState;
 }
@@ -3457,7 +3452,62 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     return cycleCost;
 }
 
-void runEmulator( GBEmulatorInstance* pInstance )
+void convertGBFrameBufferToRGB8Buffer( uint8_t* pRGBFrameBuffer, const uint8_t* pGBFrameBuffer)
+{
+	//FK: greenish hue of gameboy lcd
+	constexpr float gbRGBMapping[3] = {
+		(float)0xB0,
+		(float)0xCE,
+		(float)0x48,
+	};
+
+	const float pixelIntensity[4] = {
+		1.0f, 
+		0.75f,
+		0.5f,
+		0.25f
+	};
+
+	int x = 0;
+	int y = 0;
+
+	for( size_t y = 0; y < gbVerticalResolutionInPixels; ++y )
+	{
+		for( size_t x = 0; x < gbHorizontalResolutionInPixels; x += 4 )
+		{
+			const size_t frameBufferPixelIndex 	= (x + y*gbHorizontalResolutionInPixels)/4;
+			const uint8_t pixels	 			= pGBFrameBuffer[frameBufferPixelIndex];
+			
+			for( uint8_t pixelIndex = 0; pixelIndex < 4; ++pixelIndex )
+			{
+				const uint8_t pixelValue = pixels >> ( ( 3 - pixelIndex ) * 2 ) & 0x3;
+
+				//FK: Map gameboy pixels to rgb pixels
+				const float intensity = pixelIntensity[ pixelValue ];
+				const float r = intensity * gbRGBMapping[0];
+				const float g = intensity * gbRGBMapping[1];
+				const float b = intensity * gbRGBMapping[2];
+
+				const size_t videoBufferPixelIndex = ( x + pixelIndex + y * gbHorizontalResolutionInPixels ) * 3;
+				pRGBFrameBuffer[videoBufferPixelIndex + 0] = (uint8_t)r;
+				pRGBFrameBuffer[videoBufferPixelIndex + 1] = (uint8_t)g;
+				pRGBFrameBuffer[videoBufferPixelIndex + 2] = (uint8_t)b;
+			}
+		}
+	}
+}
+
+const uint8_t* getGBEmulatorInstanceFrameBuffer( GBEmulatorInstance* pInstance )
+{
+    return pInstance->pPpuState->pGBFrameBuffer;
+}
+
+bool hasGBEmulatorInstanceHitVBlank( GBEmulatorInstance* pInstance )
+{
+    return pInstance->flags.vblank;
+}
+
+void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
 {
 	static uint32_t totalCycleCount = 0;
 

@@ -135,7 +135,7 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		}
 	}
 
-	setEmulatorJoypadState( pEmulatorInstance, joypadState );
+	setGBEmulatorInstanceJoypadState( pEmulatorInstance, joypadState );
 }
 
 void K15_MouseButtonInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
@@ -243,51 +243,6 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 	return hwnd;
 }
 
-void renderGbFrameBuffer(const uint8_t* pFrameBuffer)
-{
-	//FK: greenish hue of gameboy lcd
-	constexpr float gbRGBMapping[3] = {
-		(float)0xB0,
-		(float)0xCE,
-		(float)0x48,
-	};
-
-	const float pixelIntensity[4] = {
-		1.0f, 
-		0.75f,
-		0.5f,
-		0.25f
-	};
-
-	int x = 0;
-	int y = 0;
-
-	for( size_t y = 0; y < gbVerticalResolutionInPixels; ++y )
-	{
-		for( size_t x = 0; x < gbHorizontalResolutionInPixels; x += 4 )
-		{
-			const size_t frameBufferPixelIndex 	= (x + y*gbHorizontalResolutionInPixels)/4;
-			const uint8_t pixels	 			= pFrameBuffer[frameBufferPixelIndex];
-			
-			for( uint8_t pixelIndex = 0; pixelIndex < 4; ++pixelIndex )
-			{
-				const uint8_t pixelValue = pixels >> ( ( 3 - pixelIndex ) * 2 ) & 0x3;
-
-				//FK: Map gameboy pixels to rgb pixels
-				const float intensity = pixelIntensity[ pixelValue ];
-				const float r = intensity * gbRGBMapping[0];
-				const float g = intensity * gbRGBMapping[1];
-				const float b = intensity * gbRGBMapping[2];
-
-				const size_t videoBufferPixelIndex = ( x + pixelIndex + y * gbHorizontalResolutionInPixels ) * 3;
-				pGameboyVideoBuffer[videoBufferPixelIndex + 0] = (uint8_t)r;
-				pGameboyVideoBuffer[videoBufferPixelIndex + 1] = (uint8_t)g;
-				pGameboyVideoBuffer[videoBufferPixelIndex + 2] = (uint8_t)b;
-			}
-		}
-	}
-}
-
 void setup(HWND hwnd)
 {	
 	PIXELFORMATDESCRIPTOR pfd =
@@ -345,10 +300,10 @@ void setup(HWND hwnd)
 		return;
 	}
 
-	const size_t emulatorMemorySizeInBytes = calculateEmulatorInstanceMemoryRequirementsInBytes();
+	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorInstanceMemoryRequirementsInBytes();
 
 	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
-	pEmulatorInstance = createEmulatorInstance(pEmulatorInstanceMemory);
+	pEmulatorInstance = createGBEmulatorInstance(pEmulatorInstanceMemory);
 
 	uint8_t* pRomData = (uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
 
@@ -373,7 +328,7 @@ void setup(HWND hwnd)
 	ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplOpenGL2_Init();
 
-	loadRom( pEmulatorInstance, pRomData );
+	loadGBEmulatorInstanceRom( pEmulatorInstance, pRomData );
 }
 
 void doFrame(HWND hwnd)
@@ -528,11 +483,13 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		}
 
 		QueryPerformanceCounter(&start);
-		runEmulator( pEmulatorInstance );
+		runGBEmulatorInstance( pEmulatorInstance );
 
-		if( pEmulatorInstance->flags.vblank )
+		if( hasGBEmulatorInstanceHitVBlank( pEmulatorInstance ) )
 		{
-			renderGbFrameBuffer( pEmulatorInstance->pPpuState->pGBFrameBuffer );
+			const uint8_t* pFrameBuffer = getGBEmulatorInstanceFrameBuffer( pEmulatorInstance );
+			convertGBFrameBufferToRGB8Buffer( pGameboyVideoBuffer, pFrameBuffer );
+
 			//FK: GB frame finished, upload gb framebuffer to texture
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 		}
