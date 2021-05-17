@@ -299,6 +299,106 @@ void doMemoryStateView( GBEmulatorInstance* pEmulatorInstance )
     ImGui::End();
 }
 
+void doEmulatorStateSaveLoadView( GBEmulatorInstance* pEmulatorInstance )
+{
+    if( !ImGui::Begin( "Emulator State Load/Save View" ) )
+    {
+        ImGui::End();
+        return;
+    }
+
+    {
+        uint32_t saveIndex = ~0;
+        ImGui::Text("Save State");
+        ImGui::SameLine();
+        if( ImGui::Button("1##0") )
+        {
+            saveIndex = 1;
+        }
+        ImGui::SameLine();
+        if( ImGui::Button("2##0") )
+        {
+            saveIndex = 2;
+        }
+        ImGui::SameLine();
+        if( ImGui::Button("3##0") )
+        {
+            saveIndex = 3;
+        }
+
+        if( saveIndex != ~0 )
+        {
+            const size_t stateSaveMemorySizeInBytes = calculateEmulatorStateSizeInBytes( pEmulatorInstance );
+            uint8_t* pSaveStateMemory = ( uint8_t* )malloc( stateSaveMemorySizeInBytes );
+            if( pSaveStateMemory != nullptr )
+            {
+                storeEmulatorState( pEmulatorInstance, pSaveStateMemory, stateSaveMemorySizeInBytes );
+
+                char fileNameBuffer[64];
+                sprintf( fileNameBuffer, "state_%d.k15_gb_state.bin", saveIndex );
+
+                FILE* pStateFileHandle = fopen(fileNameBuffer, "wb");
+                if( pStateFileHandle != nullptr )
+                {
+                    fwrite( pSaveStateMemory, 1, stateSaveMemorySizeInBytes, pStateFileHandle );
+                    fclose( pStateFileHandle );
+                }
+
+                free( pSaveStateMemory );
+            }
+        }
+    }
+
+    {
+        uint32_t loadIndex = ~0;
+        ImGui::Text("Load State");
+        ImGui::SameLine();
+        if( ImGui::Button("1##1") )
+        {
+            loadIndex = 1;
+        }
+        ImGui::SameLine();
+        if( ImGui::Button("2##1") )
+        {
+            loadIndex = 2;
+        }
+        ImGui::SameLine();
+        if( ImGui::Button("3##1") )
+        {
+            loadIndex = 3;
+        }
+
+        if( loadIndex != ~0 )
+        {
+            char fileNameBuffer[64];
+            sprintf( fileNameBuffer, "state_%d.k15_gb_state.bin", loadIndex );
+
+            size_t fileSizeInBytes = 0;
+            FILE* pStateFileHandle = fopen(fileNameBuffer, "rb");
+            if( pStateFileHandle != nullptr )
+            {
+                //FK: File map would be better...
+                fseek( pStateFileHandle, 0, SEEK_END );
+                fileSizeInBytes = ftell( pStateFileHandle );
+                fseek( pStateFileHandle, 0, SEEK_SET );
+
+                uint8_t* pStateContent = (uint8_t*)malloc( fileSizeInBytes );
+                if( pStateContent != nullptr )
+                {
+                    fread( pStateContent, 1, fileSizeInBytes, pStateFileHandle );
+                    fclose( pStateFileHandle );
+
+                    loadEmulatorState( pEmulatorInstance, pStateContent );
+                    free( pStateContent );
+                }
+            }
+        }
+    }
+   
+
+    ImGui::End();
+}
+
 void doJoystickView( GBEmulatorInstance* pEmulatorInstance )
 {
     if( !ImGui::Begin( "Joypad View" ) )
@@ -493,6 +593,7 @@ void doUiFrame( GBEmulatorInstance* pEmulatorInstance )
     doCpuStateView( pEmulatorInstance );
     doPpuStateView( pEmulatorInstance );
     doMemoryStateView( pEmulatorInstance );
+    doEmulatorStateSaveLoadView( pEmulatorInstance );
     doEmulatorInstructionView();
 
     //FK: TODO

@@ -12,6 +12,8 @@
 #define Kbit(x) Kbyte(x)/8
 #define Mbit(x) Mbyte(x)/8
 
+#define FourCC(a, b, c, d) ((uint32_t)((a) << 0) | (uint32_t)((b) << 8) | (uint32_t)((c) << 16) | (uint32_t)((d) << 24))
+
 //FK: Compiler specific functions
 #ifdef _MSC_VER
 #   define breakPointHook() \
@@ -24,6 +26,7 @@ __asm\
 #   define debugBreak
 #endif
 
+static constexpr uint32_t   gbStateFourCC                      = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
 static constexpr uint32_t   gbCyclesPerFrame                   = 70224u;
 static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                    = 160u;
@@ -377,7 +380,6 @@ struct GBEmulatorState
     uint16_t            dmaAddress;
     uint8_t             dmaCycleCount;
     uint8_t             interruptEnableRegisters;
-    uint8_t*            pCompressedMemory;
 };
 
 size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySizeInBytes )
@@ -404,16 +406,17 @@ size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySi
     return compressedMemorySizeInBytes;
 }
 
-size_t getEmulatorStateSizeInBytes( const GBEmulatorInstance* pEmulatorInstance )
+size_t calculateEmulatorStateSizeInBytes( const GBEmulatorInstance* pEmulatorInstance )
 {
     const size_t compressedVRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pVideoRAM,            0x2000 );
     const size_t compressedLRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pLowRam,              0x2000 );
     const size_t compressedOAMSizeInBytes  = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pSpriteAttributes,    0x00A0 );
     const size_t compressedHRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pHighRam,             0x007F );
     const size_t compressedIOSizeInBytes   = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->IOPorts,              0x0080 );
-    const size_t stateSizeInBytes = sizeof(GBEmulatorState) + compressedVRAMSizeInBytes + 
-        compressedLRAMSizeInBytes + compressedOAMSizeInBytes + 
-        compressedHRAMSizeInBytes + compressedIOSizeInBytes;
+    const size_t stateSizeInBytes = sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) +
+        compressedVRAMSizeInBytes + compressedLRAMSizeInBytes + 
+        compressedOAMSizeInBytes + compressedHRAMSizeInBytes +
+        compressedIOSizeInBytes;
 
     return stateSizeInBytes;
 }
@@ -435,23 +438,21 @@ size_t compressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource, si
         }
         else
         {
-            compressedMemorySizeInBytes += sizeof(uint16_t); //FK: token counter
+            compressedMemorySizeInBytes += sizeof( uint16_t ); //FK: token counter
             compressedMemorySizeInBytes += 1; //FK: token
 
-            *pDestination++ = ( ( tokenCounter & 0xF0 ) >> 8 );
-            *pDestination++ = ( ( tokenCounter & 0x0F ) >> 0 );
-            *pDestination++ = token;
+            memcpy(pDestination, &tokenCounter, sizeof( uint16_t ) );
+
+            pDestination[2] = token;
+            pDestination += 3;
 
             token = pSource[offset];
             tokenCounter = 1;
         }
     }
 
-    //FK: write compressed memory size in bytes
-    pDestinationBaseAddress[0] = ( compressedMemorySizeInBytes >> 24 ) & 0xF;
-    pDestinationBaseAddress[1] = ( compressedMemorySizeInBytes >> 16 ) & 0xF;
-    pDestinationBaseAddress[2] = ( compressedMemorySizeInBytes >>  8 ) & 0xF;
-    pDestinationBaseAddress[3] = ( compressedMemorySizeInBytes >>  0 ) & 0xF;
+    //FK: write compressed memory size in bytes at the beginning of the memory block
+    memcpy( pDestinationBaseAddress, &compressedMemorySizeInBytes, sizeof( uint32_t ) );
 
     return compressedMemorySizeInBytes;
 }
@@ -470,29 +471,31 @@ void storeEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t* p
     state.programCounter                = pCpuState->programCounter;
     state.lcdDotCounter                 = pPpuState->dotCounter;
     state.interruptEnableRegisters      = pMemoryMapper->pBaseAddress[0xFFFF];
-    state.pCompressedMemory             = pStateMemory + sizeof( GBEmulatorState );
+   
+    uint8_t* pCompressedMemory = pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC );
     
     //FK: Store cartridge data as well...?
     size_t offset = 0;
-    offset += compressMemoryBlockRLE( state.pCompressedMemory + offset, pMemoryMapper->pVideoRAM,           0x2000 );
-    offset += compressMemoryBlockRLE( state.pCompressedMemory + offset, pMemoryMapper->pLowRam,             0x2000 );
-    offset += compressMemoryBlockRLE( state.pCompressedMemory + offset, pMemoryMapper->pSpriteAttributes,   0x00A0 );
-    offset += compressMemoryBlockRLE( state.pCompressedMemory + offset, pMemoryMapper->pHighRam,            0x007F );
-    offset += compressMemoryBlockRLE( state.pCompressedMemory + offset, pMemoryMapper->IOPorts,             0x0080 );
+    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pVideoRAM,           0x2000 );
+    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pLowRam,             0x2000 );
+    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pSpriteAttributes,   0x00A0 );
+    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pHighRam,            0x007F );
+    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->IOPorts,             0x0080 );
 
-    memcpy( pStateMemory, &state, sizeof( GBEmulatorState ) );
+    memcpy( pStateMemory + 0, &gbStateFourCC, sizeof( gbStateFourCC ) );
+    memcpy( pStateMemory + sizeof( gbStateFourCC ), &state, sizeof( GBEmulatorState ) );
 }
 
 size_t uncompressMemoryBlockRLE( uint8_t* pDesination, const uint8_t* pSource )
 {
-    const uint32_t compressedMemorySizeInBytes = ( (uint32_t)pSource[0] << 24 ) |
-                                                 ( (uint32_t)pSource[1] << 16 ) |
-                                                 ( (uint32_t)pSource[2] <<  8 ) |
-                                                 ( (uint32_t)pSource[3] <<  0 );
+    uint32_t compressedMemorySizeInBytes;
+    memcpy( &compressedMemorySizeInBytes, pSource, sizeof( uint32_t ) );
 
     for( size_t memoryIndex = 4; memoryIndex < compressedMemorySizeInBytes; )
     {
-        uint16_t tokenCount = ( (uint16_t)pSource[memoryIndex + 0] << 0xF ) | pSource[memoryIndex + 1];
+        uint16_t tokenCount;
+        memcpy( &tokenCount, pSource + memoryIndex, sizeof( uint16_t ) );
+
         const uint8_t token = pSource[memoryIndex + 2];
         memset( pDesination + memoryIndex, token, tokenCount );
 
@@ -502,14 +505,22 @@ size_t uncompressMemoryBlockRLE( uint8_t* pDesination, const uint8_t* pSource )
     return compressedMemorySizeInBytes;
 }
 
-void loadEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pStateMemory )
+bool loadEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pStateMemory )
 {
+    uint32_t fourCC;
+    memcpy( &fourCC, pStateMemory, sizeof( gbStateFourCC ) );
+
+    if( fourCC != gbStateFourCC )
+    {
+        return false;
+    }
+
     GBCpuState* pCpuState         = pEmulatorInstance->pCpuState;
     GBPpuState* pPpuState         = pEmulatorInstance->pPpuState;
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
 
     GBEmulatorState state;
-    memcpy( &state, pStateMemory, sizeof( GBEmulatorState ) );
+    memcpy( &state, pStateMemory + sizeof( gbStateFourCC ), sizeof( GBEmulatorState ) );
 
     pCpuState->programCounter = state.programCounter;
     pCpuState->registers      = state.cpuRegisters;
@@ -521,15 +532,16 @@ void loadEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pS
 
     pMemoryMapper->pBaseAddress[0xFFFF] = state.interruptEnableRegisters;
 
-    //FK: patch pointer
-    state.pCompressedMemory = ( uint8_t* )( pStateMemory + sizeof( GBEmulatorState ) );
+    const uint8_t* pCompressedMemory = ( uint8_t* )( pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) );
 
     size_t offset = 0;
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->pVideoRAM,          state.pCompressedMemory + offset );
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->pLowRam,            state.pCompressedMemory + offset );
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->pSpriteAttributes,  state.pCompressedMemory + offset );
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->pHighRam,           state.pCompressedMemory + offset );
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->IOPorts,            state.pCompressedMemory + offset );
+    offset += uncompressMemoryBlockRLE( pMemoryMapper->pVideoRAM,          pCompressedMemory + offset );
+    offset += uncompressMemoryBlockRLE( pMemoryMapper->pLowRam,            pCompressedMemory + offset );
+    offset += uncompressMemoryBlockRLE( pMemoryMapper->pSpriteAttributes,  pCompressedMemory + offset );
+    offset += uncompressMemoryBlockRLE( pMemoryMapper->pHighRam,           pCompressedMemory + offset );
+    offset += uncompressMemoryBlockRLE( pMemoryMapper->IOPorts,            pCompressedMemory + offset );
+
+    return true;
 }
 
 //FK: Quick and dirty debugging
