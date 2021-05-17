@@ -224,44 +224,6 @@ struct GBObjectAttributes
     GBObjectAttributeFlags  flags;
 };
 
-struct GBMemoryMapper
-{
-    const uint8_t*      pRomMemoryBaseAddress;
-    uint8_t*            pBaseAddress;
-    uint8_t*            pRomBank0;
-    uint8_t*            pRomBankSwitch;
-    uint8_t*            pVideoRAM;
-    uint8_t*            pRamBankSwitch;
-    uint8_t*            pLowRam;
-    uint8_t*            pLowRamEcho;
-    uint8_t*            pSpriteAttributes;
-    uint8_t*            IOPorts;
-    uint8_t*            pHighRam;
-    uint8_t*            pInterruptRegister;
-    uint16_t            lastAddressWrittenTo;
-    uint16_t            lastAddressReadFrom;
-    uint8_t             lastValueWritten;
-};
-
-struct GBRomHeader
-{
-    uint8_t         reserved[4];        
-    uint8_t         nintendoLogo[48];
-    uint8_t         gameTitle[16];
-    uint8_t         colorCompatibility;
-    uint8_t         licenseHigh;
-    uint8_t         licenseLow;
-    uint8_t         superGameBoyCompatibility;
-    GBCartridgeType cartridgeType;
-    uint8_t         romSize;
-    uint8_t         ramSize;
-    uint8_t         licenseCode;
-    uint8_t         maskRomVersion;
-    uint8_t         complementCheck;
-    uint8_t         checksumHigher;
-    uint8_t         checksumLower;
-};
-
 struct GBLcdControl
 {
     uint8_t bgAndWindowEnable       : 1;
@@ -317,6 +279,47 @@ struct GBPpuState
     uint8_t*            pGBFrameBuffer;
 };
 
+struct GBMemoryMapper
+{
+    const uint8_t*      pRomMemoryBaseAddress;
+    uint8_t*            pBaseAddress;
+    uint8_t*            pRomBank0;
+    uint8_t*            pRomBankSwitch;
+    uint8_t*            pVideoRAM;
+    uint8_t*            pRamBankSwitch;
+    uint8_t*            pLowRam;
+    uint8_t*            pLowRamEcho;
+    uint8_t*            pSpriteAttributes;
+    uint8_t*            IOPorts;
+    uint8_t*            pHighRam;
+    uint8_t*            pInterruptRegister;
+    uint16_t            lastAddressWrittenTo;
+    uint16_t            lastAddressReadFrom;
+    uint8_t             lastValueWritten;
+
+    GBLcdStatus         lcdStatus;  //FK: Mirror lcd status to check wether we can read from VRAM and/or OAM 
+    uint8_t             lcdEnabled; //FK: Mirror lcd enabled flag to check wether we can read from VRAM and/or OAM
+};
+
+struct GBRomHeader
+{
+    uint8_t         reserved[4];        
+    uint8_t         nintendoLogo[48];
+    uint8_t         gameTitle[16];
+    uint8_t         colorCompatibility;
+    uint8_t         licenseHigh;
+    uint8_t         licenseLow;
+    uint8_t         superGameBoyCompatibility;
+    GBCartridgeType cartridgeType;
+    uint8_t         romSize;
+    uint8_t         ramSize;
+    uint8_t         licenseCode;
+    uint8_t         maskRomVersion;
+    uint8_t         complementCheck;
+    uint8_t         checksumHigher;
+    uint8_t         checksumLower;
+};
+
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 struct GBEmulatorDebugSettings
 {
@@ -360,10 +363,23 @@ struct GBEmulatorInstanceFlags
     };
 };
 
+struct GBTimerState
+{
+    uint16_t    dividerCounter;     //FK: overflow = increment divider
+    uint16_t    counterValue;   //FK: how many cpu cycles until TIMA is increased?
+    uint16_t    counterTarget;
+    uint8_t     enableCounter;
+    uint8_t*    pDivider;
+    uint8_t*    pCounter;
+    uint8_t*    pModulo;
+    uint8_t*    pControl;
+};
+
 struct GBEmulatorInstance
 {
     GBCpuState*             pCpuState;
     GBPpuState*             pPpuState;
+    GBTimerState*           pTimerState;
     GBMemoryMapper*         pMemoryMapper;
 
     GBEmulatorJoypadState   joypadState;
@@ -380,9 +396,28 @@ struct GBEmulatorState
     uint32_t            lcdDotCounter;
     uint16_t            programCounter;
     uint16_t            dmaAddress;
+    uint16_t            timerCounterTarget;
+    uint16_t            timerCounterValue;
+    uint16_t            timerDividerCounter;
+    uint8_t             timerEnableCounter;
     uint8_t             dmaCycleCount;
     uint8_t             interruptEnableRegisters;
 };
+
+uint8_t isInVRAMAddressRange( const uint16_t address )
+{
+    return address >= 0x8000 && address < 0xA000;
+}
+
+uint8_t isInOAMAddressRange( const uint16_t address )
+{
+    return address >= 0xFE00 && address < 0xFEA0;
+}
+
+uint8_t isInCartridgeROMAddressRange( const uint16_t address )
+{
+    return address >= 0x0000 && address < 0x8000;
+}
 
 size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySizeInBytes )
 {
@@ -469,6 +504,7 @@ void storeEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t* p
 {
     const GBCpuState* pCpuState         = pEmulatorInstance->pCpuState;
     const GBPpuState* pPpuState         = pEmulatorInstance->pPpuState;
+    const GBTimerState* pTimerState     = pEmulatorInstance->pTimerState;
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
 
     GBEmulatorState state;
@@ -479,7 +515,11 @@ void storeEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t* p
     state.programCounter                = pCpuState->programCounter;
     state.lcdDotCounter                 = pPpuState->dotCounter;
     state.interruptEnableRegisters      = pMemoryMapper->pBaseAddress[0xFFFF];
-   
+    state.timerCounterTarget            = pTimerState->counterTarget;
+    state.timerCounterValue             = pTimerState->counterValue;
+    state.timerDividerCounter           = pTimerState->dividerCounter;
+    state.timerEnableCounter            = pTimerState->enableCounter;
+
     uint8_t* pCompressedMemory = pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC );
     
     //FK: Store cartridge data as well...?
@@ -528,6 +568,7 @@ bool loadEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pS
 
     GBCpuState* pCpuState         = pEmulatorInstance->pCpuState;
     GBPpuState* pPpuState         = pEmulatorInstance->pPpuState;
+    GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
 
     GBEmulatorState state;
@@ -540,6 +581,11 @@ bool loadEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pS
     pCpuState->dmaCycleCount  = state.dmaCycleCount;
 
     pPpuState->dotCounter = state.lcdDotCounter;
+
+    pTimerState->counterTarget  = state.timerCounterTarget;
+    pTimerState->counterValue   = state.timerCounterValue;
+    pTimerState->dividerCounter = state.timerDividerCounter;
+    pTimerState->enableCounter  = state.timerEnableCounter;
 
     pMemoryMapper->pBaseAddress[0xFFFF] = state.interruptEnableRegisters;
 
@@ -557,6 +603,16 @@ bool loadEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pS
 
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
+    if( isInVRAMAddressRange( addressOffset ) || 
+        isInOAMAddressRange( addressOffset ) )
+    {
+        if( pMemoryMapper->lcdEnabled && pMemoryMapper->lcdStatus.mode == 3 )
+        {
+            //FK: can't read from VRAM and/or OAM during lcd mode 3 
+            return 0xFF;
+        }
+    }
+
     pMemoryMapper->lastAddressReadFrom = addressOffset;
     return pMemoryMapper->pBaseAddress[addressOffset];
 }
@@ -579,9 +635,18 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
     pMemoryMapper->lastValueWritten     = value;
     pMemoryMapper->lastAddressWrittenTo = addressOffset;
 
-    if( addressOffset >= 0x0000 && addressOffset <= 0x8000 )
+    if( pMemoryMapper->lcdStatus.mode == 3 && pMemoryMapper->lcdEnabled )
     {
-        //FK: cartridge ROM
+        if( isInVRAMAddressRange( addressOffset ) || 
+            isInOAMAddressRange( addressOffset ) )
+        {
+            //FK: can't read from VRAM and/or OAM during lcd mode 3 
+            return;
+        }
+    }
+
+    if( isInCartridgeROMAddressRange( addressOffset ) )
+    {
         return;
     }
 
@@ -757,6 +822,18 @@ void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
     resetMemoryMapper( pMapper );
 }
 
+void initTimerState( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimerState )
+{
+    pTimerState->dividerCounter = 0;
+    pTimerState->counterValue   = 0;
+    pTimerState->counterTarget  = 0;
+    pTimerState->enableCounter  = 0;
+    pTimerState->pDivider       = pMemoryMapper->pBaseAddress + 0xFF04;
+    pTimerState->pCounter       = pMemoryMapper->pBaseAddress + 0xFF05;
+    pTimerState->pModulo        = pMemoryMapper->pBaseAddress + 0xFF06;
+    pTimerState->pControl       = pMemoryMapper->pBaseAddress + 0xFF07;
+}
+
 void clearGBFrameBuffer( uint8_t* pGBFrameBuffer )
 {
     memset( pGBFrameBuffer, 0, gbFrameBufferSizeInBytes );
@@ -768,7 +845,7 @@ void initPpuFrameBuffer( GBPpuState* pPpuState, uint8_t* pMemory )
     clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
 }
 
-void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
+void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
 {
     pPpuState->pOAM                             = (GBObjectAttributes*)(pMemoryMapper->pBaseAddress + 0xFE00);
     pPpuState->pLcdControl                      = (GBLcdControl*)(pMemoryMapper->pBaseAddress + 0xFF40);
@@ -799,16 +876,17 @@ void initPpuState(GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState)
 
 size_t calculateEmulatorInstanceMemoryRequirementsInBytes()
 {
-    const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + sizeof(GBMemoryMapper) + sizeof(GBPpuState) + gbMappedMemorySizeInBytes + gbFrameBufferSizeInBytes;
+    const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + sizeof(GBMemoryMapper) + sizeof(GBPpuState) + sizeof(GBTimerState) + gbMappedMemorySizeInBytes + gbFrameBufferSizeInBytes;
     return memoryRequirementsInBytes;
 }
 
-void resetEmulatorInstance(GBEmulatorInstance* pEmulatorInstance)
+void resetEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
 {
     resetMemoryMapper(pEmulatorInstance->pMemoryMapper );
     initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
     initPpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pPpuState);
-    
+    initTimerState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pTimerState);
+
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
     if( pMemoryMapper->pRomMemoryBaseAddress != nullptr )
     {
@@ -824,7 +902,7 @@ void resetEmulatorInstance(GBEmulatorInstance* pEmulatorInstance)
 }
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-void setEmulatorBreakpoint(GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress)
+void setEmulatorBreakpoint( GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress )
 {
     pEmulatorInstance->gbDebug.pauseAtBreakpoint = pauseAtBreakpoint;
     pEmulatorInstance->gbDebug.breakpointAddress = breakpointAddress;
@@ -857,8 +935,9 @@ GBEmulatorInstance* createEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     pEmulatorInstance->pCpuState     = (GBCpuState*)(pEmulatorInstance + 1);
     pEmulatorInstance->pMemoryMapper = (GBMemoryMapper*)(pEmulatorInstance->pCpuState + 1);
     pEmulatorInstance->pPpuState     = (GBPpuState*)(pEmulatorInstance->pMemoryMapper + 1);
+    pEmulatorInstance->pTimerState   = (GBTimerState*)(pEmulatorInstance->pPpuState + 1);
 
-    uint8_t* pGBMemory = (uint8_t*)(pEmulatorInstance->pPpuState + 1);
+    uint8_t* pGBMemory = (uint8_t*)(pEmulatorInstance->pTimerState + 1);
     initMemoryMapper( pEmulatorInstance->pMemoryMapper, pGBMemory );
 
     uint8_t* pFramebufferMemory = (uint8_t*)(pGBMemory + gbMappedMemorySizeInBytes);
@@ -1122,7 +1201,68 @@ void updatePPULcdControl( GBPpuState* pPpuState, GBLcdControl lcdControlValue )
     *pPpuState->pLcdControl = lcdControlValue;
 }
 
-void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
+uint16_t readTimerControlFrequency( const uint8_t timerControlValue )
+{
+    const uint8_t frequency = timerControlValue & 0x3;
+    switch( frequency )
+    {
+        case 0b00:
+            return 1024u;
+        case 0xb01:
+            return 16u;
+        case 0xb10:
+            return 64;
+    }
+
+    return 256;
+}
+
+void updateTimerRegisters( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimer )
+{
+    //FK: Timer Divider
+    if( pMemoryMapper->lastAddressWrittenTo == 0xFF04 )
+    {
+        pMemoryMapper->pBaseAddress[0xFF04] = 0x00;
+    }
+
+    //FK: Timer Control
+    if( pMemoryMapper->lastAddressWrittenTo == 0xFF07 )
+    {
+        const uint8_t timerControlValue = pMemoryMapper->lastValueWritten;
+        pTimer->enableCounter = (timerControlValue >> 2) & 0x1;
+        pTimer->counterTarget = readTimerControlFrequency( timerControlValue );
+    }
+}
+
+void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cycleCount )
+{
+    //FK: timer divier runs at 16384hz (update counter every 256 cpu cycles to be accurate)
+    pTimer->dividerCounter += cycleCount;
+    if( pTimer->dividerCounter > 0xFF )
+    {
+        pTimer->dividerCounter -= 0xFF;
+        *pTimer->pDivider += 1;
+    }
+
+    if( !pTimer->enableCounter )
+    {
+        return;
+    }
+
+    pTimer->counterValue += cycleCount;
+    if( pTimer->counterValue > pTimer->counterTarget )
+    {
+        if( *pTimer->pCounter == 0xFF )
+        {
+            *pTimer->pCounter = *pTimer->pModulo;
+            triggerInterrupt( pCpuState, TimerInterrupt );
+        }
+
+        *pTimer->pCounter += 1;
+    }
+}
+
+void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
 {
     GBLcdStatus* pLcdStatus = pPpuState->lcdRegisters.pStatus;
 
@@ -3022,7 +3162,39 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //DAA
         case 0x27:
         {
-            pCpuState->registers.A = 0x09;
+            uint16_t accumulator = pCpuState->registers.A;
+
+            if( !pCpuState->registers.F.N )
+            {
+                if( pCpuState->registers.F.H || ( accumulator & 0xF ) > 9 )
+                {
+                    accumulator += 0x06;
+                }
+
+                if( pCpuState->registers.F.C || ( accumulator > 0x9F ) )
+                {
+                    accumulator += 0x60;
+                }
+            }
+            else
+            {
+                if( pCpuState->registers.F.H )
+                {
+                    accumulator = ( accumulator - 6 ) & 0xFF;
+                }
+
+                if( pCpuState->registers.F.C )
+                {
+                    accumulator -= 0x60;
+                }
+            }
+
+            pCpuState->registers.F.H = 0;
+            pCpuState->registers.F.C = ( accumulator & 0x100 ) == 0x100;
+
+            pCpuState->registers.A = accumulator & 0xFF;
+            pCpuState->registers.F.Z = ( pCpuState->registers.A == 0 );
+
             break;
         }
 
@@ -3231,6 +3403,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
     GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
+    GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
 
     triggerPendingInterrupts( pCpuState, pMemoryMapper );
 
@@ -3260,9 +3433,11 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 #endif
 
     const uint8_t cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
+    updateTimerRegisters( pMemoryMapper, pTimerState );
+    
     checkDMAState( pCpuState, pMemoryMapper, cycleCost ); 
-    tickPPU( pCpuState, pEmulatorInstance->pPpuState, cycleCost );
-
+    updatePPU( pCpuState, pPpuState, cycleCost );
+    updateTimer( pCpuState, pTimerState, cycleCost );
     if( handleInput( pMemoryMapper, pEmulatorInstance->joypadState ) )
     {
         triggerInterrupt( pCpuState, JoypadInterrupt );
@@ -3275,6 +3450,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         memcpy(&lcdControlValue, &pMemoryMapper->lastValueWritten, sizeof(GBLcdControl) );
         updatePPULcdControl( pPpuState, lcdControlValue );
     }
+
+    pMemoryMapper->lcdStatus = *pPpuState->lcdRegisters.pStatus;
+    pMemoryMapper->lcdEnabled = pPpuState->pLcdControl->enable;
 
     return cycleCost;
 }
