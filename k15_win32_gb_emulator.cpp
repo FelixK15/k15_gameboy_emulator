@@ -328,6 +328,9 @@ void setup(HWND hwnd)
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
 
+	//HANDLE pRomHandle = CreateFile("instr_timing.gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
+	//HANDLE pRomHandle = CreateFile("cpu_instrs.gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
+	//HANDLE pRomHandle = CreateFile("Othello (Europe).gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
 	HANDLE pRomHandle = CreateFile("rom.gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
 	if( pRomHandle == INVALID_HANDLE_VALUE )
 	{

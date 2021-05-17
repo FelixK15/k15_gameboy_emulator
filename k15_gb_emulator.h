@@ -371,396 +371,6 @@ struct GBEmulatorInstance
 #endif
 };
 
-//FK: specify function implementation tailored to specific cpu architectures
-#if defined ( _M_IX86 ) || defined ( __x86_64__ )
-    struct x86Flags
-    {
-        uint8_t carry               : 1;
-        uint8_t reserved0           : 1;
-        uint8_t parity              : 1;
-        uint8_t reserved1           : 1;
-        uint8_t adjust              : 1;
-        uint8_t reserved2           : 1;
-        uint8_t zero                : 1;
-        uint8_t sign                : 1;
-    };
-
-    x86Flags readCpuFlagsX86()
-    {
-        uint8_t cpuFlagsValue = 0;
-
-        __asm
-        {
-            lahf                    ; push first 8 bits of FLAGS register to ah
-            mov cpuFlagsValue, ah   ; store value of ah register into 'cpuFlagsValue'
-        };
-        
-        x86Flags cpuFlags;
-        memcpy(&cpuFlags, &cpuFlagsValue, sizeof(x86Flags));
-        return cpuFlags;
-    }
-
-    void compareValueX86( GBCpuState* pCpuState, uint8_t value )
-    {
-        const uint8_t compareResult = pCpuState->registers.A - value;
-        const x86Flags flagsRegister = readCpuFlagsX86();
-
-        pCpuState->registers.F.N = 1;
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.C = flagsRegister.carry;
-        pCpuState->registers.F.H = flagsRegister.adjust;
-    }
-
-    void increment8BitValueX86( GBCpuState* pCpuState, uint8_t* pValueAddress )
-    {
-        ++*pValueAddress;
-        const x86Flags flagsRegister = readCpuFlagsX86();
-        
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.H = flagsRegister.adjust;
-        pCpuState->registers.F.N = 0;
-    }
-
-    void decrement8BitValueX86( GBCpuState* pCpuState, uint8_t* pValueAddress )
-    {
-        --*pValueAddress;
-        const x86Flags flagsRegister = readCpuFlagsX86();
-        
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.H = flagsRegister.adjust;
-        pCpuState->registers.F.N = 1;
-    }
-
-    void increment16BitValueX86( GBCpuState* pCpuState, uint16_t* pValueAddress )
-    {
-        ++*pValueAddress;
-        const x86Flags flagsRegister = readCpuFlagsX86();
-        
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.H = flagsRegister.adjust;
-        pCpuState->registers.F.N = 0;
-    }
-
-    void decrement16BitValueX86( GBCpuState* pCpuState, uint16_t* pValueAddress )
-    {
-        --*pValueAddress;
-        const x86Flags flagsRegister = readCpuFlagsX86();
-        
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.H = flagsRegister.adjust;
-        pCpuState->registers.F.N = 1;
-    }
-
-    void addValue8BitX86( GBCpuState* pCpuState, uint8_t value )
-    {
-        pCpuState->registers.A += value;
-        
-        const x86Flags flagsRegister = readCpuFlagsX86();
-        
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.C = flagsRegister.carry;
-        pCpuState->registers.F.H = flagsRegister.parity;
-        pCpuState->registers.F.N = 0;
-    }
-
-    void addValue16BitX86( GBCpuState* pCpuState, uint16_t value )
-    {
-        pCpuState->registers.HL += value;
-        
-        const x86Flags flagsRegister = readCpuFlagsX86();
-        
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.C = flagsRegister.carry;
-        pCpuState->registers.F.H = flagsRegister.parity;
-        pCpuState->registers.F.N = 0;
-    }
-
-    void subValue8BitX86( GBCpuState* pCpuState, uint8_t value )
-    {
-        pCpuState->registers.A -= value;
-        
-        const x86Flags flagsRegister = readCpuFlagsX86();
-        
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.C = flagsRegister.carry;
-        pCpuState->registers.F.H = flagsRegister.parity;
-        pCpuState->registers.F.N = 1;
-    }
-
-    void subValue16BitX86( GBCpuState* pCpuState, uint16_t value )
-    {
-        pCpuState->registers.HL -= value;
-        
-        const x86Flags flagsRegister = readCpuFlagsX86();
-        
-        pCpuState->registers.F.Z = flagsRegister.zero;
-        pCpuState->registers.F.C = flagsRegister.carry;
-        pCpuState->registers.F.H = flagsRegister.parity;
-        pCpuState->registers.F.N = 1;
-    }
-
-    uint8_t rotateThroughCarryLeftX86( GBCpuState* pCpuState, uint8_t value )
-    {
-        __asm
-        {
-            mov bl, value 
-            rcl bl, 1
-            mov value, bl
-        }
-
-        pCpuState->registers.F.N = 0;
-        pCpuState->registers.F.H = 0;
-        return value;
-    }
-
-    uint8_t rotateThroughCarryRightX86( GBCpuState* pCpuState, uint8_t value)
-    {
-        __asm
-        {
-            mov bl, value 
-            rcr bl, 1
-            mov value, bl
-        }
-
-        pCpuState->registers.F.N = 0;
-        pCpuState->registers.F.H = 0;
-        return value;
-    }
-
-    uint8_t rotateLeftX86( GBCpuState* pCpuState, uint8_t value )
-    {
-        pCpuState->registers.F.C = (value << 0);
-        pCpuState->registers.F.N = 0;
-        pCpuState->registers.F.H = 0;
-
-        __asm
-        {
-            mov bl, value
-            rol bl, 1
-            mov value, bl
-        }
-        
-        return value;
-    }
-
-    uint8_t rotateRightX86( GBCpuState* pCpuState, uint8_t value )
-    {
-        pCpuState->registers.F.C = (value << 7);
-        pCpuState->registers.F.N = 0;
-        pCpuState->registers.F.H = 0;
-        
-        __asm
-        {
-            mov bl, value
-            ror bl, 1
-            mov value, bl
-        }
-        
-        return value;
-    }
-
-    uint16_t generateGbPixelsForTileLineX86(uint8_t pixelLineLSB, uint8_t pixelLineMSB)
-    {
-        const uint32_t selectorMask = 0b0101010101010101;
-        uint16_t pixels = 0;
-        __asm
-        {
-            mov		bl, pixelLineLSB
-            mov		cl, pixelLineMSB
-            mov 	edx, selectorMask
-            pdep 	ebx, ebx, edx		; extract bits from lsb pixel byte
-            shl		edx, 1				; shift selectorMask to bit extract bits from second tile byte
-            pdep 	ecx, ecx, edx		; extract bits from msb pixel byte
-            or		bx, cx				; or them together to get one pixel tile row
-            mov 	pixels, bx	
-        }
-
-        return pixels;
-    }
-
-#   define generateGbPixelsForTileLine  generateGbPixelsForTileLineX86
-#   define rotateRight                  rotateRightX86 
-#   define rotateLeft                   rotateLeftX86 
-#   define rotateThroughCarryLeft       rotateThroughCarryLeftX86
-#   define rotateThroughCarryRight      rotateThroughCarryRightX86
-#   define compareValue                 compareValueX86
-#   define decrement16BitValue          decrement16BitValueX86
-#   define increment16BitValue          increment16BitValueX86
-#   define decrement8BitValue           decrement8BitValueX86
-#   define increment8BitValue           increment8BitValueX86
-#   define subValue16Bit                subValue16BitX86
-#   define subValue8Bit                 subValue8BitX86
-#   define addValue16Bit                addValue16BitX86
-#   define addValue8Bit                 addValue8BitX86
-
-#elif defined ( _M_ARM ) || ( __arm__ )
-//FK: TODO
-#endif
-
-//FK: Use software implementation for non implemented functions
-#ifndef compareValue
-    void compareValueSoftware( GBCpuState* pCpuState, uint8_t value )
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define compareValue     compareValueSoftware
-#endif
-
-#ifndef increment8BitValue
-    void increment8BitValueSoftware( GBCpuState* pCpuState, uint8_t* pValueAddress )
-    {
-        (void)pCpuState;
-        (void)pValueAddress;
-
-        debugBreak();
-    }
-#   define increment8BitValue   increment8BitValueSoftware
-#endif
-
-#ifndef decrement8BitValue
-    void decrement8BitValueSoftware( GBCpuState* pCpuState, uint8_t* pValueAddress )
-    {
-        (void)pCpuState;
-        (void)pValueAddress;
-
-        debugBreak();
-    }
-#   define decrement8BitValue   decrement8BitValueSoftware
-#endif
-
-#ifndef increment16BitValue
-    void increment16BitValueSoftware( GBCpuState* pCpuState, uint16_t* pValueAddress )
-    {
-        (void)pCpuState;
-        (void)pValueAddress;
-
-        debugBreak();
-    }
-#   define increment16BitValue   increment16BitValueSoftware
-#endif
-
-#ifndef decrement16BitValue
-    void decrement16BitValueSoftware( GBCpuState* pCpuState, uint16_t* pValueAddress )
-    {
-        (void)pCpuState;
-        (void)pValueAddress;
-
-        debugBreak();
-    }
-#   define decrement16BitValue   decrement16BitValueSoftware
-#endif
-
-#ifndef addValue8Bit
-    void addValue8BitSoftware( GBCpuState* pCpuState, uint8_t value )
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define addValue8Bit     addValue8BitSoftware
-#endif
-
-#ifndef addValue16Bit
-    void addValue16BitSoftware( GBCpuState* pCpuState, uint16_t value )
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define addValue16Bit    addValue16BitSoftware
-#endif
-
-#ifndef subValue8Bit
-    void subValue8BitSoftware( GBCpuState* pCpuState, uint8_t value )
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define subValue8Bit     subValue8BitSoftware
-#endif
-
-#ifndef subValue16Bit
-    void subValue16BitSoftware( GBCpuState* pCpuState, uint16_t value )
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define subValue16Bit    subValue16BitSoftware 
-#endif
-
-#ifndef rotateThroughCarryLeft
-    uint8_t rotateThroughCarryLeftSoftware( GBCpuState* pCpuState, uint8_t value )
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define rotateThroughCarryLeft   rotateThroughCarryLeftSoftware
-#endif
-
-#ifndef rotateThroughCarryRight
-    uint8_t rotateThroughCarryRightSoftware( GBCpuState* pCpuState, uint8_t value)
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define rotateThroughCarryRight   rotateThroughCarryRightSoftware
-#endif
-
-#ifndef rotateLeft
-    uint8_t rotateLeftSoftware( GBCpuState* pCpuState, uint8_t value )
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define rotateLeft   rotateLeftSoftware
-#endif
-
-#ifndef rotateRight
-    uint8_t rotateRightSoftware( GBCpuState* pCpuState, uint8_t value )
-    {
-        (void)pCpuState;
-        (void)value;
-
-        debugBreak();
-    }
-#   define rotateRight  rotateRightSoftware
-#endif
-
-#ifndef generateGbPixelsForTileLine
-    uint16_t generateGbPixelsForTileLineSoftware(uint8_t pixelLineLSB, uint8_t pixelLineMSB)
-    {
-        uint16_t pixels = 0;
-        for(uint8_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex)
-        {
-            const uint8_t bitIndex  = pixelIndex;
-
-            const uint8_t pixelLSB = ( uint8_t )( pixelLineLSB >> bitIndex & 0x1 );
-            const uint8_t pixelMSB = ( uint8_t )( pixelLineMSB >> bitIndex & 0x1 );
-
-            pixels |= ( pixelLSB << ( 0 + bitIndex * 2 ) );
-            pixels |= ( pixelMSB << ( 1 + bitIndex * 2 ) );
-        }
-
-        return pixels;
-    }
-#   define generateGbPixelsForTileLine     generateGbPixelsForTileLineSoftware
-#endif
-
 //FK: Quick and dirty debugging
 void dumpBinData( const char* pFileName, void* pData, size_t sizeInBytes )
 {
@@ -771,10 +381,6 @@ void dumpBinData( const char* pFileName, void* pData, size_t sizeInBytes )
 
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
-    if( addressOffset == 0xFF80 )
-    {
-        breakPointHook();
-    }
     pMemoryMapper->lastAddressReadFrom = addressOffset;
     return pMemoryMapper->pBaseAddress[addressOffset];
 }
@@ -809,7 +415,21 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
 
         case 0xFF40:
         {
-            //FK: LCD control - will be evaluated and written to memory in updatePPULcdControl
+            //FK: LCD control - will be evaluated and written to memory in updatePPULcdControl()
+            break;
+        }
+
+        case 0xFF41:
+        {
+            //FK: LCD Status - only bit 3:6 are writeable
+            value &= 0x78;
+            pMemoryMapper->pBaseAddress[addressOffset] |= value;
+            break;
+        }
+
+        case 0xFF44:
+        {
+            //FK: Read only
             break;
         }
 
@@ -831,6 +451,12 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
         addressOffset -= 0x2000;
         pMemoryMapper->pBaseAddress[addressOffset] = value;
     }
+}
+
+void write16BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint16_t value )
+{
+    write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 0, (uint8_t)(value & 0x0F >> 0) );
+    write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 1, (uint8_t)(value & 0xF0 >> 8) );
 }
 
 GBRomHeader getGBRomHeader(const uint8_t* pRomMemory)
@@ -911,7 +537,7 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     //FK: Start fetching instructions at address $1000
     pState->programCounter = 0x0100;
 
-    pState->registers.F.value   = 0xB0;
+    pState->registers.F.value   = 0x80;
     pState->registers.C         = 0x13;
     pState->registers.DE        = 0x00D8;
     pState->registers.HL        = 0x014D;
@@ -924,71 +550,6 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->flags.dma   = 0;
     pState->flags.IME   = 1;
     pState->flags.halt  = 0;
-}
-
-uint8_t shiftLeft( GBCpuState* pCpuState, uint8_t value )
-{
-    pCpuState->registers.F.N = 0;
-    pCpuState->registers.F.H = 0;
-    pCpuState->registers.F.C = (value << 0);
-
-    value = (value << 1);
-    return value;
-}
-
-uint8_t shiftRight( GBCpuState* pCpuState, uint8_t value )
-{
-    pCpuState->registers.F.N = 0;
-    pCpuState->registers.F.H = 0;
-    pCpuState->registers.F.C = (value << 7);
-
-    value = (value >> 1);
-    return value;
-}
-
-uint8_t shiftRightKeepMSB( GBCpuState* pCpuState, uint8_t value )
-{
-    pCpuState->registers.F.N = 0;
-    pCpuState->registers.F.H = 0;
-    pCpuState->registers.F.C = (value << 7);
-
-    const uint8_t msb = value & (1 << 7);
-    value = (value >> 1) | msb;
-    return value;
-}
-
-uint8_t swapNibbles( GBCpuState* pCpuState, uint8_t value )
-{
-    const uint8_t highNibble = value & 0xF0;
-    const uint8_t lowNibble  = value & 0x0F;
-    value = lowNibble << 4 | highNibble << 0;
-
-    pCpuState->registers.F.Z = (value == 0);
-    pCpuState->registers.F.C = 0;
-    pCpuState->registers.F.N = 0;
-    pCpuState->registers.F.H = 0;
-
-    return value;
-}
-
-void testBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
-{
-    const uint8_t bitValue = (value >> bitIndex) & 0x1;
-    pCpuState->registers.F.Z = bitValue == 0;
-    pCpuState->registers.F.N = 0;
-    pCpuState->registers.F.H = 1;
-}
-
-uint8_t resetBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
-{
-    value = value & ~(1 << bitIndex);
-    return value;
-}
-
-uint8_t setBit( GBCpuState* pCpuState, uint8_t value, uint8_t bitIndex )
-{
-    value = value | (1 << bitIndex);
-    return value;
 }
 
 void resetMemoryMapper( GBMemoryMapper* pMapper )
@@ -1253,7 +814,7 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, uint8_t scan
 
     //FK: Calculate the tile row that intersects with the current scanline
     //FK: TODO: implement sx/sy here
-    const uint8_t  scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
+    const uint8_t scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
     const uint16_t startTileIndex = scanlineYCoordinateInTileSpace * gbBGTileCount;
     const uint16_t endTileIndex = startTileIndex + gbBGTileCount;
 
@@ -1473,8 +1034,8 @@ void push16BitValueToStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
     pCpuState->registers.SP -= 2;
     
     uint8_t* pStack = pMemoryMapper->pBaseAddress + pCpuState->registers.SP;
-    pStack[0] = (uint8_t)( value >> 8 );
-    pStack[1] = (uint8_t)( value >> 0 );
+    pStack[0] = (uint8_t)( value >> 0 );
+    pStack[1] = (uint8_t)( value >> 8 );
 }
 
 uint16_t pop16BitValueFromStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper )
@@ -1482,8 +1043,8 @@ uint16_t pop16BitValueFromStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryM
     uint8_t* pStack = pMemoryMapper->pBaseAddress + pCpuState->registers.SP;
     pCpuState->registers.SP += 2;
 
-    const uint16_t value = (uint16_t)pStack[0] << 8 | 
-                           (uint16_t)pStack[1] << 0;
+    const uint16_t value = (uint16_t)pStack[0] << 0 | 
+                           (uint16_t)pStack[1] << 8;
     return value;
 }
 
@@ -1576,12 +1137,26 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             if( target <= 0x07 )
             {
                 //RLC
-                *pTarget = rotateThroughCarryLeft(pCpuState, *pTarget);
+                const uint8_t value = *pTarget;
+                const uint8_t newValue = value << 1 | ((value & (1<<7)) >> 7);
+                *pTarget = newValue;
+
+                pCpuState->registers.F.Z = (newValue == 0);
+                pCpuState->registers.F.C = (value >> 7) & 0x1;
+                pCpuState->registers.F.N = 0;
+                pCpuState->registers.F.H = 0;
             }
             else
             {
                 //RRC
-                *pTarget = rotateThroughCarryRight(pCpuState, *pTarget);
+                const uint8_t value = *pTarget;
+                const uint8_t newValue = value >> 1 | ((value & 0x1) << 7);
+                *pTarget = newValue;
+
+                pCpuState->registers.F.Z = (newValue == 0);
+                pCpuState->registers.F.C = value & 0x1;
+                pCpuState->registers.F.N = 0;
+                pCpuState->registers.F.H = 0;
             }
             break;
         }
@@ -1590,12 +1165,26 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             if( target <= 0x07 )
             {
                 //RL
-                *pTarget = rotateLeft(pCpuState, *pTarget);
+                const uint8_t value = *pTarget;
+                const uint8_t newValue = value << 1 | pCpuState->registers.F.C;
+                *pTarget = newValue;
+
+                pCpuState->registers.F.Z = (newValue == 0);
+                pCpuState->registers.F.C = (value >> 7) & 0x1;
+                pCpuState->registers.F.N = 0;
+                pCpuState->registers.F.H = 0;
             }
             else
             {
                 //RR
-                *pTarget = rotateRight(pCpuState, *pTarget);
+                const uint8_t value = *pTarget;
+                const uint8_t newValue = value >> 1 | (pCpuState->registers.F.C << 7);
+                *pTarget = newValue;
+
+                pCpuState->registers.F.Z = (newValue == 0);
+                pCpuState->registers.F.C = value & 0x1;
+                pCpuState->registers.F.N = 0;
+                pCpuState->registers.F.H = 0;
             }
             break;
         }
@@ -1604,12 +1193,26 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             if( target <= 0x07 )
             {
                 //SLA
-                *pTarget = shiftLeft(pCpuState, *pTarget);
+                const uint8_t value = *pTarget;
+                const uint8_t newValue = value << 1;
+                *pTarget = newValue;
+
+                pCpuState->registers.F.Z = (newValue == 0);
+                pCpuState->registers.F.C = (value >> 7) & 0x1;
+                pCpuState->registers.F.N = 0;
+                pCpuState->registers.F.H = 0;
             }
             else
             {
                 //SRA
-                *pTarget = shiftRightKeepMSB(pCpuState, *pTarget);
+                const uint8_t value = *pTarget;
+                const uint8_t newValue = value >> 1 | (value & (1<<7) << 7);
+                *pTarget = newValue;
+
+                pCpuState->registers.F.Z = (newValue == 0);
+                pCpuState->registers.F.C = value & 0x1;
+                pCpuState->registers.F.N = 0;
+                pCpuState->registers.F.H = 0;
             }
             break;
         }
@@ -1618,12 +1221,29 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             if( target <= 0x07 )
             {
                 //SWAP
-                *pTarget = swapNibbles(pCpuState, *pTarget);
+                const uint8_t value = *pTarget;
+                const uint8_t highNibble = value & 0xF0;
+                const uint8_t lowNibble  = value & 0x0F;
+                const uint8_t newValue = lowNibble << 4 | highNibble << 0;
+
+                *pTarget = newValue;
+
+                pCpuState->registers.F.Z = (value == 0);
+                pCpuState->registers.F.C = 0;
+                pCpuState->registers.F.N = 0;
+                pCpuState->registers.F.H = 0;
             }
             else
             {
                 //SRL
-                *pTarget = shiftRight(pCpuState, *pTarget);
+                const uint8_t value = *pTarget;
+                const uint8_t newValue = value >> 1;
+                *pTarget = newValue;
+
+                pCpuState->registers.F.Z = (newValue == 0);
+                pCpuState->registers.F.C = value & 0x1;
+                pCpuState->registers.F.N = 0;
+                pCpuState->registers.F.H = 0;
             }
             break;
         }
@@ -1633,7 +1253,11 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         case 0x60:
         case 0x70:
         {
-            testBit(pCpuState, *pTarget, bitIndex);
+            const uint8_t value = *pTarget;
+            const uint8_t bitValue = (value >> bitIndex) & 0x1;
+            pCpuState->registers.F.Z = bitValue == 0;
+            pCpuState->registers.F.N = 0;
+            pCpuState->registers.F.H = 1;
             break;
         }
         //RES
@@ -1642,7 +1266,9 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         case 0xA0:
         case 0xB0:
         {
-            *pTarget = resetBit(pCpuState, *pTarget, bitIndex);
+            const uint8_t value = *pTarget;
+            const uint8_t newValue = value & ~(1 << bitIndex);
+            *pTarget = newValue;
             break;
         }
         //SET
@@ -1651,7 +1277,9 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         case 0xE0:
         case 0xF0:
         {
-            *pTarget = setBit(pCpuState, *pTarget, bitIndex);
+            const uint8_t value = *pTarget;
+            const uint8_t newValue = value | (1 << bitIndex);
+            *pTarget = newValue;
             break;
         }
     }
@@ -1739,7 +1367,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 
         //LD (HL), A
         case 0x77:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.DE, pCpuState->registers.A);
+            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.HL, pCpuState->registers.A);
             break;
 
         //LD A,(nn)
@@ -2228,6 +1856,24 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
+        //LD HL, SP + n
+        case 0xF8:
+        {
+            const int8_t offset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.HL = pCpuState->registers.SP + offset;
+            pCpuState->registers.F.Z = 0;
+            pCpuState->registers.F.N = 0;
+            break;
+        }
+
+        //LD (nn), SP
+        case 0x08:
+        {
+            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            write16BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.SP);
+            pCpuState->programCounter += 2;
+        }
+
         //JP nn
         case 0xC3:
         {
@@ -2489,10 +2135,10 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             }
 
             pCpuState->registers.A = pCpuState->registers.A & operand;
-            pCpuState->registers.F.N      = 0;
-            pCpuState->registers.F.H      = 1;
-            pCpuState->registers.F.C      = 0;
-            pCpuState->registers.F.Z      = (pCpuState->registers.A == 0);
+            pCpuState->registers.F.N = 0;
+            pCpuState->registers.F.H = 1;
+            pCpuState->registers.F.C = 0;
+            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
             break;
         }
 
@@ -2556,40 +2202,41 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
             }
 
-            increment8BitValue(pCpuState, pRegister);
+            const uint8_t oldRegisterValue = *pRegister;
+            const uint8_t newRegisterValue = oldRegisterValue + 1;
+
+            *pRegister = newRegisterValue;
+            pCpuState->registers.F.Z = (newRegisterValue == 0);
+            pCpuState->registers.F.H = (oldRegisterValue & 0xF0) != (newRegisterValue & 0xF0);
+            pCpuState->registers.F.N = 0;
+            
             break;
         }
 
-        //INC nn
+        //INC BC
         case 0x03:
+        {
+            pCpuState->registers.BC++;
+            break;
+        }
+        //INC DE
         case 0x13:
+        {
+            pCpuState->registers.DE++;
+            break;
+        }
+        //INC HL
         case 0x23:
+        {
+            pCpuState->registers.HL++;
+            break;
+        }
+        //INC SP
         case 0x33:
         {
-            uint16_t* pRegister = nullptr;
-            switch( opcode )
-            {
-                //INC BC
-                case 0x03:
-                    pRegister = &pCpuState->registers.BC;
-                    break;
-                //INC DE
-                case 0x13:
-                    pRegister = &pCpuState->registers.DE;
-                    break;
-                //INC HL
-                case 0x23:
-                    pRegister = &pCpuState->registers.HL;
-                    break;
-                //INC SP
-                case 0x33:
-                    pRegister = &pCpuState->registers.SP;
-                    break;
-            }
-
-            increment16BitValue(pCpuState, pRegister);
+            pCpuState->registers.SP++;
             break;
-        }    
+        }
 
         //DEC n
         case 0x3D:
@@ -2633,47 +2280,45 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
             }
 
-            decrement8BitValue(pCpuState, pRegister);
+            const uint8_t oldRegisterValue = *pRegister;
+            const uint8_t newRegisterValue = oldRegisterValue - 1;
+
+            *pRegister = newRegisterValue;
+
+            pCpuState->registers.F.Z = (newRegisterValue == 0);
+            pCpuState->registers.F.H = ((newRegisterValue & 0x0F) == 0xF);
+            pCpuState->registers.F.N = 1;
             break;
         }
 
-        //DEC nn
+        //DEC BC
         case 0x0B:
+        { 
+            pCpuState->registers.BC--;
+            break;
+        }
+        //DEC DE
         case 0x1B:
+        {
+            pCpuState->registers.DE--;
+            break;
+        }
+        //DEC HL
         case 0x2B:
+        {
+            pCpuState->registers.HL--;
+            break;
+        }
+        //DEC SP
         case 0x3B:
         {
-            uint16_t* pRegister = nullptr;
-            switch( opcode )
-            {
-                //DEC BC
-                case 0x0B:
-                    pRegister = &pCpuState->registers.BC;
-                    break;
-                //DEC DE
-                case 0x1B:
-                    pRegister = &pCpuState->registers.DE;
-                    break;
-                //DEC HL
-                case 0x2B:
-                    pRegister = &pCpuState->registers.HL;
-                    break;
-                //DEC SP
-                case 0x3B:
-                    pRegister = &pCpuState->registers.SP;
-                    break;
-            }
-
-            decrement16BitValue(pCpuState, pRegister);
+            pCpuState->registers.SP--;
             break;
         }
-
         //HALT
         case 0x76:
-        {
             pCpuState->flags.halt = 1;
             break;
-        }
 
         //LDH (n),A
         case 0xE0:
@@ -2732,7 +2377,13 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
             }
 
-            addValue16Bit(pCpuState, operand);
+            const uint32_t new32BitRegisterValue = pCpuState->registers.HL + operand;
+
+            pCpuState->registers.F.N = 0;
+            pCpuState->registers.F.H = (new32BitRegisterValue > 0xFFF0);
+            pCpuState->registers.F.C = (new32BitRegisterValue > 0xFFFF);
+
+            pCpuState->registers.HL = (uint16_t)new32BitRegisterValue;
             break;
         }
 
@@ -2741,6 +2392,9 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         {
             const int8_t value = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
             pCpuState->registers.SP += value;
+
+            pCpuState->registers.F.Z = 0;
+            pCpuState->registers.F.N = 0;
             break;
         }
 
@@ -2796,7 +2450,14 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
             }
 
-            addValue8Bit(pCpuState, operand);
+            //FK: promoting to 16bit to check for potential carry or half carry...Is there a better way?
+            const uint16_t accumulator16BitValue = pCpuState->registers.A + operand;
+            pCpuState->registers.A += operand;
+
+            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
+            pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
+            pCpuState->registers.F.H = (accumulator16BitValue > 0x0F);
+            pCpuState->registers.F.N = 0;
             break;
         }
 
@@ -2852,7 +2513,14 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
             }
 
-            subValue8Bit(pCpuState, operand);
+            const uint8_t accumulatorValue = pCpuState->registers.A;
+            pCpuState->registers.A -= operand;
+
+            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
+            pCpuState->registers.F.C = (accumulatorValue < operand);
+            pCpuState->registers.F.H = ((accumulatorValue & 0x0F) < (operand & 0x0F));
+            pCpuState->registers.F.N = 1;
+
             break;
         }
 
@@ -2913,7 +2581,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x34:
         {
             uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-            increment8BitValue(pCpuState, pValue);
+            const uint8_t newValue = *pValue + 1;
+            pCpuState->registers.F.Z = (newValue == 0);
+            pCpuState->registers.F.H = (newValue > 0x0F);
+            pCpuState->registers.F.N = 0;
+
+            *pValue = newValue;
             break;
         }
 
@@ -2921,7 +2594,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x35:
         {
             uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-            decrement8BitValue(pCpuState, pValue);
+            const uint8_t newValue = *pValue - 1;
+            pCpuState->registers.F.Z = (newValue == 0);
+            pCpuState->registers.F.H = ((newValue & 0x0F) == 0x0F);
+            pCpuState->registers.F.N = 0;
+
+            *pValue = newValue;
             break;
         }
 
@@ -2978,6 +2656,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     value = pCpuState->registers.HL;
                     break;
             }
+            
             push16BitValueToStack( pCpuState, pMemoryMapper, value );
             break;
         }
@@ -3074,12 +2753,27 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
             }
 
-            pCpuState->registers.A = pCpuState->registers.A + pCpuState->registers.F.C + value;
+            const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + value;
+            pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
             
-            const x86Flags flags = readCpuFlagsX86();
-            pCpuState->registers.F.Z = flags.zero;
-            pCpuState->registers.F.C = flags.carry;
-            pCpuState->registers.F.H = flags.adjust;
+            pCpuState->registers.F.Z = (accumulator16BitValue == 0);
+            pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
+            pCpuState->registers.F.H = (accumulator16BitValue > 0x0F);
+            pCpuState->registers.F.N = 0;
+            break;
+        }
+
+        //ADC n
+        case 0xCE:
+        {
+            const uint8_t value = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + value;
+
+            pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
+            
+            pCpuState->registers.F.Z = (accumulator16BitValue == 0);
+            pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
+            pCpuState->registers.F.H = (accumulator16BitValue > 0x0F);
             pCpuState->registers.F.N = 0;
             break;
         }
@@ -3131,12 +2825,14 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
             }
 
-            pCpuState->registers.A = pCpuState->registers.A - pCpuState->registers.F.C - value;
+            const uint8_t accumulatorValue = pCpuState->registers.A;
+            value += pCpuState->registers.F.C;
+
+            pCpuState->registers.A = accumulatorValue - value;
             
-            const x86Flags flags = readCpuFlagsX86();
-            pCpuState->registers.F.Z = flags.zero;
-            pCpuState->registers.F.C = flags.carry;
-            pCpuState->registers.F.H = flags.adjust;
+            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
+            pCpuState->registers.F.C = (accumulatorValue < value);
+            pCpuState->registers.F.H = ((accumulatorValue & 0x0F) < (value & 0x0F));
             pCpuState->registers.F.N = 1;
             break;
         }
@@ -3228,12 +2924,32 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
             }
 
-            compareValue(pCpuState, value);
+            pCpuState->registers.F.Z = (pCpuState->registers.A == value);
+            pCpuState->registers.F.H = ((pCpuState->registers.A & 0x0F) < (value & 0x0F));
+            pCpuState->registers.F.C = (pCpuState->registers.A < value);
+            pCpuState->registers.F.N = 1;
+
             break;
         }
 
+        case 0xD3:
+        case 0xE3:
+        case 0xE4:
+        case 0xF4:
+        case 0xDB:
+        case 0xDD:
+        case 0xEB:
+        case 0xEC:
+        case 0xED:
+        case 0xFC:
+        case 0xFD:
+        {
+            printf( "Illegal opcode '%.2hhX\n", opcode );
+            debugBreak();
+            break;
+        }
         default:
-            printf( "not implemented opcode '0x%.2hhX'\n", opcode );
+            printf( "not implemented opcode '$%.2hhX' at pc '$%.4hX'\n", opcode, ( pCpuState->programCounter - pOpcode->byteCount ) );
 #if K15_BREAK_ON_UNKNOWN_INSTRUCTION == 1
             debugBreak();
 #endif
@@ -3337,7 +3053,8 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
     if( pCpuState->flags.halt )
     {
-        return 0;
+        //FK: TODO: Check if this accurate
+        return 2;
     }
 
     const uint16_t opcodeAddress = pCpuState->programCounter++;

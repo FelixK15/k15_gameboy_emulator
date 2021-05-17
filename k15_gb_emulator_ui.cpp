@@ -1,3 +1,6 @@
+#include "imgui/imgui.h"
+#include "imgui/imgui_memory_editor.h"
+
 constexpr ImGuiInputTextFlags hexTextInputFlags = ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase;
 
 static struct GBDebugViewState
@@ -281,6 +284,32 @@ void doPpuStateView(GBEmulatorInstance* pEmulatorInstance)
     ImGui::End();
 }
 
+void doMemoryStateView( GBEmulatorInstance* pEmulatorInstance )
+{
+    static MemoryEditor memoryEditor;
+    memoryEditor.ReadOnly           = true;
+    memoryEditor.OptGreyOutZeroes   = false;
+    if( !ImGui::Begin( "Memory View" ) )
+    {
+        ImGui::End();
+    }
+
+    const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
+    memoryEditor.DrawContents( pMemoryMapper->pBaseAddress, 0x10000 );
+    ImGui::End();
+}
+
+void doJoystickView( GBEmulatorInstance* pEmulatorInstance )
+{
+    if( !ImGui::Begin( "Joypad View" ) )
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::End();
+}
+
 void doInstructionView( GBEmulatorInstance* pEmulatorInstance )
 {
     static size_t opcodeCount = 0;
@@ -292,20 +321,18 @@ void doInstructionView( GBEmulatorInstance* pEmulatorInstance )
         return;
     }
 
-    
-
-    if( !ImGui::BeginTable("Opcode Table", 6, ImGuiTableFlags_BordersH ) )
+    if( !ImGui::BeginTable( "Opcode Table", 6, ImGuiTableFlags_BordersH ) )
     {
         ImGui::EndTable();
         return;
     }
 
-    ImGui::TableSetupColumn("Executed",     ImGuiTableColumnFlags_WidthFixed, 8.0f);
-    ImGui::TableSetupColumn("Breakpoint",   ImGuiTableColumnFlags_WidthFixed, 8.0f);
-    ImGui::TableSetupColumn("Address",      ImGuiTableColumnFlags_WidthFixed, 40.0f);
-    ImGui::TableSetupColumn("Opcode",       ImGuiTableColumnFlags_WidthFixed, 100.0f);
-    ImGui::TableSetupColumn("Bytes",        ImGuiTableColumnFlags_WidthFixed, 100.0f);
-    ImGui::TableSetupColumn("Cycle Count",  ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn( "Executed",     ImGuiTableColumnFlags_WidthFixed, 8.0f );
+    ImGui::TableSetupColumn( "Breakpoint",   ImGuiTableColumnFlags_WidthFixed, 8.0f );
+    ImGui::TableSetupColumn( "Address",      ImGuiTableColumnFlags_WidthFixed, 40.0f );
+    ImGui::TableSetupColumn( "Opcode",       ImGuiTableColumnFlags_WidthFixed, 100.0f );
+    ImGui::TableSetupColumn( "Bytes",        ImGuiTableColumnFlags_WidthFixed, 100.0f );
+    ImGui::TableSetupColumn( "Cycle Count",  ImGuiTableColumnFlags_WidthFixed, 40.0f );
 
     GBCpuState* pCpuState = pEmulatorInstance->pCpuState;
 
@@ -465,5 +492,9 @@ void doUiFrame( GBEmulatorInstance* pEmulatorInstance )
     doInstructionHistoryView( pEmulatorInstance );
     doCpuStateView( pEmulatorInstance );
     doPpuStateView( pEmulatorInstance );
+    doMemoryStateView( pEmulatorInstance );
     doEmulatorInstructionView();
+
+    //FK: TODO
+    //doJoystickView( pEmulatorInstance );
 }
