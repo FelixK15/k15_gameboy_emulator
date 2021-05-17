@@ -23,6 +23,7 @@ __asm\
 }
 #   define debugBreak __debugbreak
 #else
+#   define breakPointHook()
 #   define debugBreak
 #endif
 
@@ -554,14 +555,6 @@ bool loadEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pS
     return true;
 }
 
-//FK: Quick and dirty debugging
-void dumpBinData( const char* pFileName, void* pData, size_t sizeInBytes )
-{
-    FILE* pFileHandle = fopen(pFileName, "wb");
-    fwrite(pData, 1, sizeInBytes, pFileHandle);
-    fclose(pFileHandle);
-}
-
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
     pMemoryMapper->lastAddressReadFrom = addressOffset;
@@ -585,6 +578,12 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
 {
     pMemoryMapper->lastValueWritten     = value;
     pMemoryMapper->lastAddressWrittenTo = addressOffset;
+
+    if( addressOffset >= 0x0000 && addressOffset <= 0x8000 )
+    {
+        //FK: cartridge ROM
+        return;
+    }
 
     switch( addressOffset )
     {
@@ -2469,7 +2468,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             *pRegister = newRegisterValue;
 
             pCpuState->registers.F.Z = (newRegisterValue == 0);
-            pCpuState->registers.F.H = ((newRegisterValue & 0x0F) == 0xF);
+            pCpuState->registers.F.H = ((newRegisterValue & 0x0F) == 0x0F);
             pCpuState->registers.F.N = 1;
             break;
         }
