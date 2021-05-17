@@ -46,6 +46,7 @@ static constexpr uint8_t    gbSpritesPerScanline               = 10u; //FK: the 
 static constexpr uint8_t    gbFrameBufferScanlineSizeInBytes   = gbHorizontalResolutionInPixels / 4;
 static constexpr size_t     gbFrameBufferSizeInBytes           = gbFrameBufferScanlineSizeInBytes * gbVerticalResolutionInPixels;
 static constexpr size_t     gbMappedMemorySizeInBytes          = 0x10000;
+static constexpr size_t     gbCompressionTokenSizeInBytes      = 1;
 
 struct GBEmulatorJoypadState
 {
@@ -393,15 +394,17 @@ size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySi
         if( pMemory[offset] == token )
         {
             ++tokenCounter;
+            continue;
         }
-        else
-        {
-            compressedMemorySizeInBytes += sizeof(uint16_t); //FK: token counter
-            compressedMemorySizeInBytes += 1; //FK: token
-            token = pMemory[offset];
-            tokenCounter = 1;
-        }
+
+        compressedMemorySizeInBytes += sizeof(uint16_t); //FK: token counter
+        compressedMemorySizeInBytes += gbCompressionTokenSizeInBytes; //FK: token
+        token = pMemory[offset];
+        tokenCounter = 1;
     }
+    
+    compressedMemorySizeInBytes += sizeof(uint16_t); //FK: token counter
+    compressedMemorySizeInBytes += gbCompressionTokenSizeInBytes; //FK: token
 
     return compressedMemorySizeInBytes;
 }
@@ -435,21 +438,25 @@ size_t compressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource, si
         if( pSource[offset] == token )
         {
             ++tokenCounter;
+            continue;
         }
-        else
-        {
-            compressedMemorySizeInBytes += sizeof( uint16_t ); //FK: token counter
-            compressedMemorySizeInBytes += 1; //FK: token
 
-            memcpy(pDestination, &tokenCounter, sizeof( uint16_t ) );
+        compressedMemorySizeInBytes += sizeof( uint16_t ); //FK: token counter
+        compressedMemorySizeInBytes += 1; //FK: token
 
-            pDestination[2] = token;
-            pDestination += 3;
+        memcpy(pDestination, &tokenCounter, sizeof( uint16_t ) );
 
-            token = pSource[offset];
-            tokenCounter = 1;
-        }
+        pDestination[2] = token;
+        pDestination += 3;
+
+        token = pSource[offset];
+        tokenCounter = 1;
     }
+
+    compressedMemorySizeInBytes += sizeof( uint16_t );  
+    compressedMemorySizeInBytes += gbCompressionTokenSizeInBytes;                   
+    memcpy(pDestination, &tokenCounter, sizeof( uint16_t ) );
+    pDestination[2] = token;
 
     //FK: write compressed memory size in bytes at the beginning of the memory block
     memcpy( pDestinationBaseAddress, &compressedMemorySizeInBytes, sizeof( uint32_t ) );
@@ -486,20 +493,23 @@ void storeEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t* p
     memcpy( pStateMemory + sizeof( gbStateFourCC ), &state, sizeof( GBEmulatorState ) );
 }
 
-size_t uncompressMemoryBlockRLE( uint8_t* pDesination, const uint8_t* pSource )
+size_t uncompressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource )
 {
     uint32_t compressedMemorySizeInBytes;
     memcpy( &compressedMemorySizeInBytes, pSource, sizeof( uint32_t ) );
 
-    for( size_t memoryIndex = 4; memoryIndex < compressedMemorySizeInBytes; )
+    size_t sourceMemoryIndex = sizeof( uint32_t );
+    size_t destinationMemoryIndex = 0;
+    while( sourceMemoryIndex < compressedMemorySizeInBytes )
     {
         uint16_t tokenCount;
-        memcpy( &tokenCount, pSource + memoryIndex, sizeof( uint16_t ) );
+        memcpy( &tokenCount, pSource + sourceMemoryIndex, sizeof( uint16_t ) );
 
-        const uint8_t token = pSource[memoryIndex + 2];
-        memset( pDesination + memoryIndex, token, tokenCount );
+        const uint8_t token = pSource[sourceMemoryIndex + 2];
+        memset( pDestination + destinationMemoryIndex, token, tokenCount );
 
-        memoryIndex += sizeof( uint16_t ) + tokenCount;
+        sourceMemoryIndex += sizeof( uint16_t ) + gbCompressionTokenSizeInBytes;
+        destinationMemoryIndex += tokenCount;
     }
 
     return compressedMemorySizeInBytes;

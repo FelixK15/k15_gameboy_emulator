@@ -431,6 +431,53 @@ void doFrame(HWND hwnd)
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
+void testCompression()
+{
+	uint8_t testData[128];
+	memset(testData + 0, 1, 20);
+	memset(testData + 20, 2, 40);
+	memset(testData + 60, 3, 68);
+
+	const size_t compressedTestSizeInBytes = calculateCompressedMemorySizeRLE( testData, sizeof( testData ) );
+	uint8_t* pCompressedBuffer = (uint8_t*)malloc( compressedTestSizeInBytes );
+	compressMemoryBlockRLE(pCompressedBuffer, testData, sizeof( testData ));
+	memset( testData, 0, sizeof( testData ) );
+	if(!uncompressMemoryBlockRLE( testData, pCompressedBuffer ))
+	{
+		printf("Compressed failed! FourCC check failed.\n");
+		return;
+	}
+
+	for( size_t i = 0; i < 20; ++ i)
+	{
+		if( testData[i] != 1 )
+		{
+			printf("Compressed failed, test data is not the same as before compression.\n");
+			return;
+		}
+	}
+
+	for( size_t i = 20; i < 60; ++ i)
+	{
+		if( testData[i] != 2 )
+		{
+			printf("Compressed failed, test data is not the same as before compression.\n");
+			return;
+		}
+	}
+
+	for( size_t i = 60; i < 128; ++ i)
+	{
+		if( testData[i] != 3 )
+		{
+			printf("Compressed failed, test data is not the same as before compression.\n");
+			return;
+		}
+	}
+
+	printf("Compression test successful!\n");
+}
+
 int CALLBACK WinMain(HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine, int nShowCmd)
@@ -443,6 +490,9 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	{
 		return -1;
 	}
+
+	//FK: only for testing, duh
+	//testCompression();
 
 	setup(hwnd);
 
