@@ -15,20 +15,51 @@ the project and output a `k15_win32_gb_emulator.exe`
 ## How do I navigate the codebase?
 
 The win32 entry point and interface is located in the `k15_win32_gb_emulator.cpp` file.
-All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h` with the main entry point being `runEmulator()`.
+All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h` with the main entry point being `runGBEmulator()`.
+
+## Can I run this emulator locally?
+
+Yes, although it's currently only being tested with tetris. If you want to run tetris using this emulator though copy your tetris rom file
+next to the compiled exe and rename it to "rom.gb". After that you should be able to start the emulator and run tetris.
+
+Input on keyboard:
+arrow keys  =     digi pad
+ctrl        =     start
+alt         =     select
+a           =     a
+b           =     b
+
+## What do I have to do to port this to platform X?
+
+Inside `k15_win32_gb_emulator.cpp` you can find the Win32 platform layer for orientation.
+Basically, all you have to do is create an emulator instance by first providing the API with a block of memory.
+The required memory size can be calculated by calling `calculateGBEmulatorInstanceMemoryRequirementsInBytes()`.
+
+An emulator instance can be created by call `createGBEmulatorInstance()` (this function will take the aforemention memory block).
+Each emulator instance is independent from one another (goal would be link cable multiplayer using multiple instances)
+
+After an emulator instance could be created, load a game rom using `loadGBEmulatorInstanceRom()` (this rom data should be provided as a memory blob
+either by mapping the rom file or by copying the rom file content to a memory buffer).
+
+Now, call `runGBEmulatorInstance()` each frame and check with `hasGBEmulatorInstanceHitVBlank()` if the GameBoy frame has finished (should always be true if not single stepping). By calling `getGBEmulatorInstanceFrameBuffer()` you can get a pointer to the framebuffer data (attention: the pixel format is still in gameboy format - 2bpp. To convert to RGB8 call `convertGBFrameBufferToRGB8Buffer()`).
+
+To set the joystick state of the emulator instance, call `setGBEmulatorInstanceJoypadState()`. 
+
+State loading/saving can be done using `calculateGBEmulatorStateSizeInBytes()`, `storeGBEmulatorInstanceState()` and `loadGBEmulatorInstanceState()`.
+For an example of how to use the API please take a look at `k15_gb_emulator_ui.cpp`, specificially the `doEmulatorStateSaveLoadView()` function.
 
 ## Current State and Goals
 
 - [x] Implement opcodes to get into tetris copyright text
 - [x] Display video ram and show the tetris tileset
 - [ ] Emulate correct frame timings
-- [ ] Implement opcodes to get into tetris menu and start a game
+- [x] Implement opcodes to get into tetris menu and start a game
 - [ ] Test Tetris
 - [x] Add IMGUI dependency to be able to add debug features
   - [x] Add breakpoints
   - [x] Add conditional breakpoints
   - [x] Add code stepping
-  - [ ] Add memory inspection
+  - [x] Add memory inspection
   - [ ] Add VRAM viewer
 - [ ] Implement rom-switching
   - [ ] MBC1
