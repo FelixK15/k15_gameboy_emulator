@@ -27,13 +27,13 @@
 char gameTitle[16] = {0};
 constexpr uint32_t gbScreenWidth 			 	= 160;
 constexpr uint32_t gbScreenHeight 			 	= 144;
-constexpr uint32_t gbFrameTimeInMilliseconds 	= 16;
+constexpr uint32_t gbFrameTimeInMicroseconds 	= 16700;
 uint16_t breakpointAddress					 	= 0;
 uint32_t screenWidth 						 	= 1920;
 uint32_t screenHeight 						 	= 1080;
 GLuint gbScreenTexture 						 	= 0;
 bool   showUi								 	= true;
-uint32_t deltaTimeInMilliSeconds 				= 0u;
+uint32_t deltaTimeInMicroseconds 				= 0u;
 
 uint8_t* pGameboyVideoBuffer 					= nullptr;
 
@@ -43,6 +43,26 @@ uint8_t buttonInput								= 0x0F;
 GBEmulatorInstance* pEmulatorInstance 			= nullptr;
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+
+uint16_t queryMonitorRefreshRate( HWND hwnd )
+{
+	HMONITOR monitorHandle = MonitorFromWindow( hwnd, MONITOR_DEFAULTTOPRIMARY );
+
+	MONITORINFOEX monitorInfo;
+	monitorInfo.cbSize = sizeof(MONITORINFOEX);
+	if( GetMonitorInfo(monitorHandle, &monitorInfo) == FALSE )
+	{
+		return 60; //FK: assume 60hz as default
+	}
+
+	DEVMODE displayInfo;
+	if( EnumDisplaySettings( monitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &displayInfo ) == FALSE )
+	{
+		return 60; 
+	}
+
+	return (uint16_t)displayInfo.dmDisplayFrequency;
+}
 
 void allocateDebugConsole()
 {
@@ -162,6 +182,13 @@ void K15_WindowResized(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 	screenHeight = clientRect.bottom - clientRect.top;
 
 	glViewport(0, 0, screenWidth, screenHeight);
+
+	//FK: Requery monitor refresh rate in case the monitor changed
+	const uint16_t monitorRefresRate = queryMonitorRefreshRate(hwnd);
+	if( pEmulatorInstance != nullptr )
+	{
+		setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, monitorRefresRate );
+	}
 }
 
 LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
@@ -243,8 +270,8 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 	return hwnd;
 }
 
-void setup(HWND hwnd)
-{	
+void createOpenGLContext(HWND hwnd)
+{
 	PIXELFORMATDESCRIPTOR pfd =
 		{
 			sizeof(PIXELFORMATDESCRIPTOR),
@@ -282,30 +309,44 @@ void setup(HWND hwnd)
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
+}
 
-	//HANDLE pRomHandle = CreateFile("instr_timing.gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
-	//HANDLE pRomHandle = CreateFile("cpu_instrs.gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
-	//HANDLE pRomHandle = CreateFile("Othello (Europe).gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
-	HANDLE pRomHandle = CreateFile("rom.gb", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
+const uint8_t* mapRomFile( const char* pRomFileName )
+{
+	HANDLE pRomHandle = CreateFile(pRomFileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
 	if( pRomHandle == INVALID_HANDLE_VALUE )
 	{
-		printf("Could not open 'rom.gb'.\n");
-		return;
+		printf("Could not open '%s'.\n", pRomFileName);
+		return nullptr;
 	}
 
 	HANDLE pRomMapping = CreateFileMapping( pRomHandle, nullptr, PAGE_READONLY, 0u, 0u, nullptr );
 	if( pRomMapping == INVALID_HANDLE_VALUE )
 	{
-		printf("Could not map 'rom.gb'.\n");
+		printf("Could not map '%s'.\n", pRomFileName);
+		return nullptr;
+	}
+
+	return (const uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
+}
+
+void setup( HWND hwnd )
+{	
+	createOpenGLContext( hwnd );
+	//const uint8_t* pRomData = mapRomFile( "Othello (Europe).gb" );
+	const uint8_t* pRomData = mapRomFile( "rom.gb" );
+	if( pRomData == nullptr )
+	{
 		return;
 	}
 
+	const uint16_t monitorRefreshRate = queryMonitorRefreshRate( hwnd );
+	
 	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorInstanceMemoryRequirementsInBytes();
 
 	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
 	pEmulatorInstance = createGBEmulatorInstance(pEmulatorInstanceMemory);
-
-	uint8_t* pRomData = (uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
+	setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, monitorRefreshRate );
 
 	pGameboyVideoBuffer = (uint8_t*)malloc(gbScreenHeight*gbScreenWidth*3);
 
@@ -334,7 +375,7 @@ void setup(HWND hwnd)
 void doFrame(HWND hwnd)
 {
 	char windowTitle[64];
-	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %d ms", gameTitle, deltaTimeInMilliSeconds );
+	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms", gameTitle, (float)deltaTimeInMicroseconds/1000.f );
 	SetWindowText(hwnd, (LPCSTR)windowTitle);
 
 	const float pixelUnitH = 1.0f/(float)screenWidth;
@@ -512,12 +553,12 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		doFrame(hwnd);
 
 		QueryPerformanceCounter(&end);
-		deltaTimeInMilliSeconds = (uint32_t)(((end.QuadPart-start.QuadPart)*1000)/freq.QuadPart);
+		deltaTimeInMicroseconds = (uint32_t)(((end.QuadPart-start.QuadPart)*1000000)/freq.QuadPart);
 
-		if( deltaTimeInMilliSeconds < gbFrameTimeInMilliseconds )
+		if( deltaTimeInMicroseconds < gbFrameTimeInMicroseconds )
 		{
-			const uint32_t sleepTimeInMilliSeconds = gbFrameTimeInMilliseconds - deltaTimeInMilliSeconds;
-			Sleep(sleepTimeInMilliSeconds);
+			const uint32_t sleepTimeInMilliseconds = ( gbFrameTimeInMicroseconds - deltaTimeInMicroseconds ) / 1000;
+			//Sleep( sleepTimeInMilliseconds );
 		}
 	}
 

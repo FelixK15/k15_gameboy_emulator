@@ -28,6 +28,7 @@ __asm\
 #endif
 
 static constexpr uint32_t   gbStateFourCC                      = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
+static constexpr uint32_t   gbCpuFrequency                     = 4194304u;
 static constexpr uint32_t   gbCyclesPerFrame                   = 70224u;
 static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                    = 160u;
@@ -144,6 +145,7 @@ struct GBCpuRegisters
     };
 
     uint16_t SP;
+    uint16_t PC;
 };
 
 struct GBCpuStateFlags
@@ -160,10 +162,11 @@ struct GBCpuState
 
     GBCpuRegisters  registers;
 
+    uint32_t        cycleCounter;
+    uint32_t        targetCycleCountPerUpdate;
     uint16_t        lastOpcodeAddress;
     uint16_t        dmaAddress;
-    uint16_t        programCounter;
-    uint8_t         dmaCycleCount;
+    uint8_t         dmaCycleCounter;
     uint8_t         lastOpcode;
     GBCpuStateFlags flags;          //FK: not to be confused with GBCpuRegisters::F
 };
@@ -268,8 +271,8 @@ struct GBLcdRegisters
 struct GBPpuState
 {
     uint32_t            dotCounter;
+    uint32_t            cycleCounter;
     GBLcdRegisters      lcdRegisters;
-
 
     GBObjectAttributes* pOAM;
     GBLcdControl*       pLcdControl;
@@ -336,8 +339,10 @@ struct GBOpcodeHistoryElement
     GBCpuRegisters  registers;
 };
 
-struct GBEmulatorGBDebug
+struct GBEmulatorDebug
 {
+    GBOpcodeHistoryElement      opcodeHistory[ gbOpcodeHistoryBufferCapacity ];
+
     uint8_t                     pauseExecution          : 1;
     uint8_t                     continueExecution       : 1;
     uint8_t                     runForOneInstruction    : 1;
@@ -346,7 +351,6 @@ struct GBEmulatorGBDebug
 
     uint16_t                    breakpointAddress;
     uint8_t                     opcodeHistorySize;
-    GBOpcodeHistoryElement      opcodeHistory[ gbOpcodeHistoryBufferCapacity ];
 };
 #endif
 
@@ -385,7 +389,7 @@ struct GBEmulatorInstance
     GBEmulatorJoypadState   joypadState;
     GBEmulatorInstanceFlags flags;
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    GBEmulatorGBDebug       gbDebug;
+    GBEmulatorDebug         debug;
 #endif
 };
 
@@ -394,13 +398,14 @@ struct GBEmulatorState
     GBCpuStateFlags     cpuFlags;
     GBCpuRegisters      cpuRegisters;
     uint32_t            lcdDotCounter;
-    uint16_t            programCounter;
+    uint32_t            ppuCycleCounter;
+    uint32_t            cpuCycleCounter;
     uint16_t            dmaAddress;
     uint16_t            timerCounterTarget;
     uint16_t            timerCounterValue;
     uint16_t            timerDividerCounter;
     uint8_t             timerEnableCounter;
-    uint8_t             dmaCycleCount;
+    uint8_t             dmaCycleCounter;
     uint8_t             interruptEnableRegisters;
 };
 
@@ -510,9 +515,10 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     GBEmulatorState state;
     state.cpuRegisters                  = pCpuState->registers;
     state.cpuFlags                      = pCpuState->flags;
+    state.cpuCycleCounter               = pCpuState->cycleCounter;
     state.dmaAddress                    = pCpuState->dmaAddress;
-    state.dmaCycleCount                 = pCpuState->dmaCycleCount;
-    state.programCounter                = pCpuState->programCounter;
+    state.dmaCycleCounter               = pCpuState->dmaCycleCounter;
+    state.ppuCycleCounter               = pPpuState->cycleCounter;
     state.lcdDotCounter                 = pPpuState->dotCounter;
     state.interruptEnableRegisters      = pMemoryMapper->pBaseAddress[0xFFFF];
     state.timerCounterTarget            = pTimerState->counterTarget;
@@ -574,13 +580,14 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     GBEmulatorState state;
     memcpy( &state, pStateMemory + sizeof( gbStateFourCC ), sizeof( GBEmulatorState ) );
 
-    pCpuState->programCounter = state.programCounter;
-    pCpuState->registers      = state.cpuRegisters;
-    pCpuState->flags          = state.cpuFlags;
-    pCpuState->dmaAddress     = state.dmaAddress;
-    pCpuState->dmaCycleCount  = state.dmaCycleCount;
+    pCpuState->registers        = state.cpuRegisters;
+    pCpuState->cycleCounter     = state.cpuCycleCounter;
+    pCpuState->flags            = state.cpuFlags;
+    pCpuState->dmaAddress       = state.dmaAddress;
+    pCpuState->dmaCycleCounter  = state.dmaCycleCounter;
 
-    pPpuState->dotCounter = state.lcdDotCounter;
+    pPpuState->dotCounter   = state.lcdDotCounter;
+    pPpuState->cycleCounter = state.ppuCycleCounter;
 
     pTimerState->counterTarget  = state.timerCounterTarget;
     pTimerState->counterValue   = state.timerCounterValue;
@@ -599,6 +606,11 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     offset += uncompressMemoryBlockRLE( pMemoryMapper->IOPorts,            pCompressedMemory + offset );
 
     return true;
+}
+
+void setGBEmulatorInstanceMonitorRefreshRate( GBEmulatorInstance* pEmulatorInstance, uint16_t monitorRefreshRate )
+{
+    pEmulatorInstance->pCpuState->targetCycleCountPerUpdate = gbCpuFrequency / monitorRefreshRate;
 }
 
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
@@ -782,7 +794,7 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->registers.B = 0x0;
 
     //FK: Start fetching instructions at address $1000
-    pState->programCounter = 0x0100;
+    pState->registers.PC = 0x0100;
 
     pState->registers.F.value   = 0x80;
     pState->registers.C         = 0x13;
@@ -792,7 +804,9 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->pIE = pMemoryMapper->pBaseAddress + 0xFFFF;
     pState->pIF = pMemoryMapper->pBaseAddress + 0xFF0F;
 
-    pState->dmaCycleCount = 0;
+    pState->dmaCycleCounter = 0;
+
+    pState->targetCycleCountPerUpdate = ( uint16_t )( gbCpuFrequency / 60 ); //FK: Assume 60hz output as default
 
     pState->flags.dma   = 0;
     pState->flags.IME   = 1;
@@ -893,7 +907,7 @@ void resetGBEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
         mapRomMemory( pMemoryMapper, pMemoryMapper->pRomMemoryBaseAddress );
     }
 
-    pEmulatorInstance->gbDebug.continueExecution     = 1;
+    pEmulatorInstance->debug.continueExecution     = 1;
     pEmulatorInstance->joypadState.actionButtonMask  = 0;
     pEmulatorInstance->joypadState.dpadButtonMask    = 0;
 
@@ -904,28 +918,28 @@ void resetGBEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
 void setGBEmulatorInstanceBreakpoint( GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress )
 {
-    pEmulatorInstance->gbDebug.pauseAtBreakpoint = pauseAtBreakpoint;
-    pEmulatorInstance->gbDebug.breakpointAddress = breakpointAddress;
+    pEmulatorInstance->debug.pauseAtBreakpoint = pauseAtBreakpoint;
+    pEmulatorInstance->debug.breakpointAddress = breakpointAddress;
 }
 
 void continueGBEmulatorInstanceExecution( GBEmulatorInstance* pEmulatorInstance )
 {
-    pEmulatorInstance->gbDebug.continueExecution = 1;
+    pEmulatorInstance->debug.continueExecution = 1;
 }
 
 void pauseGBEmulatorInstanceExecution( GBEmulatorInstance* pEmulatorInstance )
 {
-    pEmulatorInstance->gbDebug.pauseExecution = 1;
+    pEmulatorInstance->debug.pauseExecution = 1;
 }
 
 void runGBEmulatorInstanceForOneInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
-    pEmulatorInstance->gbDebug.runForOneInstruction = 1;
+    pEmulatorInstance->debug.runForOneInstruction = 1;
 }
 
 void runGBEmulatorInstanceForOneFrame( GBEmulatorInstance* pEmulatorInstance )
 {
-    pEmulatorInstance->gbDebug.runSingleFrame = 1;
+    pEmulatorInstance->debug.runSingleFrame = 1;
 }
 #endif
 
@@ -944,14 +958,14 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     initPpuFrameBuffer( pEmulatorInstance->pPpuState, pFramebufferMemory );
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-    pEmulatorInstance->gbDebug.breakpointAddress    = 0x0000;
-    pEmulatorInstance->gbDebug.pauseAtBreakpoint    = 0;
-    pEmulatorInstance->gbDebug.pauseExecution       = 0;
-    pEmulatorInstance->gbDebug.runForOneInstruction = 0;
-    pEmulatorInstance->gbDebug.runSingleFrame       = 0;
-    pEmulatorInstance->gbDebug.continueExecution    = 0;
-    pEmulatorInstance->gbDebug.opcodeHistorySize    = 0;
-    memset( pEmulatorInstance->gbDebug.opcodeHistory, 0, sizeof( pEmulatorInstance->gbDebug.opcodeHistory ) );
+    pEmulatorInstance->debug.breakpointAddress    = 0x0000;
+    pEmulatorInstance->debug.pauseAtBreakpoint    = 0;
+    pEmulatorInstance->debug.pauseExecution       = 0;
+    pEmulatorInstance->debug.runForOneInstruction = 0;
+    pEmulatorInstance->debug.runSingleFrame       = 0;
+    pEmulatorInstance->debug.continueExecution    = 0;
+    pEmulatorInstance->debug.opcodeHistorySize    = 0;
+    memset( pEmulatorInstance->debug.opcodeHistory, 0, sizeof( pEmulatorInstance->debug.opcodeHistory ) );
 #endif
 
     resetGBEmulatorInstance(pEmulatorInstance);
@@ -1266,6 +1280,8 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
         return;
     }
 
+    pPpuState->cycleCounter += cycleCount;
+
     uint8_t lcdMode         = pPpuState->lcdRegisters.pStatus->mode;
     uint8_t ly              = *pPpuState->lcdRegisters.pLy;
     uint16_t lcdDotCounter  = pPpuState->dotCounter;
@@ -1384,8 +1400,8 @@ void triggerPendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
             const uint8_t interruptFlag = 1 << ( 4u - interruptIndex );
             if( interruptHandleMask & interruptFlag )
             {
-                push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->programCounter);
-                pCpuState->programCounter = 0x40 + 0x08 * ( 4u - interruptIndex );
+                push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
+                pCpuState->registers.PC = 0x40 + 0x08 * ( 4u - interruptIndex );
                 *pCpuState->pIF &= ~interruptFlag;
                 break;
             }
@@ -1616,9 +1632,9 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //CALL nn
         case 0xCD:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->programCounter + 2);
-            pCpuState->programCounter = address;
+            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC + 2);
+            pCpuState->registers.PC = address;
             break;
         }
 
@@ -1627,8 +1643,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xD4:
         case 0xDC:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            pCpuState->programCounter += 2;
+            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            pCpuState->registers.PC += 2;
 
             uint8_t condition = 0;
             switch( opcode )
@@ -1653,8 +1669,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 
             if( condition )
             {
-                push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->programCounter);
-                pCpuState->programCounter = address;
+                push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
+                pCpuState->registers.PC = address;
             }
 
             opcodeCondition = condition;
@@ -1690,54 +1706,54 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LD A,(nn)
         case 0xFA:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, address);
-            pCpuState->programCounter += 2;
+            pCpuState->registers.PC += 2;
             break;     
         }
 
         //LD (nn), A
         case 0xEA:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
             write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.A);
-            pCpuState->programCounter += 2;
+            pCpuState->registers.PC += 2;
             break;
         }
 
         //LD A,n
         case 0x3E:
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             break;
 
         //LD B,n
         case 0x06:  
-            pCpuState->registers.B = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.B = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             break;
 
         //LD C,n
         case 0x0E:
-            pCpuState->registers.C = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.C = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             break;
 
         //LD D,n
         case 0x16: 
-            pCpuState->registers.D = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.D = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             break;
             
         //LD E,n
         case 0x1E: 
-            pCpuState->registers.E = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.E = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             break;
         
         //LD H,n
         case 0x26:
-            pCpuState->registers.H = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.H = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             break;
 
         //LD L,n
         case 0x2E:
-            pCpuState->registers.L = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            pCpuState->registers.L = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             break;
         
         //LD a,(HL++)
@@ -2158,7 +2174,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                 //LD (HL), n
                 case 0x36:
                     pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
                     break;
             }
 
@@ -2176,7 +2192,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LD HL, SP + n
         case 0xF8:
         {
-            const int8_t offset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            const int8_t offset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             pCpuState->registers.HL = pCpuState->registers.SP + offset;
             pCpuState->registers.F.Z = 0;
             pCpuState->registers.F.N = 0;
@@ -2186,23 +2202,23 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LD (nn), SP
         case 0x08:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
+            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
             write16BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.SP);
-            pCpuState->programCounter += 2;
+            pCpuState->registers.PC += 2;
         }
 
         //JP nn
         case 0xC3:
         {
-            const uint16_t addressToJumpTo = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            pCpuState->programCounter = addressToJumpTo;
+            const uint16_t addressToJumpTo = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            pCpuState->registers.PC = addressToJumpTo;
             break;
         }
 
         //JP HL
         case 0xE9:
         {
-            pCpuState->programCounter = pCpuState->registers.HL;
+            pCpuState->registers.PC = pCpuState->registers.HL;
             break;
         }
 
@@ -2212,8 +2228,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xD2:
         case 0xDA:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            pCpuState->programCounter += 2;
+            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            pCpuState->registers.PC += 2;
 
             uint8_t condition = 0;
             switch( opcode )
@@ -2237,7 +2253,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 
             if( condition )
             {
-                pCpuState->programCounter = address;
+                pCpuState->registers.PC = address;
             }
 
             opcodeCondition = condition;
@@ -2249,8 +2265,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //JR n
         case 0x18:
         {
-            const int8_t addressOffset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
-            pCpuState->programCounter += addressOffset;
+            const int8_t addressOffset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            pCpuState->registers.PC += addressOffset;
             break;
         }
 
@@ -2260,7 +2276,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x30:
         case 0x38:
         {
-            const int8_t addressOffset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            const int8_t addressOffset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             uint8_t condition = 0;
             switch(opcode)
             {
@@ -2284,7 +2300,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 
             if( condition )
             {
-                pCpuState->programCounter += addressOffset;
+                pCpuState->registers.PC += addressOffset;
             }
 
             opcodeCondition = condition;
@@ -2330,7 +2346,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
                     break;
                 case 0xEE:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
                     break;
             }
             
@@ -2389,7 +2405,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
                 //OR #
                 case 0xF6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
                     break;
             }
 
@@ -2447,7 +2463,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
                 //AND #
                 case 0xE6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
                     break;
             }
 
@@ -2461,20 +2477,20 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 
         //LD n,nn (16bit loads)
         case 0x01:
-            pCpuState->registers.BC = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            pCpuState->programCounter += 2u;
+            pCpuState->registers.BC = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            pCpuState->registers.PC += 2u;
             break;
         case 0x11:
-            pCpuState->registers.DE = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            pCpuState->programCounter += 2u;
+            pCpuState->registers.DE = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            pCpuState->registers.PC += 2u;
             break;
         case 0x21:
-            pCpuState->registers.HL = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            pCpuState->programCounter += 2u;
+            pCpuState->registers.HL = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            pCpuState->registers.PC += 2u;
             break;
         case 0x31:
-            pCpuState->registers.SP = read16BitValueFromAddress(pMemoryMapper, pCpuState->programCounter);
-            pCpuState->programCounter += 2u;
+            pCpuState->registers.SP = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            pCpuState->registers.PC += 2u;
             break;
 
         //INC n
@@ -2640,7 +2656,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LDH (n),A
         case 0xE0:
         {
-            const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.A);
             break;
         }
@@ -2648,7 +2664,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LDH A,(n)
         case 0xF0:
         {
-            const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, address);
             break;
         }
@@ -2707,7 +2723,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //ADD SP, n
         case 0xE8:
         {
-            const int8_t value = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            const int8_t value = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             pCpuState->registers.SP += value;
 
             pCpuState->registers.F.Z = 0;
@@ -2763,7 +2779,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
                 //ADD A, #
                 case 0xC6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
                     break;
             }
 
@@ -2826,7 +2842,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
                 //SUB A, #
                 case 0xD6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
                     break;
             }
 
@@ -2872,7 +2888,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 
             if( condition )
             {
-                pCpuState->programCounter = pop16BitValueFromStack(pCpuState, pMemoryMapper);
+                pCpuState->registers.PC = pop16BitValueFromStack(pCpuState, pMemoryMapper);
             }
 
             opcodeCondition = condition;
@@ -2883,14 +2899,14 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xD9:
         {
             pCpuState->flags.IME = 1;
-            pCpuState->programCounter = pop16BitValueFromStack(pCpuState, pMemoryMapper);
+            pCpuState->registers.PC = pop16BitValueFromStack(pCpuState, pMemoryMapper);
             break;
         }
 
         //RET
         case 0xC9:
         {
-            pCpuState->programCounter = pop16BitValueFromStack(pCpuState, pMemoryMapper);
+            pCpuState->registers.PC = pop16BitValueFromStack(pCpuState, pMemoryMapper);
             break;
         }
 
@@ -3018,7 +3034,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         // RLC n
         case 0xCB:
         {
-            const uint8_t cbOpcode = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            const uint8_t cbOpcode = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             handleCbOpcode(pCpuState, pMemoryMapper, cbOpcode);
             break;
         }
@@ -3083,7 +3099,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //ADC n
         case 0xCE:
         {
-            const uint8_t value = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+            const uint8_t value = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + value;
 
             pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
@@ -3217,8 +3233,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xFF:
         {
             const uint16_t address = (uint16_t)(opcode - 0xC7);
-            push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->programCounter);
-            pCpuState->programCounter = address;
+            push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
+            pCpuState->registers.PC = address;
             break;
         }
 
@@ -3270,7 +3286,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     break;
                 //CP #
                 case 0xFE:
-                    value = read8BitValueFromAddress(pMemoryMapper, pCpuState->programCounter++);
+                    value = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
                     break;
             }
 
@@ -3299,7 +3315,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
         default:
-            printf( "not implemented opcode '$%.2hhX' at pc '$%.4hX'\n", opcode, ( pCpuState->programCounter - pOpcode->byteCount ) );
+            printf( "not implemented opcode '$%.2hhX' at pc '$%.4hX'\n", opcode, ( pCpuState->registers.PC - pOpcode->byteCount ) );
 #if K15_BREAK_ON_UNKNOWN_INSTRUCTION == 1
             debugBreak();
 #endif
@@ -3312,8 +3328,8 @@ void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
 {
     if( pCpuState->flags.dma )
     {
-        pCpuState->dmaCycleCount += cycleCostOfLastOpCode;
-        if( pCpuState->dmaCycleCount >= gbDMACycleCount )
+        pCpuState->dmaCycleCounter += cycleCostOfLastOpCode;
+        if( pCpuState->dmaCycleCounter >= gbDMACycleCount )
         {
             pCpuState->flags.dma = 0;
 
@@ -3331,7 +3347,7 @@ void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         pCpuState->dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
 
         //FK: Count up to 160 cycles for the dma flag to be reset
-        pCpuState->dmaCycleCount = 0;
+        pCpuState->dmaCycleCounter = 0;
 
         //FK: hack to not run into an endless DMA loop
         pMemoryMapper->lastAddressWrittenTo = 0x0000;
@@ -3397,8 +3413,6 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
-    GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
-    GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
 
     triggerPendingInterrupts( pCpuState, pMemoryMapper );
 
@@ -3408,24 +3422,11 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         return 2;
     }
 
-    const uint16_t opcodeAddress = pCpuState->programCounter++;
+    GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
+    GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
+
+    const uint16_t opcodeAddress = pCpuState->registers.PC++;
     const uint8_t opcode         = read8BitValueFromAddress( pMemoryMapper, opcodeAddress );
-    
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    uint8_t opcodeHistoryIndex = pEmulatorInstance->gbDebug.opcodeHistorySize;
-    if( opcodeHistoryIndex == gbOpcodeHistoryBufferCapacity )
-    {
-        opcodeHistoryIndex = (gbOpcodeHistoryBufferCapacity-1);
-        memcpy(pEmulatorInstance->gbDebug.opcodeHistory, pEmulatorInstance->gbDebug.opcodeHistory + 1, sizeof(GBOpcodeHistoryElement) * (gbOpcodeHistoryBufferCapacity-1));
-    }
-
-    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].address    = opcodeAddress;
-    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].opcode     = opcode;
-    pEmulatorInstance->gbDebug.opcodeHistory[opcodeHistoryIndex].registers  = pCpuState->registers;
-    ++opcodeHistoryIndex;
-
-    pEmulatorInstance->gbDebug.opcodeHistorySize = opcodeHistoryIndex;
-#endif
 
     const uint8_t cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
     updateTimerRegisters( pMemoryMapper, pTimerState );
@@ -3509,37 +3510,36 @@ bool hasGBEmulatorInstanceHitVBlank( GBEmulatorInstance* pInstance )
 
 void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
 {
-	static uint32_t totalCycleCount = 0;
-
+    GBCpuState* pCpuState = pInstance->pCpuState;
+    GBPpuState* pPpuState = pInstance->pPpuState;
+    
     //FK: reset flags
     pInstance->flags.value = 0;
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
     uint8_t runFrame = 0;
-    if( pInstance->gbDebug.continueExecution )
+    if( pInstance->debug.continueExecution )
     {
-        pInstance->gbDebug.continueExecution    = 0;
-        pInstance->gbDebug.pauseExecution       = 0;
+        pInstance->debug.continueExecution    = 0;
+        pInstance->debug.pauseExecution       = 0;
     }
 
-	if( pInstance->gbDebug.runForOneInstruction )
+	if( pInstance->debug.runForOneInstruction )
 	{
         const uint8_t cycleCount = runSingleInstruction( pInstance );
-        totalCycleCount += cycleCount;
         
-        if( totalCycleCount >= gbCyclesPerFrame )
+        if( pPpuState->cycleCounter >= gbCyclesPerFrame )
         {
             pInstance->flags.vblank = 1;
-            totalCycleCount -= gbCyclesPerFrame;
+            pPpuState->cycleCounter -= gbCyclesPerFrame;
         }
 
-        totalCycleCount = totalCycleCount + cycleCount % gbCyclesPerFrame;
-        pInstance->gbDebug.runForOneInstruction = 0;
+        pInstance->debug.runForOneInstruction = 0;
 	}
     else
     {
-        runFrame = pInstance->gbDebug.runSingleFrame || !pInstance->gbDebug.pauseExecution;
-        pInstance->gbDebug.runSingleFrame = 0;
+        runFrame = pInstance->debug.runSingleFrame || !pInstance->debug.pauseExecution;
+        pInstance->debug.runSingleFrame = 0;
     }
 
     if( !runFrame )
@@ -3549,18 +3549,23 @@ void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
 
 #endif
 
-    while( totalCycleCount < gbCyclesPerFrame )
+    while( pCpuState->cycleCounter < pCpuState->targetCycleCountPerUpdate )
     {
         const uint8_t cycleCount = runSingleInstruction( pInstance );
-        totalCycleCount += cycleCount;
+        pCpuState->cycleCounter += cycleCount;
 
-        if( pInstance->gbDebug.pauseAtBreakpoint && pInstance->gbDebug.breakpointAddress == pInstance->pCpuState->programCounter )
+        if( pInstance->debug.pauseAtBreakpoint && pInstance->debug.breakpointAddress == pInstance->pCpuState->registers.PC )
         {
-            pInstance->gbDebug.pauseExecution = 1;
+            pInstance->debug.pauseExecution = 1;
             return;
         }
     }
 
-    pInstance->flags.vblank = 1;
-    totalCycleCount -= gbCyclesPerFrame;
+    if( pPpuState->cycleCounter >= gbCyclesPerFrame )
+    {
+        pInstance->flags.vblank = 1;
+        pPpuState->cycleCounter -= gbCyclesPerFrame;
+    }
+
+    pCpuState->cycleCounter -= pCpuState->targetCycleCountPerUpdate;
 }

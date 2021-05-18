@@ -3,7 +3,7 @@
 
 constexpr ImGuiInputTextFlags hexTextInputFlags = ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase;
 
-static struct GBDebugViewState
+static struct debugViewState
 {
     struct
     {
@@ -76,7 +76,7 @@ void doGbCpuDebugView( GBEmulatorInstance* pEmulatorInstance )
     ImGui::Separator();
     ImGui::Text("GB CPU currently");
     ImGui::SameLine();
-    if( pEmulatorInstance->gbDebug.pauseExecution )
+    if( pEmulatorInstance->debug.pauseExecution )
     {
         ImGui::TextColored(ImVec4(0.7f, 0.0f, 0.2f, 1.0f), "halted");
     }
@@ -175,7 +175,7 @@ void doCpuStateView(GBEmulatorInstance* pEmulatorInstance)
     ImGui::TableNextColumn();
 
     ImGui::Text("PC");                                  ImGui::TableNextColumn();
-    ImGui::Text("$%04hx", pCpuState->programCounter);    ImGui::TableNextColumn();
+    ImGui::Text("$%04hx", pCpuState->registers.PC);    ImGui::TableNextColumn();
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
 
@@ -295,7 +295,7 @@ void doMemoryStateView( GBEmulatorInstance* pEmulatorInstance )
     }
 
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
-    memoryEditor.DrawContents( pMemoryMapper->pBaseAddress, 0x10000 );
+    memoryEditor.DrawContents( pMemoryMapper->pBaseAddress, gbMappedMemorySizeInBytes );
     ImGui::End();
 }
 
@@ -449,7 +449,7 @@ void doInstructionView( GBEmulatorInstance* pEmulatorInstance )
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
 
-            if( byteIndex == pCpuState->programCounter )
+            if( byteIndex == pCpuState->registers.PC )
             {
                 ImGui::Text(">");
             }
@@ -516,13 +516,13 @@ void doInstructionHistoryView( GBEmulatorInstance* pEmulatorInstance )
     ImGui::TableSetupColumn("CPU Register State",   ImGuiTableColumnFlags_WidthFixed, 400.0f);
 
     ImGuiListClipper clipper;
-    clipper.Begin( pEmulatorInstance->gbDebug.opcodeHistorySize );
+    clipper.Begin( pEmulatorInstance->debug.opcodeHistorySize );
 
     while( clipper.Step() )
     {
         for ( int rowIndex = clipper.DisplayStart; rowIndex < clipper.DisplayEnd; ++rowIndex )
         {
-            const GBOpcodeHistoryElement* pOpcodeHistoryElement = pEmulatorInstance->gbDebug.opcodeHistory + rowIndex;
+            const GBOpcodeHistoryElement* pOpcodeHistoryElement = pEmulatorInstance->debug.opcodeHistory + rowIndex;
             const GBOpcode* pOpcode = pOpcodeHistoryElement->opcode == 0xCB ? cbPrefixedOpcodes + pOpcodeHistoryElement->opcode : unprefixedOpcodes + pOpcodeHistoryElement->opcode;
 
             ImGui::TableNextRow();
