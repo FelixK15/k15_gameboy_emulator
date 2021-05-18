@@ -55,7 +55,7 @@ In case the emulator isn't run on a 60Hz monitor, the monitor refresh rate can b
 
 - [x] Implement opcodes to get into tetris copyright text
 - [x] Display video ram and show the tetris tileset
-- [ ] Emulate correct frame timings
+- [x] Emulate correct frame timings independend of monitor refresh rate
 - [x] Implement opcodes to get into tetris menu and start a game
 - [ ] Test Tetris
 - [x] Add IMGUI dependency to be able to add debug features
