@@ -2,7 +2,8 @@
 #include "stdio.h"
 
 #define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
-#define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
+#define K15_BREAK_ON_UNKNOWN_INSTRUCTION        0
+#define K15_BREAK_ON_ILLEGAL_INSTRUCTION        0
 
 #include "k15_gb_opcodes.h"
 
@@ -25,6 +26,13 @@ __asm\
 #else
 #   define breakPointHook()
 #   define debugBreak
+#endif
+
+//FK: Platform specific functions
+#if defined( _M_X64 ) || defined( _M_IX86 )
+#   define interLockedExchange16BitValue(pTarget, value)  InterlockedExchange16((SHORT*)pTarget, value)
+#else
+#   error platform not supported yet 
 #endif
 
 static constexpr uint32_t   gbStateFourCC                      = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
@@ -52,32 +60,40 @@ static constexpr size_t     gbCompressionTokenSizeInBytes      = 1;
 
 struct GBEmulatorJoypadState
 {
-    union
+    union 
     {
-        struct 
+        struct
         {
-            uint8_t a           : 1;
-            uint8_t b           : 1;
-            uint8_t select      : 1;
-            uint8_t start       : 1;
-            uint8_t _padding    : 4;
+            union
+            {
+                struct 
+                {
+                    uint8_t a           : 1;
+                    uint8_t b           : 1;
+                    uint8_t select      : 1;
+                    uint8_t start       : 1;
+                    uint8_t _padding    : 4;
+                };
+
+                uint8_t actionButtonMask;
+            };
+
+            union
+            {
+                struct 
+                {
+                    uint8_t right       : 1;
+                    uint8_t left        : 1;
+                    uint8_t up          : 1;
+                    uint8_t down        : 1;
+                    uint8_t _padding    : 4;
+                };
+
+                uint8_t dpadButtonMask;
+            };
         };
 
-        uint8_t actionButtonMask = 0;
-    };
-
-    union
-    {
-        struct 
-        {
-            uint8_t right       : 1;
-            uint8_t left        : 1;
-            uint8_t up          : 1;
-            uint8_t down        : 1;
-            uint8_t _padding    : 4;
-        };
-
-        uint8_t dpadButtonMask = 0;
+        uint16_t value = 0;
     };
 };
 
@@ -164,10 +180,8 @@ struct GBCpuState
 
     uint32_t        cycleCounter;
     uint32_t        targetCycleCountPerUpdate;
-    uint16_t        lastOpcodeAddress;
     uint16_t        dmaAddress;
     uint8_t         dmaCycleCounter;
-    uint8_t         lastOpcode;
     GBCpuStateFlags flags;          //FK: not to be confused with GBCpuRegisters::F
 };
 
@@ -302,6 +316,7 @@ struct GBMemoryMapper
 
     GBLcdStatus         lcdStatus;  //FK: Mirror lcd status to check wether we can read from VRAM and/or OAM 
     uint8_t             lcdEnabled; //FK: Mirror lcd enabled flag to check wether we can read from VRAM and/or OAM
+    uint8_t             dmaActive;  //FK: Mirror dma flag to check wether we can read only from HRAM
 };
 
 struct GBRomHeader
@@ -370,7 +385,7 @@ struct GBEmulatorInstanceFlags
 struct GBTimerState
 {
     uint16_t    dividerCounter;     //FK: overflow = increment divider
-    uint16_t    counterValue;   //FK: how many cpu cycles until TIMA is increased?
+    uint16_t    counterValue;       //FK: how many cpu cycles until TIMA is increased?
     uint16_t    counterTarget;
     uint8_t     enableCounter;
     uint8_t*    pDivider;
@@ -388,6 +403,8 @@ struct GBEmulatorInstance
 
     GBEmulatorJoypadState   joypadState;
     GBEmulatorInstanceFlags flags;
+
+    uint16_t                monitorRefreshRate;
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
     GBEmulatorDebug         debug;
 #endif
@@ -395,18 +412,9 @@ struct GBEmulatorInstance
 
 struct GBEmulatorState
 {
-    GBCpuStateFlags     cpuFlags;
-    GBCpuRegisters      cpuRegisters;
-    uint32_t            lcdDotCounter;
-    uint32_t            ppuCycleCounter;
-    uint32_t            cpuCycleCounter;
-    uint16_t            dmaAddress;
-    uint16_t            timerCounterTarget;
-    uint16_t            timerCounterValue;
-    uint16_t            timerDividerCounter;
-    uint8_t             timerEnableCounter;
-    uint8_t             dmaCycleCounter;
-    uint8_t             interruptEnableRegisters;
+    GBCpuState      cpuState;
+    GBPpuState      ppuState;
+    GBTimerState    timerState;
 };
 
 uint8_t isInVRAMAddressRange( const uint16_t address )
@@ -422,6 +430,53 @@ uint8_t isInOAMAddressRange( const uint16_t address )
 uint8_t isInCartridgeROMAddressRange( const uint16_t address )
 {
     return address >= 0x0000 && address < 0x8000;
+}
+
+uint8_t isInHRAMAddressRange( const uint16_t address )
+{
+    return address >= 0xFF80 && address < 0xFFFF;
+}
+
+void patchIOCpuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
+{
+    pState->pIE = pMemoryMapper->pBaseAddress + 0xFFFF;
+    pState->pIF = pMemoryMapper->pBaseAddress + 0xFF0F;
+}
+
+void patchIOTimerMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimerState )
+{
+    pTimerState->pDivider       = pMemoryMapper->pBaseAddress + 0xFF04;
+    pTimerState->pCounter       = pMemoryMapper->pBaseAddress + 0xFF05;
+    pTimerState->pModulo        = pMemoryMapper->pBaseAddress + 0xFF06;
+    pTimerState->pControl       = pMemoryMapper->pBaseAddress + 0xFF07;
+}
+
+void patchIOPpuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
+{
+    pPpuState->pOAM                             = (GBObjectAttributes*)(pMemoryMapper->pBaseAddress + 0xFE00);
+    pPpuState->pLcdControl                      = (GBLcdControl*)(pMemoryMapper->pBaseAddress + 0xFF40);
+    pPpuState->pPalettes                        = (GBPalette*)(pMemoryMapper->pBaseAddress + 0xFF47);
+    pPpuState->pTileBlocks[0]                   = pMemoryMapper->pBaseAddress + 0x8000;
+    pPpuState->pTileBlocks[1]                   = pMemoryMapper->pBaseAddress + 0x8080;
+    pPpuState->pTileBlocks[2]                   = pMemoryMapper->pBaseAddress + 0x9000;
+    pPpuState->pBackgroundOrWindowTileIds[0]    = pMemoryMapper->pBaseAddress + 0x9800;
+    pPpuState->pBackgroundOrWindowTileIds[1]    = pMemoryMapper->pBaseAddress + 0x9C00;
+    pPpuState->dotCounter                       = 0;
+    pPpuState->cycleCounter                     = 0;
+
+    pPpuState->lcdRegisters.pStatus = (GBLcdStatus*)(pMemoryMapper->pBaseAddress + 0xFF41);
+    pPpuState->lcdRegisters.pScy    = pMemoryMapper->pBaseAddress + 0xFF42;
+    pPpuState->lcdRegisters.pScx    = pMemoryMapper->pBaseAddress + 0xFF43;
+    pPpuState->lcdRegisters.pLy     = pMemoryMapper->pBaseAddress + 0xFF44;
+    pPpuState->lcdRegisters.pLyc    = pMemoryMapper->pBaseAddress + 0xFF45;
+    pPpuState->lcdRegisters.pWy     = pMemoryMapper->pBaseAddress + 0xFF4A;
+    pPpuState->lcdRegisters.pWx     = pMemoryMapper->pBaseAddress + 0xFF4B;
+}
+
+void setGBEmulatorInstanceMonitorRefreshRate( GBEmulatorInstance* pEmulatorInstance, uint16_t monitorRefreshRate )
+{
+    pEmulatorInstance->monitorRefreshRate                   = monitorRefreshRate;
+    pEmulatorInstance->pCpuState->targetCycleCountPerUpdate = gbCpuFrequency / monitorRefreshRate;
 }
 
 size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySizeInBytes )
@@ -455,7 +510,7 @@ size_t calculateGBEmulatorStateSizeInBytes( const GBEmulatorInstance* pEmulatorI
     const size_t compressedVRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pVideoRAM,            0x2000 );
     const size_t compressedLRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pLowRam,              0x2000 );
     const size_t compressedOAMSizeInBytes  = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pSpriteAttributes,    0x00A0 );
-    const size_t compressedHRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pHighRam,             0x007F );
+    const size_t compressedHRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pHighRam,             0x0080 ); //FK: include interrupt register
     const size_t compressedIOSizeInBytes   = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->IOPorts,              0x0080 );
     const size_t stateSizeInBytes = sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) +
         compressedVRAMSizeInBytes + compressedLRAMSizeInBytes + 
@@ -513,18 +568,9 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
 
     GBEmulatorState state;
-    state.cpuRegisters                  = pCpuState->registers;
-    state.cpuFlags                      = pCpuState->flags;
-    state.cpuCycleCounter               = pCpuState->cycleCounter;
-    state.dmaAddress                    = pCpuState->dmaAddress;
-    state.dmaCycleCounter               = pCpuState->dmaCycleCounter;
-    state.ppuCycleCounter               = pPpuState->cycleCounter;
-    state.lcdDotCounter                 = pPpuState->dotCounter;
-    state.interruptEnableRegisters      = pMemoryMapper->pBaseAddress[0xFFFF];
-    state.timerCounterTarget            = pTimerState->counterTarget;
-    state.timerCounterValue             = pTimerState->counterValue;
-    state.timerDividerCounter           = pTimerState->dividerCounter;
-    state.timerEnableCounter            = pTimerState->enableCounter;
+    state.cpuState                  = *pCpuState;
+    state.ppuState                  = *pPpuState;
+    state.timerState                = *pTimerState;
 
     uint8_t* pCompressedMemory = pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC );
     
@@ -533,7 +579,7 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pVideoRAM,           0x2000 );
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pLowRam,             0x2000 );
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pSpriteAttributes,   0x00A0 );
-    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pHighRam,            0x007F );
+    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pHighRam,            0x0080 ); //FK: include interrupt register
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->IOPorts,             0x0080 );
 
     memcpy( pStateMemory + 0, &gbStateFourCC, sizeof( gbStateFourCC ) );
@@ -572,29 +618,27 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
         return false;
     }
 
-    GBCpuState* pCpuState         = pEmulatorInstance->pCpuState;
-    GBPpuState* pPpuState         = pEmulatorInstance->pPpuState;
-    GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
+    uint8_t* pGBFrameBuffer = pEmulatorInstance->pPpuState->pGBFrameBuffer;
 
     GBEmulatorState state;
     memcpy( &state, pStateMemory + sizeof( gbStateFourCC ), sizeof( GBEmulatorState ) );
 
-    pCpuState->registers        = state.cpuRegisters;
-    pCpuState->cycleCounter     = state.cpuCycleCounter;
-    pCpuState->flags            = state.cpuFlags;
-    pCpuState->dmaAddress       = state.dmaAddress;
-    pCpuState->dmaCycleCounter  = state.dmaCycleCounter;
+    *pEmulatorInstance->pCpuState   = state.cpuState;
+    *pEmulatorInstance->pTimerState = state.timerState;
+    *pEmulatorInstance->pPpuState   = state.ppuState;
 
-    pPpuState->dotCounter   = state.lcdDotCounter;
-    pPpuState->cycleCounter = state.ppuCycleCounter;
+    patchIOTimerMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pTimerState );
+    patchIOPpuMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pPpuState );
+    patchIOCpuMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pCpuState );
 
-    pTimerState->counterTarget  = state.timerCounterTarget;
-    pTimerState->counterValue   = state.timerCounterValue;
-    pTimerState->dividerCounter = state.timerDividerCounter;
-    pTimerState->enableCounter  = state.timerEnableCounter;
+    pEmulatorInstance->pPpuState->pGBFrameBuffer = pGBFrameBuffer;
 
-    pMemoryMapper->pBaseAddress[0xFFFF] = state.interruptEnableRegisters;
+    pMemoryMapper->lcdStatus            = *pEmulatorInstance->pPpuState->lcdRegisters.pStatus;
+    pMemoryMapper->dmaActive            = pEmulatorInstance->pCpuState->flags.dma;
+    pMemoryMapper->lcdEnabled           = pEmulatorInstance->pPpuState->pLcdControl->enable;
+
+    setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, pEmulatorInstance->monitorRefreshRate );
 
     const uint8_t* pCompressedMemory = ( uint8_t* )( pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) );
 
@@ -608,21 +652,31 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     return true;
 }
 
-void setGBEmulatorInstanceMonitorRefreshRate( GBEmulatorInstance* pEmulatorInstance, uint16_t monitorRefreshRate )
+uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
-    pEmulatorInstance->pCpuState->targetCycleCountPerUpdate = gbCpuFrequency / monitorRefreshRate;
+    if( pMemoryMapper->lcdEnabled && pMemoryMapper->lcdStatus.mode == 3 )
+    {
+        if( isInVRAMAddressRange( addressOffset ) || 
+            isInOAMAddressRange( addressOffset ) )
+        {
+            return 0;
+        }
+    }
+    
+    if( pMemoryMapper->dmaActive && !isInHRAMAddressRange( addressOffset ) )
+    {
+        return 0;
+    }
+
+    return 1;
 }
+
 
 uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
-    if( isInVRAMAddressRange( addressOffset ) || 
-        isInOAMAddressRange( addressOffset ) )
+    if( !allowReadFromMemoryAddress( pMemoryMapper, addressOffset ) )
     {
-        if( pMemoryMapper->lcdEnabled && pMemoryMapper->lcdStatus.mode == 3 )
-        {
-            //FK: can't read from VRAM and/or OAM during lcd mode 3 
-            return 0xFF;
-        }
+        return 0xFF;
     }
 
     pMemoryMapper->lastAddressReadFrom = addressOffset;
@@ -642,10 +696,12 @@ uint8_t* getMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset
     return pMemoryMapper->pBaseAddress + addressOffset;
 }
 
-void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint8_t value )
+uint8_t allowWriteToMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
-    pMemoryMapper->lastValueWritten     = value;
-    pMemoryMapper->lastAddressWrittenTo = addressOffset;
+    if( isInCartridgeROMAddressRange( addressOffset ) )
+    {
+        return 0;
+    }
 
     if( pMemoryMapper->lcdStatus.mode == 3 && pMemoryMapper->lcdEnabled )
     {
@@ -653,11 +709,28 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
             isInOAMAddressRange( addressOffset ) )
         {
             //FK: can't read from VRAM and/or OAM during lcd mode 3 
-            return;
+            return 0;
         }
     }
 
-    if( isInCartridgeROMAddressRange( addressOffset ) )
+    if( pMemoryMapper->dmaActive )
+    {
+        if( !isInHRAMAddressRange( addressOffset ) )
+        {
+            //FK: can only access HRAM during dma
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint8_t value )
+{
+    pMemoryMapper->lastValueWritten     = value;
+    pMemoryMapper->lastAddressWrittenTo = addressOffset;
+
+    if( !allowWriteToMemoryAddress( pMemoryMapper, addressOffset ) )
     {
         return;
     }
@@ -775,8 +848,7 @@ void mapRomMemory( GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory )
 
 void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
 {
-    memset(pState, 0, sizeof(GBCpuState));
-
+    patchIOCpuMappedMemoryPointer( pMemoryMapper, pState );
     //FK: (Gameboy cpu manual) The GameBoy stack pointer 
     //is initialized to $FFFE on power up but a programmer 
     //should not rely on this setting and rather should 
@@ -801,12 +873,8 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->registers.DE        = 0x00D8;
     pState->registers.HL        = 0x014D;
 
-    pState->pIE = pMemoryMapper->pBaseAddress + 0xFFFF;
-    pState->pIF = pMemoryMapper->pBaseAddress + 0xFF0F;
-
     pState->dmaCycleCounter = 0;
-
-    pState->targetCycleCountPerUpdate = ( uint16_t )( gbCpuFrequency / 60 ); //FK: Assume 60hz output as default
+    pState->cycleCounter    = 0;
 
     pState->flags.dma   = 0;
     pState->flags.IME   = 1;
@@ -816,6 +884,10 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
 void resetMemoryMapper( GBMemoryMapper* pMapper )
 {
     memset(pMapper->pBaseAddress, 0, gbMappedMemorySizeInBytes);
+    memset(pMapper->IOPorts, 0xFF, 0x80);
+
+    pMapper->dmaActive  = 0;
+    pMapper->lcdEnabled = 0;
 }
 
 void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
@@ -838,14 +910,17 @@ void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
 
 void initTimerState( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimerState )
 {
-    pTimerState->dividerCounter = 0;
+    patchIOTimerMappedMemoryPointer( pMemoryMapper, pTimerState );
+
+    pTimerState->dividerCounter = 0xAB;
     pTimerState->counterValue   = 0;
-    pTimerState->counterTarget  = 0;
+    pTimerState->counterTarget  = 1024u;
     pTimerState->enableCounter  = 0;
-    pTimerState->pDivider       = pMemoryMapper->pBaseAddress + 0xFF04;
-    pTimerState->pCounter       = pMemoryMapper->pBaseAddress + 0xFF05;
-    pTimerState->pModulo        = pMemoryMapper->pBaseAddress + 0xFF06;
-    pTimerState->pControl       = pMemoryMapper->pBaseAddress + 0xFF07;
+
+    *pTimerState->pDivider      = 0xAB;
+    *pTimerState->pCounter      = 0;
+    *pTimerState->pModulo       = 0;
+    *pTimerState->pControl      = 0xFB;
 }
 
 void clearGBFrameBuffer( uint8_t* pGBFrameBuffer )
@@ -861,23 +936,7 @@ void initPpuFrameBuffer( GBPpuState* pPpuState, uint8_t* pMemory )
 
 void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
 {
-    pPpuState->pOAM                             = (GBObjectAttributes*)(pMemoryMapper->pBaseAddress + 0xFE00);
-    pPpuState->pLcdControl                      = (GBLcdControl*)(pMemoryMapper->pBaseAddress + 0xFF40);
-    pPpuState->pPalettes                        = (GBPalette*)(pMemoryMapper->pBaseAddress + 0xFF47);
-    pPpuState->pTileBlocks[0]                   = pMemoryMapper->pBaseAddress + 0x8000;
-    pPpuState->pTileBlocks[1]                   = pMemoryMapper->pBaseAddress + 0x8080;
-    pPpuState->pTileBlocks[2]                   = pMemoryMapper->pBaseAddress + 0x9000;
-    pPpuState->pBackgroundOrWindowTileIds[0]    = pMemoryMapper->pBaseAddress + 0x9800;
-    pPpuState->pBackgroundOrWindowTileIds[1]    = pMemoryMapper->pBaseAddress + 0x9C00;
-    pPpuState->dotCounter                       = 0;
-
-    pPpuState->lcdRegisters.pStatus = (GBLcdStatus*)(pMemoryMapper->pBaseAddress + 0xFF41);
-    pPpuState->lcdRegisters.pScy    = pMemoryMapper->pBaseAddress + 0xFF42;
-    pPpuState->lcdRegisters.pScx    = pMemoryMapper->pBaseAddress + 0xFF43;
-    pPpuState->lcdRegisters.pLy     = pMemoryMapper->pBaseAddress + 0xFF44;
-    pPpuState->lcdRegisters.pLyc    = pMemoryMapper->pBaseAddress + 0xFF45;
-    pPpuState->lcdRegisters.pWy     = pMemoryMapper->pBaseAddress + 0xFF4A;
-    pPpuState->lcdRegisters.pWx     = pMemoryMapper->pBaseAddress + 0xFF4B;
+    patchIOPpuMappedMemoryPointer( pMemoryMapper, pPpuState );
 
     //FK: set default state
     pPpuState->pLcdControl->enable              = 1;
@@ -968,7 +1027,9 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     memset( pEmulatorInstance->debug.opcodeHistory, 0, sizeof( pEmulatorInstance->debug.opcodeHistory ) );
 #endif
 
-    resetGBEmulatorInstance(pEmulatorInstance);
+    resetGBEmulatorInstance( pEmulatorInstance );
+    setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, 60 );//FK: Assume 60hz output as default
+
     return pEmulatorInstance;
 }
 
@@ -1247,9 +1308,9 @@ void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cyc
 {
     //FK: timer divier runs at 16384hz (update counter every 256 cpu cycles to be accurate)
     pTimer->dividerCounter += cycleCount;
-    if( pTimer->dividerCounter > 0xFF )
+    if( pTimer->dividerCounter > 0xAAAA )
     {
-        pTimer->dividerCounter -= 0xFF;
+        pTimer->dividerCounter -= 0xAAAA;
         *pTimer->pDivider += 1;
     }
 
@@ -1409,6 +1470,114 @@ void triggerPendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
 
         pCpuState->flags.halt = 0;
     }
+}
+
+uint8_t getOpcode8BitOperandRHS( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode )
+{
+    const uint8_t msn = opcode & 0xF0;
+    const uint8_t lsn = opcode & 0x0F;
+    const uint8_t targetId = lsn > 0x07 ? lsn - 0x08 : lsn;
+
+    const bool readFromProgramCounter = ( msn == 0x00 || msn == 0x10 || msn == 0x20 || msn == 0x30 || 
+                                          msn == 0xC0 || msn == 0xD0 || msn == 0xE0 || msn == 0xF0 );
+
+    switch( targetId )
+    {
+        case 0x00:
+            return pCpuState->registers.B;
+        case 0x01:
+            return pCpuState->registers.C;
+        case 0x02:
+            return pCpuState->registers.D;
+        case 0x03:
+            return pCpuState->registers.E;
+        case 0x04:
+            return pCpuState->registers.H;
+        case 0x05:
+            return pCpuState->registers.L;
+        case 0x06:
+            return readFromProgramCounter ? read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.PC++ ) : read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.HL );
+        case 0x07:
+            return pCpuState->registers.A;
+    }
+
+    debugBreak();
+    return 0;
+}
+
+uint8_t* getOpcode8BitOperandLHS( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode )
+{
+    const uint8_t lsn = opcode & 0x0F;
+    const uint8_t msn = opcode & 0xF0;
+    switch( msn )
+    {
+        case 0x00: case 0x40:
+            return lsn > 0x07 ? &pCpuState->registers.C : &pCpuState->registers.B;
+        case 0x10: case 0x50:
+            return lsn > 0x07 ? &pCpuState->registers.E : &pCpuState->registers.D;
+        case 0x20: case 0x60:
+            return lsn > 0x07 ? &pCpuState->registers.L : &pCpuState->registers.H;
+        case 0x30: case 0x70:
+            return lsn > 0x07 ? &pCpuState->registers.A : getMemoryAddress( pMemoryMapper, pCpuState->registers.HL );
+    }
+
+    debugBreak();
+    return nullptr;
+}
+
+uint16_t* getOpcode16BitOperand( GBCpuState* pCpuState, uint8_t opcode )
+{
+    const uint8_t lsn = opcode & 0x0F;
+    const uint8_t msn = opcode & 0xF0;
+
+    switch( msn )
+    {
+        case 0x00: case 0xC0:
+            return &pCpuState->registers.BC;
+
+        case 0x10: case 0xD0:
+            return &pCpuState->registers.DE;
+
+        case 0x20: 
+            return &pCpuState->registers.HL;
+
+        case 0x30: 
+        {
+            const uint8_t useStackPointer = ( lsn == 0x01 || lsn == 0x03 || lsn == 0x09 || lsn == 0x0B );
+            return useStackPointer ? &pCpuState->registers.SP : &pCpuState->registers.HL;
+        }
+
+        case 0xE0:
+        {
+            const uint8_t useStackPointer = ( lsn == 0x08  );
+            return useStackPointer ? &pCpuState->registers.SP : &pCpuState->registers.HL;
+        }
+
+        case 0xF0:
+            return &pCpuState->registers.AF;
+    }
+
+    debugBreak();
+    return nullptr;
+}
+
+uint8_t getOpcodeCondition( GBCpuState* pCpuState, uint8_t opcode )
+{
+    const uint8_t msn = opcode & 0xF0;
+    const uint8_t lsn = opcode & 0x0F;
+    const uint8_t conditionValue = lsn < 0x07 ? 0 : 1;
+
+    if( msn == 0x20 || msn == 0xC0 )
+    {
+        return pCpuState->registers.F.Z == conditionValue;
+    }
+    else if( msn == 0x30 || msn == 0xD0 )
+    {
+        return pCpuState->registers.F.C == conditionValue;
+    }
+
+    debugBreak();
+    return 0;
 }
 
 void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode)
@@ -1638,35 +1807,13 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        case 0xC4:
-        case 0xCC:
-        case 0xD4:
-        case 0xDC:
+        //CALL condition
+        case 0xC4: case 0xCC: case 0xD4: case 0xDC:
         {
             const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.PC += 2;
 
-            uint8_t condition = 0;
-            switch( opcode )
-            {
-                //CALL nz, nn
-                case 0xC4:
-                    condition = pCpuState->registers.F.Z == 0;
-                    break;
-                //CALL nc, nn
-                case 0xCC:
-                    condition = pCpuState->registers.F.C == 0;
-                    break;
-                //CALL z, nn
-                case 0xD4:
-                    condition = pCpuState->registers.F.Z == 1;
-                    break;
-                //CALL c, nn
-                case 0xDC:
-                    condition = pCpuState->registers.F.C == 1;
-                    break;
-            }
-
+            const uint8_t condition = getOpcodeCondition( pCpuState, opcode );
             if( condition )
             {
                 push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
@@ -1678,40 +1825,67 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
   
 
-        //LD A,(BC)
-        case 0x0A:
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.BC);
-            break;
-
-        //LD A,(DE)
-        case 0x1A:
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.DE);
-            break;
-
-        //LD (BC), A
-        case 0x02:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.BC, pCpuState->registers.A);
-            break;
-
-        //LD (DE), A
-        case 0x12:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.DE, pCpuState->registers.A);
-            break;
-
-        //LD (HL), A
-        case 0x77:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.HL, pCpuState->registers.A);
-            break;
-
-        //LD A,(nn)
-        case 0xFA:
+        //LD (nn), A
+        case 0x02: case 0x12: case 0x22: case 0x32:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, address);
-            pCpuState->registers.PC += 2;
-            break;     
+            uint16_t* pTarget = getOpcode16BitOperand( pCpuState, opcode );
+            write8BitValueToMappedMemory( pMemoryMapper, *pTarget, pCpuState->registers.A );
+
+            if( opcode == 0x22 )
+            {
+                *pTarget += 1;
+            }
+            else if ( opcode == 0x32 )
+            {
+                *pTarget -= 1;
+            }
+            break;
         }
 
+        //LD r, n
+        case 0x06: case 0x16: case 0x26: case 0x36:
+        case 0x0E: case 0x1E: case 0x2E: case 0x3E:
+        {
+            uint8_t* pDestination = getOpcode8BitOperandLHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t value = read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.PC++ );
+
+            if( pDestination == ( pMemoryMapper->pBaseAddress + 0xFE10 ) && value == 0xFF )
+            {
+                breakPointHook();
+            }
+
+            *pDestination = value;
+            break;
+        }
+            
+        //LD A,(rr)
+        case 0x0A: case 0x1A: case 0x2A: case 0x3A:
+        {
+            uint16_t* pSource = getOpcode16BitOperand( pCpuState, opcode );
+            const uint16_t sourceAddress = *pSource;
+
+            pCpuState->registers.A = read8BitValueFromAddress( pMemoryMapper, sourceAddress );
+
+            if( opcode == 0x2A )
+            {
+                *pSource += 1;
+            }
+            else if( opcode == 0x3A )
+            {
+                *pSource -= 1;
+            }
+            break;
+        }
+
+        //LD A, (nn)
+        case 0xFA:
+        {
+            const uint16_t address = read16BitValueFromAddress( pMemoryMapper, pCpuState->registers.PC );
+            pCpuState->registers.A = read8BitValueFromAddress( pMemoryMapper, address );
+            pCpuState->registers.PC += 2;
+            break;
+        }
+        
         //LD (nn), A
         case 0xEA:
         {
@@ -1721,62 +1895,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        //LD A,n
-        case 0x3E:
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            break;
-
-        //LD B,n
-        case 0x06:  
-            pCpuState->registers.B = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            break;
-
-        //LD C,n
-        case 0x0E:
-            pCpuState->registers.C = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            break;
-
-        //LD D,n
-        case 0x16: 
-            pCpuState->registers.D = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            break;
-            
-        //LD E,n
-        case 0x1E: 
-            pCpuState->registers.E = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            break;
-        
-        //LD H,n
-        case 0x26:
-            pCpuState->registers.H = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            break;
-
-        //LD L,n
-        case 0x2E:
-            pCpuState->registers.L = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            break;
-        
-        //LD a,(HL++)
-        case 0x2A:
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL++);
-            break;
-
-        //LD a,(HL++)
-        case 0x3A:
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL--);
-            break;
-
-        //LD (HL++),a
-        case 0x22:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.HL++, pCpuState->registers.A);
-            break;
-
-        //LD (HL--),a
-        case 0x32:
-            write8BitValueToMappedMemory(pMemoryMapper, pCpuState->registers.HL--, pCpuState->registers.A);
-            break;
-
-        //LD (C),a
+        //LD (c),a
         case 0xE2:
         {
             const uint16_t address = 0xFF00 + pCpuState->registers.C;
@@ -1784,401 +1903,36 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        //LD b,a
-        case 0x47:
+        //LD a, (c)
+        case 0xF2:
         {
-            pCpuState->registers.B = pCpuState->registers.A;
-            break;
-        }
-
-        //LD c, a
-        case 0x4F:
-        {
-            pCpuState->registers.C = pCpuState->registers.A;
-            break;
-        }
-
-        //LD E, A
-        case 0x5F:
-        {
-            pCpuState->registers.E = pCpuState->registers.A;
+            const uint16_t address = 0xFF00 + pCpuState->registers.C;
+            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, address);
             break;
         }
 
         //LD n, n
-        case 0x70:
-        case 0x71:
-        case 0x72:
-        case 0x73:
-        case 0x74:
-        case 0x75:
-        case 0x7F:
-        case 0x78:
-        case 0x79:
-        case 0x7A:
-        case 0x7B:
-        case 0x7C:
-        case 0x7D:
-        case 0x7E:
-        case 0x36:
-        case 0x40:
-        case 0x41:
-        case 0x42:
-        case 0x43:
-        case 0x44:
-        case 0x45:
-        case 0x46:
-        case 0x48:
-        case 0x49:
-        case 0x4A:
-        case 0x4B:
-        case 0x4C:
-        case 0x4D:
-        case 0x4E:
-        case 0x50:
-        case 0x51:
-        case 0x52:
-        case 0x53:
-        case 0x54:
-        case 0x55:
-        case 0x56:
-        case 0x57:
-        case 0x58:
-        case 0x59:
-        case 0x5A:
-        case 0x5B:
-        case 0x5C:
-        case 0x5D:
-        case 0x5E:
-        case 0x60:
-        case 0x61:
-        case 0x62:
-        case 0x63:
-        case 0x64:
-        case 0x65:
-        case 0x66:
-        case 0x67:
-        case 0x68:
-        case 0x69:
-        case 0x6A:
-        case 0x6B:
-        case 0x6C:
-        case 0x6D:
-        case 0x6E:
-        case 0x6F:
+        case 0x40: case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: 
+        case 0x48: case 0x49: case 0x4A: case 0x4B: case 0x4C: case 0x4D: case 0x4E: case 0x4F:
+        
+        case 0x50: case 0x51: case 0x52: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57: 
+        case 0x58: case 0x59: case 0x5A: case 0x5B: case 0x5C: case 0x5D: case 0x5E: case 0x5F:
+        
+        case 0x60: case 0x61: case 0x62: case 0x63: case 0x64: case 0x65: case 0x66: case 0x67: 
+        case 0x68: case 0x69: case 0x6A: case 0x6B: case 0x6C: case 0x6D: case 0x6E: case 0x6F:
+
+        case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x77: case 0x78:
+        case 0x79: case 0x7A: case 0x7B: case 0x7C: case 0x7D: case 0x7E: case 0x7F:
         {
-            uint8_t* pTarget            = nullptr;
-            uint8_t value               = 0;
-            switch(opcode)
+            uint8_t* pDestination   = getOpcode8BitOperandLHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t value     = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
+
+            if( pDestination == ( pMemoryMapper->pBaseAddress + 0xFE10 ) && value == 0xFF )
             {
-                //LD A, A
-                case 0x7F:
-                    pTarget         = &pCpuState->registers.A;
-                    value           = pCpuState->registers.A;
-                    break;
-                //LD A, B
-                case 0x78:
-                    pTarget         = &pCpuState->registers.A;
-                    value           = pCpuState->registers.B;
-                    break;
-                //LD A, C
-                case 0x79:
-                    pTarget         = &pCpuState->registers.A;
-                    value           = pCpuState->registers.C;
-                    break;
-                //LD A, D
-                case 0x7A:
-                    pTarget         = &pCpuState->registers.A;
-                    value           = pCpuState->registers.D;
-                    break;
-                //LD A, E
-                case 0x7B:
-                    pTarget         = &pCpuState->registers.A;
-                    value           = pCpuState->registers.E;
-                    break;
-                //LD A, H
-                case 0x7C:
-                    pTarget         = &pCpuState->registers.A;
-                    value           = pCpuState->registers.H;
-                    break;
-                //LD A, L
-                case 0x7D:
-                    pTarget         = &pCpuState->registers.A;
-                    value           = pCpuState->registers.L;
-                    break;
-                //LD A, (HL)
-                case 0x7E:
-                    pTarget         = &pCpuState->registers.A;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-
-                //LD B, B
-                case 0x40:
-                    pTarget         = &pCpuState->registers.B;
-                    value           = pCpuState->registers.B;
-                    break;
-                //LD B, C
-                case 0x41:
-                    pTarget         = &pCpuState->registers.B;
-                    value           = pCpuState->registers.C;
-                    break;
-                //LD B, D
-                case 0x42:
-                    pTarget         = &pCpuState->registers.B;
-                    value           = pCpuState->registers.D;
-                    break;
-                //LD B, E
-                case 0x43:
-                    pTarget         = &pCpuState->registers.B;
-                    value           = pCpuState->registers.E;
-                    break;
-                //LD B, H
-                case 0x44:
-                    pTarget         = &pCpuState->registers.B;
-                    value           = pCpuState->registers.H;
-                    break;
-                //LD B, L
-                case 0x45:
-                    pTarget         = &pCpuState->registers.B;
-                    value           = pCpuState->registers.L;
-                    break;
-                //LD B, (HL)
-                case 0x46:
-                    pTarget         = &pCpuState->registers.B;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-
-                //LD C, B
-                case 0x48:
-                    pTarget         = &pCpuState->registers.C;
-                    value           = pCpuState->registers.B;
-                    break;
-                //LD C, C
-                case 0x49:
-                    pTarget         = &pCpuState->registers.C;
-                    value           = pCpuState->registers.C;
-                    break;
-                //LD C, D
-                case 0x4A:
-                    pTarget         = &pCpuState->registers.C;
-                    value           = pCpuState->registers.D;
-                    break;
-                //LD C, E
-                case 0x4B:
-                    pTarget         = &pCpuState->registers.C;
-                    value           = pCpuState->registers.E;
-                    break;
-                //LD C, H
-                case 0x4C:
-                    pTarget         = &pCpuState->registers.C;
-                    value           = pCpuState->registers.H;
-                    break;
-                //LD C, L
-                case 0x4D:
-                    pTarget         = &pCpuState->registers.C;
-                    value           = pCpuState->registers.L;
-                    break;
-                //LD C, (HL)
-                case 0x4E:
-                    pTarget         = &pCpuState->registers.C;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-
-                //LD D, B
-                case 0x50:
-                    pTarget         = &pCpuState->registers.D;
-                    value           = pCpuState->registers.B;
-                    break;
-                //LD D, C
-                case 0x51:
-                    pTarget         = &pCpuState->registers.D;
-                    value           = pCpuState->registers.C;
-                    break;
-                //LD D, D
-                case 0x52:
-                    pTarget         = &pCpuState->registers.D;
-                    value           = pCpuState->registers.D;
-                    break;
-                //LD D, E
-                case 0x53:
-                    pTarget         = &pCpuState->registers.D;
-                    value           = pCpuState->registers.E;
-                    break;
-                //LD D, H
-                case 0x54:
-                    pTarget         = &pCpuState->registers.D;
-                    value           = pCpuState->registers.H;
-                    break;
-                //LD D, L
-                case 0x55:
-                    pTarget         = &pCpuState->registers.D;
-                    value           = pCpuState->registers.L;
-                    break;
-                //LD D, A
-                case 0x57:
-                    pTarget         = &pCpuState->registers.D;
-                    value           = pCpuState->registers.A;
-                    break;
-                //LD B, (HL)
-                case 0x56:
-                    pTarget         = &pCpuState->registers.D;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-
-                //LD E, B
-                case 0x58:
-                    pTarget         = &pCpuState->registers.E;
-                    value           = pCpuState->registers.B;
-                    break;
-                //LD E, C
-                case 0x59:
-                    pTarget         = &pCpuState->registers.E;
-                    value           = pCpuState->registers.C;
-                    break;
-                //LD E, D
-                case 0x5A:
-                    pTarget         = &pCpuState->registers.E;
-                    value           = pCpuState->registers.D;
-                    break;
-                //LD E, E
-                case 0x5B:
-                    pTarget         = &pCpuState->registers.E;
-                    value           = pCpuState->registers.E;
-                    break;
-                //LD E, H
-                case 0x5C:
-                    pTarget         = &pCpuState->registers.E;
-                    value           = pCpuState->registers.H;
-                    break;
-                //LD E, L
-                case 0x5D:
-                    pTarget         = &pCpuState->registers.E;
-                    value           = pCpuState->registers.L;
-                    break;
-                //LD E, (HL)
-                case 0x5E:
-                    pTarget         = &pCpuState->registers.E;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-
-                //LD H, B
-                case 0x60:
-                    pTarget         = &pCpuState->registers.H;
-                    value           = pCpuState->registers.B;
-                    break;
-                //LD H, C
-                case 0x61:
-                    pTarget         = &pCpuState->registers.H;
-                    value           = pCpuState->registers.C;
-                    break;
-                //LD H, D
-                case 0x62:
-                    pTarget         = &pCpuState->registers.H;
-                    value           = pCpuState->registers.D;
-                    break;
-                //LD H, E
-                case 0x63:
-                    pTarget         = &pCpuState->registers.H;
-                    value           = pCpuState->registers.E;
-                    break;
-                //LD H, H
-                case 0x64:
-                    pTarget         = &pCpuState->registers.H;
-                    value           = pCpuState->registers.H;
-                    break;
-                //LD H, L
-                case 0x65:
-                    pTarget         = &pCpuState->registers.H;
-                    value           = pCpuState->registers.L;
-                    break;
-                //LD H, (HL)
-                case 0x66:
-                    pTarget         = &pCpuState->registers.H;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-                case 0x67:
-                    pTarget         = &pCpuState->registers.H;
-                    value           = pCpuState->registers.A;
-                    break;
-
-                //LD L, B
-                case 0x68:
-                    pTarget         = &pCpuState->registers.L;
-                    value           = pCpuState->registers.B;
-                    break;
-                //LD L, C
-                case 0x69:
-                    pTarget         = &pCpuState->registers.L;
-                    value           = pCpuState->registers.C;
-                    break;
-                //LD L, D
-                case 0x6A:
-                    pTarget         = &pCpuState->registers.L;
-                    value           = pCpuState->registers.D;
-                    break;
-                //LD L, E
-                case 0x6B:
-                    pTarget         = &pCpuState->registers.L;
-                    value           = pCpuState->registers.E;
-                    break;
-                //LD L, H
-                case 0x6C:
-                    pTarget         = &pCpuState->registers.L;
-                    value           = pCpuState->registers.H;
-                    break;
-                //LD L, L
-                case 0x6D:
-                    pTarget         = &pCpuState->registers.L;
-                    value           = pCpuState->registers.L;
-                    break;
-                //LD L, (HL)
-                case 0x6E:
-                    pTarget         = &pCpuState->registers.L;
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-                //LD L, A
-                case 0x6F:
-                    pTarget         = &pCpuState->registers.L;
-                    value           = pCpuState->registers.A;
-                    break;
-                //LD (HL), B
-                case 0x70:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-                    value           = pCpuState->registers.B;
-                    break;
-                //LD (HL), C
-                case 0x71:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-                    value           = pCpuState->registers.C;
-                    break;
-                //LD (HL), D
-                case 0x72:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-                    value           = pCpuState->registers.D;
-                    break;
-                //LD (HL), E
-                case 0x73:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-                    value           = pCpuState->registers.E;
-                    break;
-                //LD (HL), H
-                case 0x74:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-                    value           = pCpuState->registers.H;
-                    break;
-                //LD (HL), L
-                case 0x75:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-                    value           = pCpuState->registers.L;
-                    break;
-                //LD (HL), n
-                case 0x36:
-                    pTarget         = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-                    value           = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-                    break;
+                breakPointHook();
             }
 
-            *pTarget = value;
+            *pDestination = value;
             break;
         }
 
@@ -2223,34 +1977,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //JP conditional
-        case 0xC2:
-        case 0xCA:
-        case 0xD2:
-        case 0xDA:
+        case 0xC2: case 0xCA: case 0xD2: case 0xDA:
         {
             const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.PC += 2;
 
-            uint8_t condition = 0;
-            switch( opcode )
-            {
-                //JP nz nn
-                case 0xC2:
-                    condition = pCpuState->registers.F.Z == 0;
-                    break;
-                //JP nc nn
-                case 0xD2:
-                    condition = pCpuState->registers.F.C == 0;
-                    break;
-                //JP z nn
-                case 0xCA:
-                    condition = pCpuState->registers.F.Z == 1;
-                    break;
-                //JP c nn
-                    condition = pCpuState->registers.F.C == 1;
-                    break;
-            }
-
+            const uint8_t condition = getOpcodeCondition( pCpuState, opcode );
             if( condition )
             {
                 pCpuState->registers.PC = address;
@@ -2270,34 +2002,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        //JR
-        case 0x20:
-        case 0x28:
-        case 0x30:
-        case 0x38:
+        //JR conditional
+        case 0x20: case 0x28: case 0x30: case 0x38:
         {
             const int8_t addressOffset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            uint8_t condition = 0;
-            switch(opcode)
-            {
-                //JR nz
-                case 0x20:
-                    condition = pCpuState->registers.F.Z == 0;
-                    break;
-                //JR nc
-                case 0x30:
-                    condition = pCpuState->registers.F.C == 0;
-                    break;
-                //JR z
-                case 0x28:
-                    condition = pCpuState->registers.F.Z == 1;
-                    break;
-                //JR c
-                case 0x38:
-                    condition = pCpuState->registers.F.C == 1;
-                    break;
-            }
-
+            const uint8_t condition = getOpcodeCondition( pCpuState, opcode );
             if( condition )
             {
                 pCpuState->registers.PC += addressOffset;
@@ -2308,47 +2017,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //XOR n
-        case 0xAF:
-        case 0xA8:
-        case 0xA9:
-        case 0xAA:
-        case 0xAB:
-        case 0xAC:
-        case 0xAD:
-        case 0xAE:
+        case 0xA8: case 0xA9: case 0xAA: case 0xAB: case 0xAC: case 0xAD: case 0xAE: case 0xAF: 
         case 0xEE:
         {
-            uint8_t operand = 0;
-            switch(opcode)
-            {
-                case 0xAF:
-                    operand = pCpuState->registers.A;
-                    break;
-                case 0xA8:
-                    operand = pCpuState->registers.B;
-                    break;
-                case 0xA9:
-                    operand = pCpuState->registers.C;
-                    break;
-                case 0xAA:
-                    operand = pCpuState->registers.D;
-                    break;
-                case 0xAB:
-                    operand = pCpuState->registers.E;
-                    break;
-                case 0xAC:
-                    operand = pCpuState->registers.H;
-                    break;
-                case 0xAD:
-                    operand = pCpuState->registers.L;
-                    break;
-                case 0xAE:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-                case 0xEE:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-                    break;
-            }
+            const uint8_t operand = ( opcode == 0xEE ) ? read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++) : 
+                                                         getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
             
             pCpuState->registers.A        = pCpuState->registers.A ^ operand;
             pCpuState->registers.F.value  = 0x0;
@@ -2358,56 +2031,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //OR n
-        case 0xB7:
-        case 0xB0:
-        case 0xB1:
-        case 0xB2:
-        case 0xB3:
-        case 0xB4:
-        case 0xB5:
-        case 0xB6:
+        case 0xB0: case 0xB1: case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xB6: case 0xB7: 
         case 0xF6:
         {
-            uint8_t operand = 0;
-            switch( opcode )
-            {
-                //OR A
-                case 0xB7:
-                    operand = pCpuState->registers.A;
-                    break;
-                //OR B
-                case 0xB0:
-                    operand = pCpuState->registers.B;
-                    break;
-                //OR C
-                case 0xB1:
-                    operand = pCpuState->registers.C;
-                    break;
-                //OR D
-                case 0xB2:
-                    operand = pCpuState->registers.D;
-                    break;
-                //OR E
-                case 0xB3:
-                    operand = pCpuState->registers.E;
-                    break;
-                //OR H
-                case 0xB4:
-                    operand = pCpuState->registers.H;
-                    break;
-                //OR L
-                case 0xB5:
-                    operand = pCpuState->registers.L;
-                    break;
-                //OR (HL)
-                case 0xB6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-                //OR #
-                case 0xF6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-                    break;
-            }
+            const uint8_t operand = ( opcode == 0xF6 ) ? read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++) : 
+                                                         getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
 
             pCpuState->registers.A        = pCpuState->registers.A | operand;
             pCpuState->registers.F.value  = 0x0;
@@ -2416,56 +2044,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //AND n
-        case 0xA7:
-        case 0xA0:
-        case 0xA1:
-        case 0xA2:
-        case 0xA3:
-        case 0xA4:
-        case 0xA5:
-        case 0xA6:
+        case 0xA0: case 0xA1: case 0xA2: case 0xA3: case 0xA4: case 0xA5: case 0xA6: case 0xA7: 
         case 0xE6:
         {
-            uint8_t operand = 0;
-            switch( opcode )
-            {
-                //AND A
-                case 0xA7:
-                    operand = pCpuState->registers.A;
-                    break;
-                //AND B
-                case 0xA0:
-                    operand = pCpuState->registers.B;
-                    break;
-                //AND C
-                case 0xA1:
-                    operand = pCpuState->registers.C;
-                    break;
-                //AND D
-                case 0xA2:
-                    operand = pCpuState->registers.D;
-                    break;
-                //AND E
-                case 0xA3:
-                    operand = pCpuState->registers.E;
-                    break;
-                //AND H
-                case 0xA4:
-                    operand = pCpuState->registers.H;
-                    break;
-                //AND L
-                case 0xA5:
-                    operand = pCpuState->registers.L;
-                    break;
-                //AND (HL)
-                case 0xA6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-                //AND #
-                case 0xE6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-                    break;
-            }
+            const uint8_t operand = ( opcode == 0xE6 ) ? read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++) : 
+                                                         getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
 
             pCpuState->registers.A = pCpuState->registers.A & operand;
             pCpuState->registers.F.N = 0;
@@ -2476,178 +2059,68 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //LD n,nn (16bit loads)
-        case 0x01:
-            pCpuState->registers.BC = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+        case 0x01: case 0x11: case 0x21: case 0x31:
+        {
+            uint16_t* pDestination = getOpcode16BitOperand( pCpuState, opcode );
+            *pDestination = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.PC += 2u;
             break;
-        case 0x11:
-            pCpuState->registers.DE = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
-            pCpuState->registers.PC += 2u;
-            break;
-        case 0x21:
-            pCpuState->registers.HL = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
-            pCpuState->registers.PC += 2u;
-            break;
-        case 0x31:
-            pCpuState->registers.SP = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
-            pCpuState->registers.PC += 2u;
-            break;
+        }
 
         //INC n
-        case 0x3C:
-        case 0x04:
-        case 0x0C:
-        case 0x14:
-        case 0x1C:
-        case 0x24:
-        case 0x2C:
+        case 0x04: case 0x14: case 0x24: case 0x34: 
+        case 0x0C: case 0x1C: case 0x2C: case 0x3C:
         {
-            uint8_t* pRegister = nullptr;
-            switch(opcode)
-            {
-                //INC A
-                case 0x3C:
-                    pRegister = &pCpuState->registers.A;
-                    break;
-                //INC B
-                case 0x04:
-                    pRegister = &pCpuState->registers.B;
-                    break;
-                //INC C
-                case 0x0C:
-                    pRegister = &pCpuState->registers.C;
-                    break;
-                //INC D
-                case 0x14:
-                    pRegister = &pCpuState->registers.D;
-                    break;
-                //INC E
-                case 0x1C:
-                    pRegister = &pCpuState->registers.E;
-                    break;
-                //INC H
-                case 0x24:
-                    pRegister = &pCpuState->registers.H;
-                    break;
-                //INC L
-                case 0x2C:
-                    pRegister = &pCpuState->registers.L;
-                    break;
-            }
+            uint8_t* pDestination = getOpcode8BitOperandLHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t oldValue = *pDestination;
+            const uint8_t newValue = oldValue + 1;
 
-            const uint8_t oldRegisterValue = *pRegister;
-            const uint8_t newRegisterValue = oldRegisterValue + 1;
-
-            *pRegister = newRegisterValue;
-            pCpuState->registers.F.Z = (newRegisterValue == 0);
-            pCpuState->registers.F.H = (oldRegisterValue & 0xF0) != (newRegisterValue & 0xF0);
+            *pDestination = newValue;
+            pCpuState->registers.F.Z = (newValue == 0);
+            pCpuState->registers.F.H = (oldValue & 0xF0) != (newValue & 0xF0);
             pCpuState->registers.F.N = 0;
             
             break;
         }
 
-        //INC BC
-        case 0x03:
+        //INC nn
+        case 0x03: case 0x13: case 0x23: case 0x33:
         {
-            pCpuState->registers.BC++;
-            break;
-        }
-        //INC DE
-        case 0x13:
-        {
-            pCpuState->registers.DE++;
-            break;
-        }
-        //INC HL
-        case 0x23:
-        {
-            pCpuState->registers.HL++;
-            break;
-        }
-        //INC SP
-        case 0x33:
-        {
-            pCpuState->registers.SP++;
+            uint16_t* pDestination = getOpcode16BitOperand( pCpuState, opcode );
+            const uint16_t oldValue = *pDestination;
+            const uint16_t newValue = oldValue + 1;
+
+            *pDestination = newValue;
             break;
         }
 
         //DEC n
-        case 0x3D:
-        case 0x05:
-        case 0x0D:
-        case 0x15:
-        case 0x1D:
-        case 0x25:
-        case 0x2D:
+        case 0x05: case 0x15: case 0x25: case 0x35: 
+        case 0x0D: case 0x1D: case 0x2D: case 0x3D:
         {
-            uint8_t* pRegister = nullptr;
-            switch(opcode)
-            {
-                //DEC A
-                case 0x3D:
-                    pRegister = &pCpuState->registers.A;
-                    break;
-                //DEC B
-                case 0x05:
-                    pRegister = &pCpuState->registers.B;
-                    break;
-                //DEC C
-                case 0x0D:
-                    pRegister = &pCpuState->registers.C;
-                    break;
-                //DEC D
-                case 0x15:
-                    pRegister = &pCpuState->registers.D;
-                    break;
-                //DEC E
-                case 0x1D:
-                    pRegister = &pCpuState->registers.E;
-                    break;
-                //DEC H
-                case 0x25:
-                    pRegister = &pCpuState->registers.H;
-                    break;
-                //DEC L
-                case 0x2D:
-                    pRegister = &pCpuState->registers.L;
-                    break;
-            }
+            uint8_t* pDestination = getOpcode8BitOperandLHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t oldValue = *pDestination;
+            const uint8_t newValue = oldValue - 1;
 
-            const uint8_t oldRegisterValue = *pRegister;
-            const uint8_t newRegisterValue = oldRegisterValue - 1;
+            *pDestination = newValue;
 
-            *pRegister = newRegisterValue;
-
-            pCpuState->registers.F.Z = (newRegisterValue == 0);
-            pCpuState->registers.F.H = ((newRegisterValue & 0x0F) == 0x0F);
+            pCpuState->registers.F.Z = (newValue == 0);
+            pCpuState->registers.F.H = ((newValue & 0x0F) == 0x0F);
             pCpuState->registers.F.N = 1;
             break;
         }
 
-        //DEC BC
-        case 0x0B:
+        //DEC nn
+        case 0x0B: case 0x1B: case 0x2B: case 0x3B:
         { 
-            pCpuState->registers.BC--;
+            uint16_t* pDestination = getOpcode16BitOperand( pCpuState, opcode );
+            const uint16_t oldValue = *pDestination;
+            const uint16_t newValue = oldValue - 1;
+
+            *pDestination = newValue;
             break;
         }
-        //DEC DE
-        case 0x1B:
-        {
-            pCpuState->registers.DE--;
-            break;
-        }
-        //DEC HL
-        case 0x2B:
-        {
-            pCpuState->registers.HL--;
-            break;
-        }
-        //DEC SP
-        case 0x3B:
-        {
-            pCpuState->registers.SP--;
-            break;
-        }
+        
         //HALT
         case 0x76:
             pCpuState->flags.halt = 1;
@@ -2683,34 +2156,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        //ADD HL, n
-        case 0x09:
-        case 0x19:
-        case 0x29:
-        case 0x39:
+        //ADD HL, nn
+        case 0x09: case 0x19: case 0x29: case 0x39:
         {
-            uint16_t operand = 0;
-            switch(opcode)
-            {
-                //ADD HL, BC
-                case 0x09:
-                    operand = pCpuState->registers.BC;
-                    break;
-                //ADD HL, DE
-                case 0x19:
-                    operand = pCpuState->registers.DE;
-                    break;
-                //ADD HL, HL
-                case 0x29:
-                    operand = pCpuState->registers.HL;
-                    break;
-                //ADD HL, SP
-                case 0x39:
-                    operand = pCpuState->registers.SP;
-                    break;
-            }
-
-            const uint32_t new32BitRegisterValue = pCpuState->registers.HL + operand;
+            const uint16_t* pOperand = getOpcode16BitOperand( pCpuState, opcode );
+            const uint32_t new32BitRegisterValue = pCpuState->registers.HL + *pOperand;
 
             pCpuState->registers.F.N = 0;
             pCpuState->registers.F.H = (new32BitRegisterValue > 0xFFF0);
@@ -2731,57 +2181,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        //ADD A, n
-        case 0x87:
-        case 0x80:
-        case 0x81:
-        case 0x82:
-        case 0x83:
-        case 0x84:
-        case 0x85:
-        case 0x86:
+        //ADD A, n 
+        case 0x80: case 0x81: case 0x82: case 0x83: case 0x84: case 0x85: case 0x86: case 0x87: 
         case 0xC6:
         {
-            uint8_t operand = 0;
-            switch(opcode)
-            {
-                //ADD A, A
-                case 0x87:
-                    operand = pCpuState->registers.A;
-                    break;
-                //ADD A, B
-                case 0x80:
-                    operand = pCpuState->registers.B;
-                    break;
-                //ADD A, C
-                case 0x81:
-                    operand = pCpuState->registers.C;
-                    break;
-                //ADD A, D
-                case 0x82:
-                    operand = pCpuState->registers.D;
-                    break;
-                //ADD A, E
-                case 0x83:
-                    operand = pCpuState->registers.E;
-                    break;
-                //ADD A, H
-                case 0x84:
-                    operand = pCpuState->registers.H;
-                    break;
-                //ADD A, L
-                case 0x85:
-                    operand = pCpuState->registers.L;
-                    break;
-                //ADD A, (HL)
-                case 0x86:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-                //ADD A, #
-                case 0xC6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-                    break;
-            }
+            const uint8_t operand = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
 
             //FK: promoting to 16bit to check for potential carry or half carry...Is there a better way?
             const uint16_t accumulator16BitValue = pCpuState->registers.A + operand;
@@ -2795,57 +2199,10 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //SUB A, n
-        case 0x97:
-        case 0x90:
-        case 0x91:
-        case 0x92:
-        case 0x93:
-        case 0x94:
-        case 0x95:
-        case 0x96:
+        case 0x90: case 0x91: case 0x92: case 0x93: case 0x94: case 0x95: case 0x96: case 0x97:
         case 0xD6:
         {
-            uint8_t operand = 0;
-            switch(opcode)
-            {
-                //SUB A, A
-                case 0x87:
-                    operand = pCpuState->registers.A;
-                    break;
-                //SUB A, B
-                case 0x80:
-                    operand = pCpuState->registers.B;
-                    break;
-                //SUB A, C
-                case 0x81:
-                    operand = pCpuState->registers.C;
-                    break;
-                //SUB A, D
-                case 0x82:
-                    operand = pCpuState->registers.D;
-                    break;
-                //SUB A, E
-                case 0x83:
-                    operand = pCpuState->registers.E;
-                    break;
-                //SUB A, H
-                case 0x84:
-                    operand = pCpuState->registers.H;
-                    break;
-                //SUB A, L
-                case 0x85:
-                    operand = pCpuState->registers.L;
-                    break;
-                //SUB A, (HL)
-                case 0x86:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-                //SUB A, #
-                case 0xD6:
-                    operand = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-                    break;
-            }
-
+            const uint8_t operand = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
             const uint8_t accumulatorValue = pCpuState->registers.A;
             pCpuState->registers.A -= operand;
 
@@ -2857,35 +2214,10 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        case 0xC0:
-        case 0xD0:
-        case 0xC8:
-        case 0xD8:
+        //RET Conditional
+        case 0xC0: case 0xD0: case 0xC8: case 0xD8:
         {
-            uint8_t condition = 0;
-            switch( opcode )
-            {
-                //RET NZ
-                case 0xC0:
-                    condition = pCpuState->registers.F.Z == 0;
-                    break;
-
-                //RET NC
-                case 0xD0:
-                    condition = pCpuState->registers.F.C == 0;
-                    break;
-
-                //RET NZ
-                case 0xC8:
-                    condition = pCpuState->registers.F.Z == 1;
-                    break;
-
-                //RET NC
-                case 0xD8:
-                    condition = pCpuState->registers.F.C == 1;
-                    break;
-            }
-
+            const uint8_t condition = getOpcodeCondition( pCpuState, opcode );
             if( condition )
             {
                 pCpuState->registers.PC = pop16BitValueFromStack(pCpuState, pMemoryMapper);
@@ -2907,32 +2239,6 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xC9:
         {
             pCpuState->registers.PC = pop16BitValueFromStack(pCpuState, pMemoryMapper);
-            break;
-        }
-
-        //INC (HL)
-        case 0x34:
-        {
-            uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-            const uint8_t newValue = *pValue + 1;
-            pCpuState->registers.F.Z = (newValue == 0);
-            pCpuState->registers.F.H = (newValue > 0x0F);
-            pCpuState->registers.F.N = 0;
-
-            *pValue = newValue;
-            break;
-        }
-
-        //DEC (HL)
-        case 0x35:
-        {
-            uint8_t* pValue = getMemoryAddress(pMemoryMapper, pCpuState->registers.HL);
-            const uint8_t newValue = *pValue - 1;
-            pCpuState->registers.F.Z = (newValue == 0);
-            pCpuState->registers.F.H = ((newValue & 0x0F) == 0x0F);
-            pCpuState->registers.F.N = 0;
-
-            *pValue = newValue;
             break;
         }
 
@@ -2964,144 +2270,34 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //PUSH nn
-        case 0xF5:
-        case 0xC5:
-        case 0xD5:
-        case 0xE5:
+        case 0xC5: case 0xD5: case 0xE5: case 0xF5: 
         {
-            uint16_t value = 0;
-            switch( opcode )
-            {
-                //PUSH AF
-                case 0xF5:
-                    value = pCpuState->registers.AF;
-                    break;
-                //PUSH BC
-                case 0xC5:
-                    value = pCpuState->registers.BC;
-                    break;
-                //PUSH DE
-                case 0xD5:
-                    value = pCpuState->registers.DE;
-                    break;
-                //PUSH HL
-                case 0xE5:
-                    value = pCpuState->registers.HL;
-                    break;
-            }
-            
-            push16BitValueToStack( pCpuState, pMemoryMapper, value );
+            const uint16_t* pOperand = getOpcode16BitOperand( pCpuState, opcode );
+            push16BitValueToStack( pCpuState, pMemoryMapper, *pOperand );
             break;
         }
 
         //POP nn
-        case 0xF1:
-        case 0xC1:
-        case 0xD1:
-        case 0xE1:
+        case 0xC1: case 0xD1: case 0xE1: case 0xF1:
         {
-            uint16_t* pTarget = nullptr;
-            switch( opcode )
-            {
-                //POP AF
-                case 0xF1:
-                    pTarget = &pCpuState->registers.AF;
-                    break;
-                //POP BC
-                case 0xC1:
-                    pTarget = &pCpuState->registers.BC;
-                    break;
-                //POP DE
-                case 0xD1:
-                    pTarget = &pCpuState->registers.DE;
-                    break;
-                //POP HL
-                case 0xE1:
-                    pTarget = &pCpuState->registers.HL;
-                    break;
-            }
-            *pTarget = pop16BitValueFromStack( pCpuState, pMemoryMapper );
+            uint16_t* pOperand = getOpcode16BitOperand( pCpuState, opcode );
+            *pOperand = pop16BitValueFromStack( pCpuState, pMemoryMapper );
             break;
         }
 
-        // SWAP n
-        // SRL n
-        // SRA n
-        // SLA n
-        // RR n
-        // RRC n
-        // RL n
-        // RLC n
-        case 0xCB:
-        {
-            const uint8_t cbOpcode = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            handleCbOpcode(pCpuState, pMemoryMapper, cbOpcode);
+        case 0xCB: 
+            opcode = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            //FK: let it fall through
+        case 0x07: case 0x17: case 0x0F: case 0x1F:
+            handleCbOpcode(pCpuState, pMemoryMapper, opcode);
             break;
-        }
 
         //ADC
-        case 0x88:
-        case 0x89:
-        case 0x8A:
-        case 0x8B:
-        case 0x8C:
-        case 0x8D:
-        case 0x8E:
-        case 0x8F:
-        {
-            uint8_t value = 0;
-            switch(opcode)
-            {
-                //ADC B
-                case 0x88:
-                    value = pCpuState->registers.B;
-                    break;
-                //ADC C
-                case 0x89:
-                    value = pCpuState->registers.C;
-                    break;
-                //ADC D
-                case 0x8A:
-                    value = pCpuState->registers.D;
-                    break;
-                //ADC E
-                case 0x8B:
-                    value = pCpuState->registers.E;
-                    break;
-                //ADC H
-                case 0x8C:
-                    value = pCpuState->registers.H;
-                    break;
-                //ADC L
-                case 0x8D:
-                    value = pCpuState->registers.L;
-                    break;
-                //ADC (HL)
-                case 0x8E:
-                    value = read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.HL );
-                    break;
-                //ADC A
-                case 0x8F:
-                    value = pCpuState->registers.A;
-                    break;
-            }
-
-            const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + value;
-            pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
-            
-            pCpuState->registers.F.Z = (accumulator16BitValue == 0);
-            pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
-            pCpuState->registers.F.H = (accumulator16BitValue > 0x0F);
-            pCpuState->registers.F.N = 0;
-            break;
-        }
-
-        //ADC n
+        case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8C: case 0x8D: case 0x8E: case 0x8F:
         case 0xCE:
         {
-            const uint8_t value = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + value;
-
+            const uint8_t operand = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
+            const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + operand;
             pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
             
             pCpuState->registers.F.Z = (accumulator16BitValue == 0);
@@ -3112,52 +2308,10 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //SBC
-        case 0x98:
-        case 0x99:
-        case 0x9A:
-        case 0x9B:
-        case 0x9C:
-        case 0x9D:
-        case 0x9E:
-        case 0x9F:
+        case 0x98: case 0x99: case 0x9A: case 0x9B: case 0x9C: case 0x9D: case 0x9E: case 0x9F:
+        case 0xDE:
         {
-            uint8_t value = 0;
-            switch(opcode)
-            {
-                //SBC B
-                case 0x98:
-                    value = pCpuState->registers.B;
-                    break;
-                //SBC C
-                case 0x99:
-                    value = pCpuState->registers.B;
-                    break;
-                //SBC D
-                case 0x9A:
-                    value = pCpuState->registers.B;
-                    break;
-                //SBC E
-                case 0x9B:
-                    value = pCpuState->registers.B;
-                    break;
-                //SBC H
-                case 0x9C:
-                    value = pCpuState->registers.B;
-                    break;
-                //SBC L
-                case 0x9D:
-                    value = pCpuState->registers.B;
-                    break;
-                //SBC (HL)
-                case 0x9E:
-                    value = read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.HL );
-                    break;
-                //SBC A
-                case 0x9F:
-                    value = pCpuState->registers.A;
-                    break;
-            }
-
+            uint8_t value = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
             const uint8_t accumulatorValue = pCpuState->registers.A;
             value += pCpuState->registers.F.C;
 
@@ -3209,28 +2363,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        //RLCA
-        case 0x07:
-        //RLA
-        case 0x17:
-        //RRCA
-        case 0x0F:
-        //RRA
-        case 0x1F:
-        {
-            handleCbOpcode(pCpuState, pMemoryMapper, opcode);
-            break;
-        }
-
         //RST n
-        case 0xC7:
-        case 0xCF:
-        case 0xD7:
-        case 0xDF:
-        case 0xE7:
-        case 0xEF:
-        case 0xF7:
-        case 0xFF:
+        case 0xC7: case 0xCF:
+        case 0xD7: case 0xDF:
+        case 0xE7: case 0xEF:
+        case 0xF7: case 0xFF:
         {
             const uint16_t address = (uint16_t)(opcode - 0xC7);
             push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
@@ -3239,57 +2376,10 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         // CP n
-        case 0xBF:
-        case 0xB8:
-        case 0xB9:
-        case 0xBA:
-        case 0xBB:
-        case 0xBC:
-        case 0xBD:
-        case 0xBE:
+        case 0xB8: case 0xB9: case 0xBA: case 0xBB: case 0xBC: case 0xBD: case 0xBE: case 0xBF: 
         case 0xFE:
         {
-            uint8_t value = 0;
-            switch(opcode)
-            {
-                //CP A
-                case 0xBF:
-                    value = pCpuState->registers.A;
-                    break;
-                //CP B
-                case 0xB8:
-                    value = pCpuState->registers.B;
-                    break;
-                //CP C
-                case 0xB9:
-                    value = pCpuState->registers.C;
-                    break;
-                //CP D
-                case 0xBA:
-                    value = pCpuState->registers.D;
-                    break;
-                //CP E
-                case 0xBB:
-                    value = pCpuState->registers.E;
-                    break;
-                //CP H
-                case 0xBC:
-                    value = pCpuState->registers.H;
-                    break;
-                //CP L
-                case 0xBD:
-                    value = pCpuState->registers.L;
-                    break;
-                //CP (HL)
-                case 0xBE:
-                    value = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.HL);
-                    break;
-                //CP #
-                case 0xFE:
-                    value = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-                    break;
-            }
-
+            const uint8_t value = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
             pCpuState->registers.F.Z = (pCpuState->registers.A == value);
             pCpuState->registers.F.H = ((pCpuState->registers.A & 0x0F) < (value & 0x0F));
             pCpuState->registers.F.C = (pCpuState->registers.A < value);
@@ -3298,20 +2388,14 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        case 0xD3:
-        case 0xE3:
-        case 0xE4:
-        case 0xF4:
-        case 0xDB:
-        case 0xDD:
-        case 0xEB:
-        case 0xEC:
-        case 0xED:
-        case 0xFC:
-        case 0xFD:
+        case 0xD3: case 0xDB: case 0xDD:
+        case 0xE3: case 0xE4: case 0xEB: case 0xEC: case 0xED: 
+        case 0xF4: case 0xFC: case 0xFD:
         {
             printf( "Illegal opcode '%.2hhX\n", opcode );
+#if K15_BREAK_ON_ILLEGAL_INSTRUCTION == 1
             debugBreak();
+#endif
             break;
         }
         default:
@@ -3406,7 +2490,7 @@ bool handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypadState joypadSta
 
 void setGBEmulatorInstanceJoypadState( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypadState joypadState )
 {
-    pEmulatorInstance->joypadState = joypadState;
+    interLockedExchange16BitValue( &pEmulatorInstance->joypadState.value, joypadState.value );
 }
 
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
@@ -3447,8 +2531,9 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         updatePPULcdControl( pPpuState, lcdControlValue );
     }
 
-    pMemoryMapper->lcdStatus = *pPpuState->lcdRegisters.pStatus;
-    pMemoryMapper->lcdEnabled = pPpuState->pLcdControl->enable;
+    pMemoryMapper->lcdStatus    = *pPpuState->lcdRegisters.pStatus;
+    pMemoryMapper->lcdEnabled   = pPpuState->pLcdControl->enable;
+    pMemoryMapper->dmaActive    = pCpuState->flags.dma;
 
     return cycleCost;
 }

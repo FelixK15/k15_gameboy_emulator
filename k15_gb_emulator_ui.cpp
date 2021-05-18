@@ -394,7 +394,6 @@ void doEmulatorStateSaveLoadView( GBEmulatorInstance* pEmulatorInstance )
             }
         }
     }
-   
 
     ImGui::End();
 }
