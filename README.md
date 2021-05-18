@@ -48,6 +48,8 @@ To set the joystick state of the emulator instance, call `setGBEmulatorInstanceJ
 State loading/saving can be done using `calculateGBEmulatorStateSizeInBytes()`, `storeGBEmulatorInstanceState()` and `loadGBEmulatorInstanceState()`.
 For an example of how to use the API please take a look at `k15_gb_emulator_ui.cpp`, specificially the `doEmulatorStateSaveLoadView()` function.
 
+In case the emulator isn't run on a 60Hz monitor, the monitor refresh rate can be propagated to the emulator using the `setGBEmulatorInstanceMonitorRefreshRate()` function to get correct timings if additionally also using vsync.
+
 ## Current State and Goals
 
 - [x] Implement opcodes to get into tetris copyright text
