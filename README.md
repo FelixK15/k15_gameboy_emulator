@@ -43,7 +43,8 @@ either by mapping the rom file or by copying the rom file content to a memory bu
 
 Now, call `runGBEmulatorInstance()` each frame and check with `hasGBEmulatorInstanceHitVBlank()` if the GameBoy frame has finished (should always be true if not single stepping). By calling `getGBEmulatorInstanceFrameBuffer()` you can get a pointer to the framebuffer data (attention: the pixel format is still in gameboy format - 2bpp. To convert to RGB8 call `convertGBFrameBufferToRGB8Buffer()`).
 
-To set the joystick state of the emulator instance, call `setGBEmulatorInstanceJoypadState()`. 
+To set the joystick state of the emulator instance, call `setGBEmulatorInstanceJoypadState()` (this function is thread-safe so that input code can 
+high frequently poll asynchronously for smaller input lag). 
 
 State loading/saving can be done using `calculateGBEmulatorStateSizeInBytes()`, `storeGBEmulatorInstanceState()` and `loadGBEmulatorInstanceState()`.
 For an example of how to use the API please take a look at `k15_gb_emulator_ui.cpp`, specificially the `doEmulatorStateSaveLoadView()` function.
