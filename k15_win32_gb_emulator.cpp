@@ -5,17 +5,16 @@
 #include <stdio.h>
 #include <gl/GL.h>
 
-#include "imgui/imgui.cpp"
-#include "imgui/imgui_demo.cpp"
-#include "imgui/imgui_draw.cpp"
-#include "imgui/imgui_tables.cpp"
-#include "imgui/imgui_widgets.cpp"
-#include "imgui/imgui_impl_win32.cpp"
-#include "imgui/imgui_impl_opengl2.cpp"
-
 #include "k15_gb_emulator.h"
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+#	include "imgui/imgui.cpp"
+#	include "imgui/imgui_demo.cpp"
+#	include "imgui/imgui_draw.cpp"
+#	include "imgui/imgui_tables.cpp"
+#	include "imgui/imgui_widgets.cpp"
+#	include "imgui/imgui_impl_win32.cpp"
+#	include "imgui/imgui_impl_opengl2.cpp"
 #	include "k15_gb_emulator_ui.cpp"
 #endif
 
@@ -334,6 +333,7 @@ void setup( HWND hwnd )
 {	
 	createOpenGLContext( hwnd );
 	//const uint8_t* pRomData = mapRomFile( "Othello (Europe).gb" );
+	//const uint8_t* pRomData = mapRomFile( "Alleyway (World).gb" );
 	const uint8_t* pRomData = mapRomFile( "rom.gb" );
 	if( pRomData == nullptr )
 	{
@@ -386,7 +386,8 @@ void doFrame(HWND hwnd)
 	const float gbSizeH = pixelUnitH*gbScreenWidth;
 	const float gbSizeV = pixelUnitV*gbScreenHeight;
 
-	const float scale = 5.0f;
+	//FK: division using integer to keep integer scaling (minus 2 to not fill out the whole screen just yet)
+	const float scale 		= (float)(screenHeight / gbVerticalResolutionInPixels) - 2;
 
 	const float left  		= -gbSizeH * scale;
 	const float right 		= +gbSizeH * scale;

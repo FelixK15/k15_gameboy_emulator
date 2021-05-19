@@ -1,5 +1,6 @@
 #include "stdint.h"
 #include "stdio.h"
+#include "stdlib.h"
 
 #define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        0
@@ -287,6 +288,9 @@ struct GBPpuState
     uint32_t            dotCounter;
     uint32_t            cycleCounter;
     GBLcdRegisters      lcdRegisters;
+
+    uint8_t             backgroundMonochromePalette[4];
+    uint8_t             objectMonochromePlatte[8];
 
     GBObjectAttributes* pOAM;
     GBLcdControl*       pLcdControl;
@@ -672,7 +676,7 @@ uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addr
 }
 
 
-uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
+uint8_t read8BitValueFromMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
     if( !allowReadFromMemoryAddress( pMemoryMapper, addressOffset ) )
     {
@@ -683,15 +687,15 @@ uint8_t read8BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addres
     return pMemoryMapper->pBaseAddress[addressOffset];
 }
 
-uint16_t read16BitValueFromAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
+uint16_t read16BitValueFromMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
     pMemoryMapper->lastAddressReadFrom = addressOffset;
-    const uint8_t ls = read8BitValueFromAddress( pMemoryMapper, addressOffset + 0);
-    const uint8_t hs = read8BitValueFromAddress( pMemoryMapper, addressOffset + 1);
+    const uint8_t ls = read8BitValueFromMappedMemory( pMemoryMapper, addressOffset + 0);
+    const uint8_t hs = read8BitValueFromMappedMemory( pMemoryMapper, addressOffset + 1);
     return (hs << 8u) | (ls << 0u);
 }
 
-uint8_t* getMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset)
+uint8_t* getMappedMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset)
 {
     return pMemoryMapper->pBaseAddress + addressOffset;
 }
@@ -858,17 +862,16 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     //FK: TODO: Make the following values user defined
     //FK: A value of 11h indicates CGB (or GBA) hardware
     //pState->registers.A = 0x11;
-
-    pState->registers.A = 0x1;
+    pState->registers.A = 0x01;
 
     //FK: examine Bit 0 of the CPUs B-Register to separate between CGB (bit cleared) and GBA (bit set)
     //pState->registers.B = 0x1;
-    pState->registers.B = 0x0;
 
     //FK: Start fetching instructions at address $1000
     pState->registers.PC = 0x0100;
 
-    pState->registers.F.value   = 0x80;
+    //FK: defualt values from BGB
+    pState->registers.F.value   = 0xB0;
     pState->registers.C         = 0x13;
     pState->registers.DE        = 0x00D8;
     pState->registers.HL        = 0x014D;
@@ -928,6 +931,14 @@ void clearGBFrameBuffer( uint8_t* pGBFrameBuffer )
     memset( pGBFrameBuffer, 0, gbFrameBufferSizeInBytes );
 }
 
+void extractMonochromePaletteFrom8BitValue( uint8_t* pMonochromePalette, uint8_t value )
+{
+    pMonochromePalette[0] = ( value >> 0 ) & 0x3;
+    pMonochromePalette[1] = ( value >> 2 ) & 0x3;
+    pMonochromePalette[2] = ( value >> 4 ) & 0x3;
+    pMonochromePalette[3] = ( value >> 6 ) & 0x3;
+}
+
 void initPpuFrameBuffer( GBPpuState* pPpuState, uint8_t* pMemory )
 {
     pPpuState->pGBFrameBuffer = pMemory;
@@ -938,12 +949,26 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
 {
     patchIOPpuMappedMemoryPointer( pMemoryMapper, pPpuState );
 
-    //FK: set default state
-    pPpuState->pLcdControl->enable              = 1;
-    pPpuState->pLcdControl->bgAndWindowEnable   = 1;
-    pPpuState->pLcdControl->bgTileMapArea       = 1;
+    //FK: set default state of LCDC (taken from bgb)
+    pMemoryMapper->pBaseAddress[ 0xFF40 ] = 0x91;
+
+    //FK: set default state of STAT (taken from bgb)
+    pMemoryMapper->pBaseAddress[ 0xFF41 ] = 0x91;
+
+    *pPpuState->lcdRegisters.pLy  = 153;
+    *pPpuState->lcdRegisters.pLyc = 0;
+    *pPpuState->lcdRegisters.pWx  = 0;
+    *pPpuState->lcdRegisters.pWy  = 0;
+    *pPpuState->lcdRegisters.pScx = 0;
+    *pPpuState->lcdRegisters.pScy = 0;
     
-    pPpuState->lcdRegisters.pStatus->enableLycEqLyInterrupt = 1;
+    //FK: set default state of palettes (taken from bgb)
+    extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, 0xFC );
+    extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 0,  0xFF );
+    extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 4,  0xFF );
+
+    pPpuState->dotCounter = 424;
+
     clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
 }
 
@@ -1069,7 +1094,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         }
 
         const uint8_t spriteTopPosition = pSprite->y - gbSpriteHeight;
-        if( spriteTopPosition <= scanlineYCoordinate && spriteTopPosition + objHeight >= scanlineYCoordinate )
+        if( spriteTopPosition <= scanlineYCoordinate && spriteTopPosition + objHeight > scanlineYCoordinate )
         {
             scanlineSprites[spriteCounter++] = *pSprite;
             
@@ -1106,6 +1131,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         //FK: Get pixel data of top most pixel line of current tile
         const uint8_t* pTileTopPixelData = pPpuState->pTileBlocks[0] + pSprite->tileIndex * gbTileSizeInBytes;
         const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
+        
         //FK: Get pixel data of this tile for the current scanline
         const uint8_t pixelDataMSB = pTileScanlinePixelData[0];
         const uint8_t pixelDataLSB = pTileScanlinePixelData[1];
@@ -1113,32 +1139,47 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         //FK: Pixel will be written interleaved here
         uint8_t interleavedScanlinePixelData[2] = {0};
         uint8_t scanlinePixelMask[2] = {0};
+
         for( uint8_t scanlinePixelDataIndex = 0; scanlinePixelDataIndex < 2; ++scanlinePixelDataIndex )
         {
-            const uint8_t startPixelIndex = scanlinePixelDataIndex * gbHalfTileResolution;
-            const uint8_t endPixelIndex = startPixelIndex + gbHalfTileResolution;
+            const uint8_t startPixelIndex   = scanlinePixelDataIndex * gbHalfTileResolution;
+            const uint8_t endPixelIndex     = startPixelIndex + gbHalfTileResolution;
+
             for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
             {
-                const uint8_t scanlinePixelShift        = 6 - (pixelIndex-startPixelIndex)*2;
-                const uint8_t pixelShift                = 7 - pixelIndex;
-                const uint8_t pixelMSB                  = ( pixelDataMSB >> pixelShift ) & 0x1;
-                const uint8_t pixelLSB                  = ( pixelDataLSB >> pixelShift ) & 0x1;
-                const uint8_t pixelData                 = pixelMSB << 1 | pixelLSB << 0;
-                scanlinePixelMask[ scanlinePixelDataIndex ]             |= ( pixelData == 0 ? 0x3 : 0x0 ) << scanlinePixelShift;
+                const uint8_t scanlinePixelShift             = pSprite->flags.xflip ? (pixelIndex-startPixelIndex)*2 : 6 - (pixelIndex-startPixelIndex)*2;
+                const uint8_t colorIdShift                   = 7 - pixelIndex;
+                const uint8_t colorIdMSB                     = ( pixelDataMSB >> colorIdShift ) & 0x1;
+                const uint8_t colorIdLSB                     = ( pixelDataLSB >> colorIdShift ) & 0x1;
+                const uint8_t colorIdData                    = colorIdMSB << 1 | colorIdLSB << 0;
+                scanlinePixelMask[ scanlinePixelDataIndex ]  |= ( colorIdData == 0 ? 0x3 : 0x0 ) << scanlinePixelShift;
+
+                const uint8_t paletteOffset = pSprite->flags.paletteNumber * 4;
+                const uint8_t pixelData = pPpuState->objectMonochromePlatte[ colorIdData + paletteOffset ];
                 interleavedScanlinePixelData[ scanlinePixelDataIndex ]  |= ( pixelData << scanlinePixelShift );
             }
         }
 
         const uint8_t scanlinePixelIndex = ( pSprite->x - 8u ) / 4;
-        pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0] | ( pScanlinePixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[0] );
-        pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1] | ( pScanlinePixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[1] );
+
+        if( pSprite->flags.xflip )
+        {
+            pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[1] | ( pScanlinePixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[1] );
+            pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[0] | ( pScanlinePixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[0] );
+       }
+        else
+        {
+            pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0] | ( pScanlinePixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[0] );
+            pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1] | ( pScanlinePixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[1] );
+        }
     }
 }
 
-void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
+template<typename IndexType>
+void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_t* pTileData, uint8_t scanlineYCoordinate )
 {
-    const uint8_t* pWindowTileIds      = pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->windowTileMapArea ];
-    const uint8_t* pBackgroundTileIds  = pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->bgTileMapArea ];
+    const IndexType* pWindowTileIds      = (IndexType*)pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->windowTileMapArea ];
+    const IndexType* pBackgroundTileIds  = (IndexType*)pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->bgTileMapArea ];
     const uint8_t wy = *pPpuState->lcdRegisters.pWy;
     const uint8_t sx = *pPpuState->lcdRegisters.pScx;
     const uint8_t sy = *pPpuState->lcdRegisters.pScy;
@@ -1149,7 +1190,7 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, uint8_t scan
     const uint16_t startTileIndex = scanlineYCoordinateInTileSpace * gbBGTileCount;
     const uint16_t endTileIndex = startTileIndex + gbBGTileCount;
 
-    uint8_t scanlineBackgroundTilesIds[ gbBGTileCount ] = { 0 };
+    int8_t scanlineBackgroundTilesIds[ gbBGTileCount ] = { 0 };
 
     if( wy <= scanlineYCoordinate && pPpuState->pLcdControl->windowEnable )
     {
@@ -1186,21 +1227,11 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, uint8_t scan
     //FK: Get the y offset inside the tile row to where the scanline currently is.
     const uint8_t tileRowYOffset    = scanlineYCoordinate - tileRowStartYPos;
 
-    //FK: Assume 0x8000 addressing mode
-    const uint8_t* pTileData = pPpuState->pTileBlocks[0];
-
-    //FK: Determine tile addressing mode
-    if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
-    {
-        //FK: TODO: 0x8800 addressing mode  (actually uses 0x9000 as its base ptr)
-        pTileData = pPpuState->pTileBlocks[2];
-    }
-
     uint8_t* pScanlinePixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
 
     for( uint8_t tileIdIndex = 0; tileIdIndex < gbBackgroundTileCountPerScanline; ++tileIdIndex )
     {
-        const uint8_t tileIndex = scanlineBackgroundTilesIds[ tileIdIndex ];
+        const IndexType tileIndex = scanlineBackgroundTilesIds[ tileIdIndex ];
         
         //FK: Get pixel data of top most pixel line of current tile
         const uint8_t* pTileTopPixelData = pTileData + tileIndex * gbTileSizeInBytes;
@@ -1217,11 +1248,12 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, uint8_t scan
             const uint8_t endPixelIndex = startPixelIndex + gbHalfTileResolution;
             for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
             {
-                const uint8_t scanlinePixelShift        = 6 - (pixelIndex-startPixelIndex)*2;
-                const uint8_t pixelShift                = 7 - pixelIndex;
-                const uint8_t pixelMSB                  = ( pixelDataMSB >> pixelShift ) & 0x1;
-                const uint8_t pixelLSB                  = ( pixelDataLSB >> pixelShift ) & 0x1;
-                const uint8_t pixelData                 = pixelMSB << 1 | pixelLSB << 0;
+                const uint8_t scanlinePixelShift          = 6 - (pixelIndex-startPixelIndex)*2;
+                const uint8_t colorIdShift                = 7 - pixelIndex;
+                const uint8_t colorIdMSB                  = ( pixelDataMSB >> colorIdShift ) & 0x1;
+                const uint8_t colorIdLSB                  = ( pixelDataLSB >> colorIdShift ) & 0x1;
+                const uint8_t colorIdData                 = colorIdMSB << 1 | colorIdLSB << 0;
+                const uint8_t pixelData                   = pPpuState->backgroundMonochromePalette[ colorIdData ];
                 interleavedScanlinePixelData[ scanlinePixelDataIndex ] |= ( pixelData << scanlinePixelShift );
             }
         }
@@ -1244,7 +1276,18 @@ void pushScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 
     if( pPpuState->pLcdControl->bgAndWindowEnable )
     {
-        pushBackgroundOrWindowPixelsToScanline( pPpuState, scanlineYCoordinate );
+        //FK: Determine tile addressing mode
+        if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
+        {
+            const uint8_t* pTileData = pPpuState->pTileBlocks[2];
+            //FK: TODO: 0x8800 addressing mode  (actually uses 0x9000 as its base ptr)
+            pushBackgroundOrWindowPixelsToScanline< int8_t >( pPpuState, pTileData, scanlineYCoordinate );
+        }
+        else
+        {
+            const uint8_t* pTileData = pPpuState->pTileBlocks[0];
+            pushBackgroundOrWindowPixelsToScanline< uint8_t >( pPpuState, pTileData, scanlineYCoordinate );
+        }
     }
 
     if( pPpuState->pLcdControl->objEnable )
@@ -1442,7 +1485,7 @@ uint16_t pop16BitValueFromStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryM
     return value;
 }
 
-void triggerPendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper )
+void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper )
 {
     if( !pCpuState->flags.IME )
     {
@@ -1496,7 +1539,7 @@ uint8_t getOpcode8BitOperandRHS( GBCpuState* pCpuState, GBMemoryMapper* pMemoryM
         case 0x05:
             return pCpuState->registers.L;
         case 0x06:
-            return readFromProgramCounter ? read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.PC++ ) : read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.HL );
+            return readFromProgramCounter ? read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ ) : read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.HL );
         case 0x07:
             return pCpuState->registers.A;
     }
@@ -1518,7 +1561,11 @@ uint8_t* getOpcode8BitOperandLHS( GBCpuState* pCpuState, GBMemoryMapper* pMemory
         case 0x20: case 0x60:
             return lsn > 0x07 ? &pCpuState->registers.L : &pCpuState->registers.H;
         case 0x30: case 0x70:
-            return lsn > 0x07 ? &pCpuState->registers.A : getMemoryAddress( pMemoryMapper, pCpuState->registers.HL );
+            if( lsn > 0x07 )
+            {
+                return &pCpuState->registers.A;
+            }
+            break;
     }
 
     debugBreak();
@@ -1582,66 +1629,62 @@ uint8_t getOpcodeCondition( GBCpuState* pCpuState, uint8_t opcode )
 
 void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode)
 {
-    uint8_t* pTarget = nullptr;
-    uint8_t target = (opcode & 0x0F);
-    const uint8_t operation = ( opcode & 0xF0 );
-    uint8_t bitIndex = ((operation%0x40)/0x10) * 2 + (target > 0x07);
-    target = target > 0x07 ? target - 0x08 : target;
-    switch( target )
+    const uint8_t lsn = (opcode & 0x0F);
+    const uint8_t msn = (opcode & 0xF0);
+
+    const uint8_t registerIndex = lsn > 0x07 ? lsn - 0x08 : lsn;
+    const uint8_t bitIndex = ( ( msn%0x40 ) / 0x10 ) * 2 + (lsn > 0x07);
+
+    uint8_t* pRegister = nullptr;
+    switch( registerIndex )
     {
         case 0x00:
         {
-            pTarget = &pCpuState->registers.B;
+            pRegister = &pCpuState->registers.B;
             break;
         }
         case 0x01:
         {
-            pTarget = &pCpuState->registers.C;
+            pRegister = &pCpuState->registers.C;
             break;
         }
         case 0x02:
         {
-            pTarget = &pCpuState->registers.D;
+            pRegister = &pCpuState->registers.D;
             break;
         }
         case 0x03:
         {
-            pTarget = &pCpuState->registers.E;
+            pRegister = &pCpuState->registers.E;
             break;
         }
         case 0x04:
         {
-            pTarget = &pCpuState->registers.H;
+            pRegister = &pCpuState->registers.H;
             break;
         }
         case 0x05:
         {
-            pTarget = &pCpuState->registers.L;
-            break;
-        }
-        case 0x06:
-        {
-            pTarget = getMemoryAddress( pMemoryMapper, pCpuState->registers.HL );
+            pRegister = &pCpuState->registers.L;
             break;
         }
         case 0x07:
         {
-            pTarget = &pCpuState->registers.A;
+            pRegister = &pCpuState->registers.A;
             break;
         }
     }
 
-    //FK: Refer to https://gbdev.io/gb-opcodes//optables/
-    switch( operation )
+    uint8_t value = ( pRegister == nullptr ) ? read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.HL ) : *pRegister;
+    switch( msn )
     {
         case 0x00:
         {
-            if( target <= 0x07 )
+            if( registerIndex <= 0x07 )
             {
                 //RLC
-                const uint8_t value = *pTarget;
                 const uint8_t newValue = value << 1 | ((value & (1<<7)) >> 7);
-                *pTarget = newValue;
+                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
                 pCpuState->registers.F.C = (value >> 7) & 0x1;
@@ -1651,9 +1694,8 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             else
             {
                 //RRC
-                const uint8_t value = *pTarget;
                 const uint8_t newValue = value >> 1 | ((value & 0x1) << 7);
-                *pTarget = newValue;
+                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
                 pCpuState->registers.F.C = value & 0x1;
@@ -1664,12 +1706,11 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         }
         case 0x10:
         {
-            if( target <= 0x07 )
+            if( registerIndex <= 0x07 )
             {
                 //RL
-                const uint8_t value = *pTarget;
                 const uint8_t newValue = value << 1 | pCpuState->registers.F.C;
-                *pTarget = newValue;
+                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
                 pCpuState->registers.F.C = (value >> 7) & 0x1;
@@ -1679,9 +1720,8 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             else
             {
                 //RR
-                const uint8_t value = *pTarget;
                 const uint8_t newValue = value >> 1 | (pCpuState->registers.F.C << 7);
-                *pTarget = newValue;
+                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
                 pCpuState->registers.F.C = value & 0x1;
@@ -1692,12 +1732,11 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         }
         case 0x20:
         {
-            if( target <= 0x07 )
+            if( registerIndex <= 0x07 )
             {
                 //SLA
-                const uint8_t value = *pTarget;
                 const uint8_t newValue = value << 1;
-                *pTarget = newValue;
+                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
                 pCpuState->registers.F.C = (value >> 7) & 0x1;
@@ -1707,9 +1746,8 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             else
             {
                 //SRA
-                const uint8_t value = *pTarget;
                 const uint8_t newValue = value >> 1 | (value & (1<<7) << 7);
-                *pTarget = newValue;
+                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
                 pCpuState->registers.F.C = value & 0x1;
@@ -1720,15 +1758,13 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         }
         case 0x30:
         {
-            if( target <= 0x07 )
+            if( registerIndex <= 0x07 )
             {
                 //SWAP
-                const uint8_t value = *pTarget;
                 const uint8_t highNibble = value & 0xF0;
                 const uint8_t lowNibble  = value & 0x0F;
                 const uint8_t newValue = lowNibble << 4 | highNibble << 0;
-
-                *pTarget = newValue;
+                value = newValue;
 
                 pCpuState->registers.F.Z = (value == 0);
                 pCpuState->registers.F.C = 0;
@@ -1738,9 +1774,8 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             else
             {
                 //SRL
-                const uint8_t value = *pTarget;
                 const uint8_t newValue = value >> 1;
-                *pTarget = newValue;
+                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
                 pCpuState->registers.F.C = value & 0x1;
@@ -1755,7 +1790,6 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         case 0x60:
         case 0x70:
         {
-            const uint8_t value = *pTarget;
             const uint8_t bitValue = (value >> bitIndex) & 0x1;
             pCpuState->registers.F.Z = bitValue == 0;
             pCpuState->registers.F.N = 0;
@@ -1768,9 +1802,8 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         case 0xA0:
         case 0xB0:
         {
-            const uint8_t value = *pTarget;
             const uint8_t newValue = value & ~(1 << bitIndex);
-            *pTarget = newValue;
+            value = newValue;
             break;
         }
         //SET
@@ -1779,12 +1812,20 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         case 0xE0:
         case 0xF0:
         {
-            const uint8_t value = *pTarget;
             const uint8_t newValue = value | (1 << bitIndex);
-            *pTarget = newValue;
+            value = newValue;
             break;
         }
     }
+
+    if( pRegister != nullptr )
+    {
+        *pRegister = value;
+        return;
+    }
+
+    write8BitValueToMappedMemory( pMemoryMapper, pCpuState->registers.HL, value );
+    return;
 }
 
 uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode )
@@ -1801,7 +1842,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //CALL nn
         case 0xCD:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            const uint16_t address = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC + 2);
             pCpuState->registers.PC = address;
             break;
@@ -1810,7 +1851,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //CALL condition
         case 0xC4: case 0xCC: case 0xD4: case 0xDC:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            const uint16_t address = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.PC += 2;
 
             const uint8_t condition = getOpcodeCondition( pCpuState, opcode );
@@ -1843,18 +1884,21 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //LD r, n
-        case 0x06: case 0x16: case 0x26: case 0x36:
+        case 0x06: case 0x16: case 0x26:
         case 0x0E: case 0x1E: case 0x2E: case 0x3E:
         {
             uint8_t* pDestination = getOpcode8BitOperandLHS( pCpuState, pMemoryMapper, opcode );
-            const uint8_t value = read8BitValueFromAddress( pMemoryMapper, pCpuState->registers.PC++ );
-
-            if( pDestination == ( pMemoryMapper->pBaseAddress + 0xFE10 ) && value == 0xFF )
-            {
-                breakPointHook();
-            }
+            const uint8_t value = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
 
             *pDestination = value;
+            break;
+        }
+
+        //LD (HL), n
+        case 0x36:
+        {
+            const uint8_t value = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
+            write8BitValueToMappedMemory( pMemoryMapper, pCpuState->registers.HL, value );
             break;
         }
             
@@ -1864,7 +1908,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             uint16_t* pSource = getOpcode16BitOperand( pCpuState, opcode );
             const uint16_t sourceAddress = *pSource;
 
-            pCpuState->registers.A = read8BitValueFromAddress( pMemoryMapper, sourceAddress );
+            pCpuState->registers.A = read8BitValueFromMappedMemory( pMemoryMapper, sourceAddress );
 
             if( opcode == 0x2A )
             {
@@ -1880,8 +1924,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LD A, (nn)
         case 0xFA:
         {
-            const uint16_t address = read16BitValueFromAddress( pMemoryMapper, pCpuState->registers.PC );
-            pCpuState->registers.A = read8BitValueFromAddress( pMemoryMapper, address );
+            const uint16_t address = read16BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC );
+            pCpuState->registers.A = read8BitValueFromMappedMemory( pMemoryMapper, address );
             pCpuState->registers.PC += 2;
             break;
         }
@@ -1889,7 +1933,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LD (nn), A
         case 0xEA:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            const uint16_t address = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.A);
             pCpuState->registers.PC += 2;
             break;
@@ -1907,11 +1951,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xF2:
         {
             const uint16_t address = 0xFF00 + pCpuState->registers.C;
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, address);
+            pCpuState->registers.A = read8BitValueFromMappedMemory(pMemoryMapper, address);
             break;
         }
 
-        //LD n, n
+        //LD r, r
         case 0x40: case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: 
         case 0x48: case 0x49: case 0x4A: case 0x4B: case 0x4C: case 0x4D: case 0x4E: case 0x4F:
         
@@ -1921,19 +1965,21 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x60: case 0x61: case 0x62: case 0x63: case 0x64: case 0x65: case 0x66: case 0x67: 
         case 0x68: case 0x69: case 0x6A: case 0x6B: case 0x6C: case 0x6D: case 0x6E: case 0x6F:
 
-        case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x77: case 0x78:
-        case 0x79: case 0x7A: case 0x7B: case 0x7C: case 0x7D: case 0x7E: case 0x7F:
+        case 0x78: case 0x79: case 0x7A: case 0x7B: case 0x7C: case 0x7D: case 0x7E: case 0x7F:
         {
             uint8_t* pDestination   = getOpcode8BitOperandLHS( pCpuState, pMemoryMapper, opcode );
             const uint8_t value     = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
 
-            if( pDestination == ( pMemoryMapper->pBaseAddress + 0xFE10 ) && value == 0xFF )
-            {
-                breakPointHook();
-            }
-
             *pDestination = value;
             break;
+        }
+
+        //LD (HL), r
+        case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x77:
+        {
+            const uint8_t value = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
+            write8BitValueToMappedMemory( pMemoryMapper, pCpuState->registers.HL, value );
+            break;   
         }
 
         //LD SP, HL
@@ -1946,7 +1992,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LD HL, SP + n
         case 0xF8:
         {
-            const int8_t offset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            const int8_t offset = (int8_t)read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
             pCpuState->registers.HL = pCpuState->registers.SP + offset;
             pCpuState->registers.F.Z = 0;
             pCpuState->registers.F.N = 0;
@@ -1956,7 +2002,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LD (nn), SP
         case 0x08:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            const uint16_t address = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             write16BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.SP);
             pCpuState->registers.PC += 2;
         }
@@ -1964,7 +2010,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //JP nn
         case 0xC3:
         {
-            const uint16_t addressToJumpTo = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            const uint16_t addressToJumpTo = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.PC = addressToJumpTo;
             break;
         }
@@ -1979,7 +2025,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //JP conditional
         case 0xC2: case 0xCA: case 0xD2: case 0xDA:
         {
-            const uint16_t address = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            const uint16_t address = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.PC += 2;
 
             const uint8_t condition = getOpcodeCondition( pCpuState, opcode );
@@ -1997,7 +2043,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //JR n
         case 0x18:
         {
-            const int8_t addressOffset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            const int8_t addressOffset = (int8_t)read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
             pCpuState->registers.PC += addressOffset;
             break;
         }
@@ -2005,7 +2051,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //JR conditional
         case 0x20: case 0x28: case 0x30: case 0x38:
         {
-            const int8_t addressOffset = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            const int8_t addressOffset = (int8_t)read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
             const uint8_t condition = getOpcodeCondition( pCpuState, opcode );
             if( condition )
             {
@@ -2020,13 +2066,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xA8: case 0xA9: case 0xAA: case 0xAB: case 0xAC: case 0xAD: case 0xAE: case 0xAF: 
         case 0xEE:
         {
-            const uint8_t operand = ( opcode == 0xEE ) ? read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++) : 
+            const uint8_t operand = ( opcode == 0xEE ) ? read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++) : 
                                                          getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
             
             pCpuState->registers.A        = pCpuState->registers.A ^ operand;
             pCpuState->registers.F.value  = 0x0;
             pCpuState->registers.F.Z      = (pCpuState->registers.A == 0);
-            
             break;
         }
 
@@ -2034,7 +2079,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xB0: case 0xB1: case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xB6: case 0xB7: 
         case 0xF6:
         {
-            const uint8_t operand = ( opcode == 0xF6 ) ? read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++) : 
+            const uint8_t operand = ( opcode == 0xF6 ) ? read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++) : 
                                                          getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
 
             pCpuState->registers.A        = pCpuState->registers.A | operand;
@@ -2047,7 +2092,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xA0: case 0xA1: case 0xA2: case 0xA3: case 0xA4: case 0xA5: case 0xA6: case 0xA7: 
         case 0xE6:
         {
-            const uint8_t operand = ( opcode == 0xE6 ) ? read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++) : 
+            const uint8_t operand = ( opcode == 0xE6 ) ? read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++) : 
                                                          getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
 
             pCpuState->registers.A = pCpuState->registers.A & operand;
@@ -2062,13 +2107,13 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x01: case 0x11: case 0x21: case 0x31:
         {
             uint16_t* pDestination = getOpcode16BitOperand( pCpuState, opcode );
-            *pDestination = read16BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC);
+            *pDestination = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.PC += 2u;
             break;
         }
 
         //INC n
-        case 0x04: case 0x14: case 0x24: case 0x34: 
+        case 0x04: case 0x14: case 0x24:
         case 0x0C: case 0x1C: case 0x2C: case 0x3C:
         {
             uint8_t* pDestination = getOpcode8BitOperandLHS( pCpuState, pMemoryMapper, opcode );
@@ -2079,7 +2124,19 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             pCpuState->registers.F.Z = (newValue == 0);
             pCpuState->registers.F.H = (oldValue & 0xF0) != (newValue & 0xF0);
             pCpuState->registers.F.N = 0;
-            
+            break;
+        }
+
+        //INC (HL)
+        case 0x34:
+        {
+            const uint8_t oldValue = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.HL );
+            const uint8_t newValue = oldValue + 1;
+
+            write8BitValueToMappedMemory( pMemoryMapper, pCpuState->registers.HL, newValue );
+            pCpuState->registers.F.Z = (newValue == 0);
+            pCpuState->registers.F.H = (oldValue & 0xF0) != (newValue & 0xF0);
+            pCpuState->registers.F.N = 0;
             break;
         }
 
@@ -2095,7 +2152,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //DEC n
-        case 0x05: case 0x15: case 0x25: case 0x35: 
+        case 0x05: case 0x15: case 0x25: 
         case 0x0D: case 0x1D: case 0x2D: case 0x3D:
         {
             uint8_t* pDestination = getOpcode8BitOperandLHS( pCpuState, pMemoryMapper, opcode );
@@ -2104,6 +2161,19 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 
             *pDestination = newValue;
 
+            pCpuState->registers.F.Z = (newValue == 0);
+            pCpuState->registers.F.H = ((newValue & 0x0F) == 0x0F);
+            pCpuState->registers.F.N = 1;
+            break;
+        }
+
+        //DC (HL)
+        case 0x35:
+        {
+            const uint8_t oldValue = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.HL );
+            const uint8_t newValue = oldValue - 1;
+
+            write8BitValueToMappedMemory( pMemoryMapper, pCpuState->registers.HL, newValue );
             pCpuState->registers.F.Z = (newValue == 0);
             pCpuState->registers.F.H = ((newValue & 0x0F) == 0x0F);
             pCpuState->registers.F.N = 1;
@@ -2129,7 +2199,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LDH (n),A
         case 0xE0:
         {
-            const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            const uint16_t address = 0xFF00 + read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
             write8BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.A);
             break;
         }
@@ -2137,8 +2207,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LDH A,(n)
         case 0xF0:
         {
-            const uint16_t address = 0xFF00 + read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
-            pCpuState->registers.A = read8BitValueFromAddress(pMemoryMapper, address);
+            const uint16_t address = 0xFF00 + read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
+            pCpuState->registers.A = read8BitValueFromMappedMemory(pMemoryMapper, address);
             break;
         }
 
@@ -2173,7 +2243,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //ADD SP, n
         case 0xE8:
         {
-            const int8_t value = (int8_t)read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            const int8_t value = (int8_t)read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
             pCpuState->registers.SP += value;
 
             pCpuState->registers.F.Z = 0;
@@ -2286,7 +2356,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         case 0xCB: 
-            opcode = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            opcode = read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
             //FK: let it fall through
         case 0x07: case 0x17: case 0x0F: case 0x1F:
             handleCbOpcode(pCpuState, pMemoryMapper, opcode);
@@ -2311,7 +2381,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x98: case 0x99: case 0x9A: case 0x9B: case 0x9C: case 0x9D: case 0x9E: case 0x9F:
         case 0xDE:
         {
-            uint8_t value = read8BitValueFromAddress(pMemoryMapper, pCpuState->registers.PC++);
+            uint8_t value = read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
             const uint8_t accumulatorValue = pCpuState->registers.A;
             value += pCpuState->registers.F.C;
 
@@ -2497,22 +2567,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
-
-    triggerPendingInterrupts( pCpuState, pMemoryMapper );
-
-    if( pCpuState->flags.halt )
-    {
-        //FK: TODO: Check if this accurate
-        return 2;
-    }
-
     GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
     GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
 
-    const uint16_t opcodeAddress = pCpuState->registers.PC++;
-    const uint8_t opcode         = read8BitValueFromAddress( pMemoryMapper, opcodeAddress );
+    executePendingInterrupts( pCpuState, pMemoryMapper );
 
-    const uint8_t cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
+    uint8_t cycleCost = 2u;
+    if( !pCpuState->flags.halt )
+    {
+        const uint16_t opcodeAddress = pCpuState->registers.PC++;
+        const uint8_t opcode         = read8BitValueFromMappedMemory( pMemoryMapper, opcodeAddress );
+        cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
+    }
+
     updateTimerRegisters( pMemoryMapper, pTimerState );
     
     checkDMAState( pCpuState, pMemoryMapper, cycleCost ); 
@@ -2529,6 +2596,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         GBLcdControl lcdControlValue;
         memcpy(&lcdControlValue, &pMemoryMapper->lastValueWritten, sizeof(GBLcdControl) );
         updatePPULcdControl( pPpuState, lcdControlValue );
+    }
+
+    //FK: LCD Monochrome palette - Background
+    if( pMemoryMapper->lastAddressWrittenTo == 0xFF47 )
+    {
+        extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, pMemoryMapper->lastValueWritten );
+    }
+
+    //FK: LCD Monochrome palette - Object
+    if( pMemoryMapper->lastAddressWrittenTo == 0xFF48 || pMemoryMapper->lastAddressWrittenTo == 0xFF49 )
+    {
+        const uint8_t paletteOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xFF48 ) * 4;
+        extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
     }
 
     pMemoryMapper->lcdStatus    = *pPpuState->lcdRegisters.pStatus;

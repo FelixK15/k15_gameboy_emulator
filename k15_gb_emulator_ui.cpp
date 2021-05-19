@@ -182,16 +182,20 @@ void doCpuStateView(GBEmulatorInstance* pEmulatorInstance)
     ImGui::EndTable();
 
     ImGui::Separator();
-
     ImGui::Text("CPU Flags");
     ImGui::RadioButton("Z", pCpuState->registers.F.Z);
-    ImGui::SameLine();
     ImGui::RadioButton("C", pCpuState->registers.F.C);
-    
     ImGui::RadioButton("H", pCpuState->registers.F.H);
-    ImGui::SameLine();
     ImGui::RadioButton("N", pCpuState->registers.F.N);
 
+
+    ImGui::Separator();
+    ImGui::Text("CPU Internals");
+    ImGui::Text("Cycle Counter");  ImGui::SameLine();
+    ImGui::Text("%04x", pCpuState->cycleCounter );
+
+    ImGui::Text("DMA Counter");  ImGui::SameLine();
+    ImGui::Text("%04x", pCpuState->dmaCycleCounter );
     ImGui::End();
 }
 
@@ -411,7 +415,6 @@ void doJoystickView( GBEmulatorInstance* pEmulatorInstance )
 
 void doInstructionView( GBEmulatorInstance* pEmulatorInstance )
 {
-    static size_t opcodeCount = 0;
     const uint8_t* pBytes = pEmulatorInstance->pMemoryMapper->pBaseAddress;
 
     if( !ImGui::Begin( "Instruction View" ) )
@@ -435,8 +438,10 @@ void doInstructionView( GBEmulatorInstance* pEmulatorInstance )
 
     GBCpuState* pCpuState = pEmulatorInstance->pCpuState;
 
+    ImGui::SetScrollFromPosY(ImGui::GetCursorStartPos().y + pCpuState->registers.PC * ImGui::GetTextLineHeight());
+
     ImGuiListClipper clipper;
-    clipper.Begin( opcodeCount == 0 ? 0xFFFF : opcodeCount );
+    clipper.Begin( 0xFFFF );
 
     while( clipper.Step() )
     {
