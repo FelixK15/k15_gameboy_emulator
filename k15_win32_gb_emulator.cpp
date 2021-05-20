@@ -334,16 +334,14 @@ const uint8_t* mapRomFile( const char* pRomFileName )
 void setup( HWND hwnd )
 {	
 	createOpenGLContext( hwnd );
-	//const uint8_t* pRomData = mapRomFile( "Othello (Europe).gb" );
-	//const uint8_t* pRomData = mapRomFile( "Alleyway (World).gb" );
-	const uint8_t* pRomData = mapRomFile( "rom.gb" );
+	const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
+	//const uint8_t* pRomData = mapRomFile( "Tetris (Japan) (En).gb" );
 	if( pRomData == nullptr )
 	{
 		return;
 	}
 
 	const uint16_t monitorRefreshRate = queryMonitorRefreshRate( hwnd );
-	
 	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorInstanceMemoryRequirementsInBytes();
 
 	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
@@ -352,7 +350,7 @@ void setup( HWND hwnd )
 
 	pGameboyVideoBuffer = (uint8_t*)malloc(gbScreenHeight*gbScreenWidth*3);
 
-	const GBRomHeader header = getGBRomHeader(pRomData);
+	const GBCartridgeHeader header = getGBCartridgeHeader(pRomData);
 	memcpy(gameTitle, header.gameTitle, sizeof(header.gameTitle) );
 
 	glGenTextures(1, &gbScreenTexture);
@@ -556,10 +554,10 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			ImGui::EndFrame();
 		}
 #endif
-	
-		doFrame(hwnd);
 
 		QueryPerformanceCounter(&end);
+	
+		doFrame(hwnd);
 
 		deltaTimeInMicroseconds 	= (uint32_t)(((uiStart.QuadPart-start.QuadPart)*1000000)/freq.QuadPart);
 		uiDeltaTimeInMicroseconds 	= (uint32_t)(((end.QuadPart-uiStart.QuadPart)*1000000)/freq.QuadPart);
