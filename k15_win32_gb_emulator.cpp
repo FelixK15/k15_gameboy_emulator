@@ -32,7 +32,9 @@ uint32_t screenWidth 						 	= 1920;
 uint32_t screenHeight 						 	= 1080;
 GLuint gbScreenTexture 						 	= 0;
 bool   showUi								 	= true;
+uint32_t emulatorDeltaTimeInMicroseconds 		= 0u;
 uint32_t deltaTimeInMicroseconds 				= 0u;
+uint32_t uiDeltaTimeInMicroseconds 				= 0u;
 
 uint8_t* pGameboyVideoBuffer 					= nullptr;
 
@@ -375,7 +377,7 @@ void setup( HWND hwnd )
 void doFrame(HWND hwnd)
 {
 	char windowTitle[64];
-	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms", gameTitle, (float)deltaTimeInMicroseconds/1000.f );
+	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms - ui: %.3f", gameTitle, (float)deltaTimeInMicroseconds/1000.f, (float)uiDeltaTimeInMicroseconds/1000.f );
 	SetWindowText(hwnd, (LPCSTR)windowTitle);
 
 	const float pixelUnitH = 1.0f/(float)screenWidth;
@@ -500,9 +502,11 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	QueryPerformanceFrequency(&freq);
 
 	LARGE_INTEGER start;
+	LARGE_INTEGER uiStart;
 	LARGE_INTEGER end;
 
 	start.QuadPart = 0;
+	uiStart.QuadPart = 0;
 	end.QuadPart = 0;
 
 	while (loopRunning)
@@ -536,6 +540,8 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 		}
 
+		QueryPerformanceCounter(&uiStart);
+
 		//FK: UI
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 		{
@@ -554,13 +560,9 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		doFrame(hwnd);
 
 		QueryPerformanceCounter(&end);
-		deltaTimeInMicroseconds = (uint32_t)(((end.QuadPart-start.QuadPart)*1000000)/freq.QuadPart);
 
-		if( deltaTimeInMicroseconds < gbFrameTimeInMicroseconds )
-		{
-			const uint32_t sleepTimeInMilliseconds = ( gbFrameTimeInMicroseconds - deltaTimeInMicroseconds ) / 1000;
-			//Sleep( sleepTimeInMilliseconds );
-		}
+		deltaTimeInMicroseconds 	= (uint32_t)(((uiStart.QuadPart-start.QuadPart)*1000000)/freq.QuadPart);
+		uiDeltaTimeInMicroseconds 	= (uint32_t)(((end.QuadPart-uiStart.QuadPart)*1000000)/freq.QuadPart);
 	}
 
 	DestroyWindow(hwnd);

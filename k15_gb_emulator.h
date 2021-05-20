@@ -29,6 +29,8 @@ __asm\
 #   define debugBreak
 #endif
 
+#define illegalCodePath() debugBreak()
+
 //FK: Platform specific functions
 #if defined( _M_X64 ) || defined( _M_IX86 )
 #   define interLockedExchange16BitValue(pTarget, value)  InterlockedExchange16((SHORT*)pTarget, value)
@@ -853,6 +855,7 @@ void mapRomMemory( GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory )
 void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
 {
     patchIOCpuMappedMemoryPointer( pMemoryMapper, pState );
+
     //FK: (Gameboy cpu manual) The GameBoy stack pointer 
     //is initialized to $FFFE on power up but a programmer 
     //should not rely on this setting and rather should 
@@ -991,7 +994,6 @@ void resetGBEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
         mapRomMemory( pMemoryMapper, pMemoryMapper->pRomMemoryBaseAddress );
     }
 
-    pEmulatorInstance->debug.continueExecution     = 1;
     pEmulatorInstance->joypadState.actionButtonMask  = 0;
     pEmulatorInstance->joypadState.dpadButtonMask    = 0;
 
@@ -1280,7 +1282,6 @@ void pushScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
         if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
         {
             const uint8_t* pTileData = pPpuState->pTileBlocks[2];
-            //FK: TODO: 0x8800 addressing mode  (actually uses 0x9000 as its base ptr)
             pushBackgroundOrWindowPixelsToScanline< int8_t >( pPpuState, pTileData, scanlineYCoordinate );
         }
         else
@@ -1351,9 +1352,9 @@ void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cyc
 {
     //FK: timer divier runs at 16384hz (update counter every 256 cpu cycles to be accurate)
     pTimer->dividerCounter += cycleCount;
-    if( pTimer->dividerCounter > 0xAAAA )
+    if( pTimer->dividerCounter > 0xFF )
     {
-        pTimer->dividerCounter -= 0xAAAA;
+        pTimer->dividerCounter -= 0xFF;
         *pTimer->pDivider += 1;
     }
 
@@ -1544,7 +1545,7 @@ uint8_t getOpcode8BitOperandRHS( GBCpuState* pCpuState, GBMemoryMapper* pMemoryM
             return pCpuState->registers.A;
     }
 
-    debugBreak();
+    illegalCodePath();
     return 0;
 }
 
@@ -1568,7 +1569,7 @@ uint8_t* getOpcode8BitOperandLHS( GBCpuState* pCpuState, GBMemoryMapper* pMemory
             break;
     }
 
-    debugBreak();
+    illegalCodePath();
     return nullptr;
 }
 
@@ -1604,7 +1605,7 @@ uint16_t* getOpcode16BitOperand( GBCpuState* pCpuState, uint8_t opcode )
             return &pCpuState->registers.AF;
     }
 
-    debugBreak();
+    illegalCodePath();
     return nullptr;
 }
 
@@ -1623,7 +1624,7 @@ uint8_t getOpcodeCondition( GBCpuState* pCpuState, uint8_t opcode )
         return pCpuState->registers.F.C == conditionValue;
     }
 
-    debugBreak();
+    illegalCodePath();
     return 0;
 }
 
@@ -1680,7 +1681,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
     {
         case 0x00:
         {
-            if( registerIndex <= 0x07 )
+            if( lsn <= 0x07 )
             {
                 //RLC
                 const uint8_t newValue = value << 1 | ((value & (1<<7)) >> 7);
@@ -1706,7 +1707,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         }
         case 0x10:
         {
-            if( registerIndex <= 0x07 )
+            if( lsn <= 0x07 )
             {
                 //RL
                 const uint8_t newValue = value << 1 | pCpuState->registers.F.C;
@@ -1732,7 +1733,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         }
         case 0x20:
         {
-            if( registerIndex <= 0x07 )
+            if( lsn <= 0x07 )
             {
                 //SLA
                 const uint8_t newValue = value << 1;
@@ -1758,7 +1759,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
         }
         case 0x30:
         {
-            if( registerIndex <= 0x07 )
+            if( lsn <= 0x07 )
             {
                 //SWAP
                 const uint8_t highNibble = value & 0xF0;
