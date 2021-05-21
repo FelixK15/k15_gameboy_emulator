@@ -3,8 +3,8 @@
 #include "stdlib.h"
 
 #define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
-#define K15_BREAK_ON_UNKNOWN_INSTRUCTION        0
-#define K15_BREAK_ON_ILLEGAL_INSTRUCTION        0
+#define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
+#define K15_BREAK_ON_ILLEGAL_INSTRUCTION        1
 
 #include "k15_gb_opcodes.h"
 
@@ -50,7 +50,7 @@ static constexpr uint8_t    gbHorizontalResolutionInPixels     = 160u;
 static constexpr uint8_t    gbVerticalResolutionInPixels       = 144u;
 static constexpr uint8_t    gbHorizontalResolutionInTiles      = gbHorizontalResolutionInPixels / gbTileResolution;
 static constexpr uint8_t    gbVerticalResolutuionInTiles       = gbVerticalResolutionInPixels / gbTileResolution;
-static constexpr uint8_t    gbBGTileCount                      = 32u; //FK: BG maps are 32x32 tiles
+static constexpr uint8_t    gbBackgroundTileCount              = 32u; //FK: BG maps are 32x32 tiles
 static constexpr uint8_t    gbTileSizeInBytes                  = 16u; //FK: 8x8 pixels with 2bpp
 static constexpr uint8_t    gbOpcodeHistoryBufferCapacity      = 255u;
 static constexpr uint8_t    gbObjectAttributeCapacity          = 40u;
@@ -891,15 +891,13 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
     pCartridge->pRomBaseAddress = pRomMemory;
     pCartridge->romBankCount    = ( uint8_t )( romSizeInBytes / Kbyte( 16 ) );
 
+    //FK: Map first rom bank to 0x0000-0x4000
     memcpy(pMemoryMapper->pBaseAddress, pRomMemory, Kbyte( 16 ) );
 
     //FK: Selectively enable different cartridge types after testing
     switch(pCartridge->header.cartridgeType)
     {
         case ROM_ONLY:
-        {
-            break;
-        }
         case ROM_MBC1:
         {
             mapCartridgeMemoryBank( pCartridge, pMemoryMapper, 1 );
@@ -1046,16 +1044,20 @@ size_t calculateGBEmulatorInstanceMemoryRequirementsInBytes()
 
 void resetGBEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
 {
+    GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
+    GBCartridge* pCartridge = pEmulatorInstance->pCartridge;
+
     resetMemoryMapper(pEmulatorInstance->pMemoryMapper );
+
+    if( pCartridge->pRomBaseAddress != nullptr )
+    {
+        pCartridge->mappedRomBankNumber = 0;
+        mapCartridgeMemory(pCartridge, pMemoryMapper, pCartridge->pRomBaseAddress );
+    }
+
     initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
     initPpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pPpuState);
     initTimerState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pTimerState);
-
-    GBCartridge* pCartridge = pEmulatorInstance->pCartridge;
-    if( pCartridge->pRomBaseAddress != nullptr )
-    {
-        mapCartridgeMemory( pCartridge, pEmulatorInstance->pMemoryMapper, pCartridge->pRomBaseAddress );
-    }
 
     pEmulatorInstance->joypadState.actionButtonMask  = 0;
     pEmulatorInstance->joypadState.dpadButtonMask    = 0;
@@ -1129,8 +1131,8 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 
 void loadGBEmulatorInstanceRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
 {
-    mapCartridgeMemory( pEmulator->pCartridge, pEmulator->pMemoryMapper, pRomMemory );
     resetGBEmulatorInstance( pEmulator );
+    mapCartridgeMemory( pEmulator->pCartridge, pEmulator->pMemoryMapper, pRomMemory );
 }
 
 int qsort_sortSpritesByXCoordinate( void const* pSpriteA, void const* pSpriteB )
@@ -1248,6 +1250,10 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
 template<typename IndexType>
 void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_t* pTileData, uint8_t scanlineYCoordinate )
 {
+    if( scanlineYCoordinate == 64 )
+    {
+        breakPointHook();
+    }
     const IndexType* pWindowTileIds      = (IndexType*)pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->windowTileMapArea ];
     const IndexType* pBackgroundTileIds  = (IndexType*)pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->bgTileMapArea ];
     const uint8_t wy = *pPpuState->lcdRegisters.pWy;
@@ -1256,46 +1262,52 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_
 
     //FK: Calculate the tile row that intersects with the current scanline
     //FK: TODO: implement sx/sy here
-    const uint8_t scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
-    const uint16_t startTileIndex = scanlineYCoordinateInTileSpace * gbBGTileCount;
-    const uint16_t endTileIndex = startTileIndex + gbBGTileCount;
+    const uint8_t y = sy + scanlineYCoordinate;
+    const uint8_t yInTileSpace = y / gbTileResolution;
+    const uint16_t startTileIndex = yInTileSpace * gbBackgroundTileCount;
 
-    int8_t scanlineBackgroundTilesIds[ gbBGTileCount ] = { 0 };
+    uint8_t scanlineBackgroundTilesIds[ gbBackgroundTileCount ] = { 0 };
+    uint8_t tileCounter = 0;
 
     if( wy <= scanlineYCoordinate && pPpuState->pLcdControl->windowEnable )
     {
         const uint8_t wx = *pPpuState->lcdRegisters.pWx;
         const uint8_t wy = *pPpuState->lcdRegisters.pWy;
 
-        for( uint16_t tileIndex = startTileIndex; tileIndex < endTileIndex; ++tileIndex )
+        while( tileCounter < gbBackgroundTileCount )
         {
+            const uint16_t tileIndex = startTileIndex + tileCounter;
             const uint8_t x = tileIndex * 8;
             if( x >= wx )
             {
                 //FK: get tile from window tile map
-                scanlineBackgroundTilesIds[ tileIndex - startTileIndex ] = pWindowTileIds[ tileIndex ];
+                scanlineBackgroundTilesIds[ tileCounter ] = pWindowTileIds[ tileIndex ];
             }
             else if( x >= sx )
             {
                 //FK: get tile from background tile map
-                scanlineBackgroundTilesIds[ tileIndex - startTileIndex ] = pBackgroundTileIds[ tileIndex ];
+                scanlineBackgroundTilesIds[ tileCounter ] = pBackgroundTileIds[ tileIndex ];
             }
+
+            ++tileCounter;
         }
     }
     else
     {
-        for( uint16_t tileIndex = startTileIndex; tileIndex < endTileIndex; ++tileIndex )
+        while( tileCounter < gbBackgroundTileCount )
         {
             //FK: get tile from background tile map
-            scanlineBackgroundTilesIds[ tileIndex - startTileIndex ] = pBackgroundTileIds[ tileIndex ];
+            const uint16_t tileIndex = startTileIndex + tileCounter;
+            scanlineBackgroundTilesIds[ tileCounter ] = pBackgroundTileIds[ tileIndex ];
+            ++tileCounter;
         }
     }
 
     //FK: Get the y position of the top most pixel inside the tile row that the current scanline is in
-    const uint8_t tileRowStartYPos  = startTileIndex / gbBGTileCount * gbTileResolution;
+    const uint8_t tileRowStartYPos  = startTileIndex / gbBackgroundTileCount * gbTileResolution;
 
     //FK: Get the y offset inside the tile row to where the scanline currently is.
-    const uint8_t tileRowYOffset    = scanlineYCoordinate - tileRowStartYPos;
+    const uint8_t tileRowYOffset    = y - tileRowStartYPos;
 
     uint8_t* pScanlinePixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
 
@@ -1305,7 +1317,7 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_
         
         //FK: Get pixel data of top most pixel line of current tile
         const uint8_t* pTileTopPixelData = pTileData + tileIndex * gbTileSizeInBytes;
-        const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
+        const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( y - yInTileSpace * 8 ) * 2;
         //FK: Get pixel data of this tile for the current scanline
         const uint8_t pixelDataMSB = pTileScanlinePixelData[0];
         const uint8_t pixelDataLSB = pTileScanlinePixelData[1];
@@ -2634,7 +2646,8 @@ void handleMBC1RomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper 
 
     if( isInMBC1RomBankNumberRegisterRange( address ) )
     {
-        const uint8_t romBankNumber = value == 0 ? 1 : ( value & ( pCartridge->romBankCount - 1 ) );
+        const uint8_t romBankNumberMask = ( pCartridge->romBankCount - 1 );
+        const uint8_t romBankNumber = value == 0 ? 1 : ( value & romBankNumberMask );
         mapCartridgeMemoryBank( pCartridge, pMemoryMapper, romBankNumber );
     }
 }

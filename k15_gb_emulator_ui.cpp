@@ -3,6 +3,24 @@
 
 constexpr ImGuiInputTextFlags hexTextInputFlags = ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase;
 
+constexpr uint8_t vramVerticalResolutionInTiles   = 24;
+constexpr uint8_t vramHorizontalResolutionInTiles = 16;
+
+constexpr uint8_t vramVerticalResolutionInPixels    = vramVerticalResolutionInTiles * gbTileResolution;
+constexpr uint8_t vramHorizontalResolutionInPixels  = vramHorizontalResolutionInTiles * gbTileResolution;
+
+constexpr uint8_t gridCountX = vramHorizontalResolutionInTiles;
+constexpr uint8_t gridCountY = vramVerticalResolutionInTiles;
+
+constexpr uint8_t vramTextureVerticalResolution   = vramVerticalResolutionInPixels + gridCountY;
+constexpr uint8_t vramTextureHorizontalResolution = vramHorizontalResolutionInPixels + gridCountX;
+constexpr uint32_t vramTextureSizeInBytes         = vramTextureVerticalResolution * vramTextureHorizontalResolution * 3;
+
+constexpr uint32_t backgroundHorizontalResolution = gbBackgroundTileCount * gbTileResolution;
+constexpr uint32_t backgroundVerticalResolution   = gbBackgroundTileCount * gbTileResolution;
+constexpr uint32_t backgroundTextureSizeInBytes   = backgroundHorizontalResolution * backgroundVerticalResolution * 3;
+
+
 static struct debugViewState
 {
     struct
@@ -21,8 +39,17 @@ static struct debugViewState
     {
         char programCounterHexInput[5]      = { '0', '0', '0', '0', 0 };
     } gbCpu;
-    
+
+    struct
+    {
+        uint8_t backgroundTextureMemory[ backgroundTextureSizeInBytes ];
+        uint8_t vramTextureMemory[ vramTextureSizeInBytes ];
+    } textureMemory;
+
+    GLuint  vramTextureHandle = 0;
+    GLuint  backgroundTextureHandle = 0;
 } debugViewState;
+
 
 uint8_t parseStringToHexNibble( const char hexChar )
 {
@@ -588,9 +615,238 @@ void doEmulatorInstructionView()
     ImGui::End();
 }
 
+void updateVRamTexture( GBEmulatorInstance* pEmulatorInstance )
+{
+    const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
+    const uint8_t* pVRam = pMemoryMapper->pVideoRAM;
+
+    //FK: Fill texture with grid color
+    memset( debugViewState.textureMemory.vramTextureMemory, 0xCC, vramTextureSizeInBytes );
+    
+    for( uint8_t tileY = 0; tileY < vramVerticalResolutionInTiles; ++tileY )
+    {
+        for( uint8_t tileX = 0; tileX < vramHorizontalResolutionInTiles; ++tileX )
+        {
+            const uint16_t tileIndex = tileX + tileY * gbTileSizeInBytes;
+            const uint8_t* pTileData = pVRam + tileIndex * gbTileSizeInBytes;
+
+            const uint32_t vramPixelX = tileX * gbTileResolution + ( tileX + 1 );
+            const uint32_t vramPixelY = tileY * gbTileResolution + ( tileY + 1 );
+
+            for( uint8_t tilePixelLine = 0; tilePixelLine < gbTileResolution; ++tilePixelLine )
+            {
+                uint8_t pixelBytes[2] = {
+                    *pTileData++,
+                    *pTileData++
+                };
+
+                const uint32_t vramPixelindex = 3 * ( vramPixelX + ( vramPixelY + tilePixelLine ) * vramTextureHorizontalResolution );
+
+                uint8_t* pVramTextureContentRGBR = debugViewState.textureMemory.vramTextureMemory + vramPixelindex;
+                for( uint8_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
+                {
+                    const uint8_t bitIndex = (7 - pixelIndex);
+                    const uint8_t pixelMSB = ( pixelBytes[0] >> bitIndex ) & 0x1;
+                    const uint8_t pixelLSB = ( pixelBytes[1] >> bitIndex ) & 0x1;
+                    const uint8_t pixelValue = pixelMSB << 1 | pixelLSB;
+
+                    const float intensity = 1.0f - (float)pixelValue * (1.0f/3.0f);
+                    
+                    *pVramTextureContentRGBR++ = (uint8_t)(intensity * 255.f);
+                    *pVramTextureContentRGBR++ = (uint8_t)(intensity * 255.f);
+                    *pVramTextureContentRGBR++ = (uint8_t)(intensity * 255.f);
+                }
+            }
+        }
+    }
+
+    GLuint vramTextureHandle;
+    glGenTextures( 1, &vramTextureHandle );
+    glBindTexture(GL_TEXTURE_2D, vramTextureHandle);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, vramTextureHorizontalResolution, vramTextureVerticalResolution, 0, GL_RGB, GL_UNSIGNED_BYTE, debugViewState.textureMemory.vramTextureMemory);
+
+    glDeleteTextures( 1, &debugViewState.vramTextureHandle );
+    debugViewState.vramTextureHandle = vramTextureHandle;
+}
+
+template< typename IndexType >
+void pushDebugUiBackgroundTilePixels( const GBPpuState* pPpuState, const uint8_t* pTileData, uint8_t scanlineYCoordinate )
+{
+    const IndexType* pWindowTileIds      = (IndexType*)pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->windowTileMapArea ];
+    const IndexType* pBackgroundTileIds  = (IndexType*)pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->bgTileMapArea ];
+
+    //FK: Calculate the tile row that intersects with the current scanline
+    //FK: TODO: implement sx/sy here
+    const uint8_t scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
+    const uint16_t startTileIndex = scanlineYCoordinateInTileSpace * gbBackgroundTileCount;
+    const uint16_t endTileIndex = startTileIndex + gbBackgroundTileCount;
+
+    int8_t scanlineBackgroundTilesIds[ gbBackgroundTileCount ] = { 0 };
+
+    for( uint16_t tileIndex = startTileIndex; tileIndex < endTileIndex; ++tileIndex )
+    {
+        //FK: get tile from background tile map
+        scanlineBackgroundTilesIds[ tileIndex - startTileIndex ] = pBackgroundTileIds[ tileIndex ];
+    }
+
+    //FK: Get the y position of the top most pixel inside the tile row that the current scanline is in
+    const uint8_t tileRowStartYPos  = startTileIndex / gbBackgroundTileCount * gbTileResolution;
+
+    //FK: Get the y offset inside the tile row to where the scanline currently is.
+    const uint8_t tileRowYOffset    = scanlineYCoordinate - tileRowStartYPos;
+
+    for( uint8_t tileIdIndex = 0; tileIdIndex < gbBackgroundTileCount; ++tileIdIndex )
+    {
+        const IndexType tileIndex = scanlineBackgroundTilesIds[ tileIdIndex ];
+        
+        //FK: Get pixel data of top most pixel line of current tile
+        const uint8_t* pTileTopPixelData = pTileData + tileIndex * gbTileSizeInBytes;
+        const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
+        //FK: Get pixel data of this tile for the current scanline
+        const uint8_t pixelDataMSB = pTileScanlinePixelData[0];
+        const uint8_t pixelDataLSB = pTileScanlinePixelData[1];
+
+        //FK: Pixel will be written interleaved here
+        uint8_t interleavedScanlinePixelData[2] = {0};
+        for( uint8_t scanlinePixelDataIndex = 0; scanlinePixelDataIndex < 2; ++scanlinePixelDataIndex )
+        {
+            const uint8_t startPixelIndex = scanlinePixelDataIndex * gbHalfTileResolution;
+            const uint8_t endPixelIndex = startPixelIndex + gbHalfTileResolution;
+            for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
+            {
+                const uint8_t scanlinePixelShift          = 6 - (pixelIndex-startPixelIndex)*2;
+                const uint8_t colorIdShift                = 7 - pixelIndex;
+                const uint8_t colorIdMSB                  = ( pixelDataMSB >> colorIdShift ) & 0x1;
+                const uint8_t colorIdLSB                  = ( pixelDataLSB >> colorIdShift ) & 0x1;
+                const uint8_t colorIdData                 = colorIdMSB << 1 | colorIdLSB << 0;
+                const uint8_t pixelData                   = pPpuState->backgroundMonochromePalette[ colorIdData ];
+                interleavedScanlinePixelData[ scanlinePixelDataIndex ] |= ( pixelData << scanlinePixelShift );
+            }
+        }
+
+        const uint32_t backgroundX = tileIdIndex * gbTileResolution;
+        const uint32_t backgroundY = scanlineYCoordinate;
+        const uint32_t backgroundPixelIndex = ( backgroundX + backgroundY * backgroundHorizontalResolution ) * 3;
+        uint8_t* pBackgroundPixelData = debugViewState.textureMemory.backgroundTextureMemory + backgroundPixelIndex;
+
+        for( size_t pixelIndex = 0; pixelIndex < 2; ++pixelIndex )
+        {
+            for( size_t pixelShift = 0; pixelShift < 8; pixelShift += 2)
+            {
+                const uint8_t pixelMonochromeColor = ( ( interleavedScanlinePixelData[pixelIndex] >> ( 6 - pixelShift ) ) & 0x3 );
+                const float intensity = 1.0f - ( float )pixelMonochromeColor * ( 1.0f / 3.0f );
+                *pBackgroundPixelData++ = (uint8_t)( 255.f * intensity );
+                *pBackgroundPixelData++ = (uint8_t)( 255.f * intensity );
+                *pBackgroundPixelData++ = (uint8_t)( 255.f * intensity );
+            }
+        }
+    }
+}
+
+void updateBackgroundTexture( GBEmulatorInstance* pEmulatorInstance )
+{
+    const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
+    const GBPpuState* pPpuState = pEmulatorInstance->pPpuState;
+
+    //FK: clear texture with white color
+    memset( debugViewState.textureMemory.backgroundTextureMemory, 0xFF, backgroundTextureSizeInBytes );
+
+    if( pPpuState->pLcdControl->bgAndWindowEnable )
+    {
+        const uint8_t scx = *pPpuState->lcdRegisters.pScx;
+        const uint8_t scy = *pPpuState->lcdRegisters.pScy;
+        const uint8_t scxEnd = scx + gbHorizontalResolutionInPixels;
+        const uint8_t scyEnd = scy + gbVerticalResolutionInPixels;
+
+        for( uint32_t y = 0; y < backgroundVerticalResolution; ++y )
+        {
+            if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
+            {   
+                const uint8_t* pTileData = pPpuState->pTileBlocks[2];
+                pushDebugUiBackgroundTilePixels< int8_t >( pPpuState, pTileData, y );
+            }
+            else
+            {
+                const uint8_t* pTileData = pPpuState->pTileBlocks[0];
+                pushDebugUiBackgroundTilePixels< uint8_t >( pPpuState, pTileData, y );
+            }
+        }
+
+        for( uint8_t cy = 0; cy < gbVerticalResolutionInPixels; ++cy )
+        {
+            const uint8_t y = scy + cy;
+            for( uint8_t cx = 0; cx < gbHorizontalResolutionInPixels; ++cx )
+            {
+                const uint8_t x = scx + cx;
+                const uint32_t backgroundPixelIndex = ( x + y * backgroundHorizontalResolution ) * 3;
+
+                if( y == scy || ( y + 1 ) == scyEnd || x == scx || ( x + 1 ) == scxEnd )
+                {
+                    debugViewState.textureMemory.backgroundTextureMemory[ backgroundPixelIndex + 0 ] = 0xFF;
+                    debugViewState.textureMemory.backgroundTextureMemory[ backgroundPixelIndex + 1 ] = 0x00;
+                    debugViewState.textureMemory.backgroundTextureMemory[ backgroundPixelIndex + 2 ] = 0x00;
+                }
+            }
+        }
+    }
+
+    GLuint backgroundTextureHandle;
+    glGenTextures( 1, &backgroundTextureHandle );
+    glBindTexture(GL_TEXTURE_2D, backgroundTextureHandle);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, backgroundHorizontalResolution, backgroundVerticalResolution, 0, GL_RGB, GL_UNSIGNED_BYTE, debugViewState.textureMemory.backgroundTextureMemory);
+
+    glDeleteTextures( 1, &debugViewState.backgroundTextureHandle );
+    debugViewState.backgroundTextureHandle = backgroundTextureHandle;
+}
+
+void doVRamView( GBEmulatorInstance* pEmulatorInstance )
+{
+    if( !ImGui::BeginTabBar("VRam View") )
+    {
+        ImGui::EndTabBar();
+        return;
+    }
+
+    {
+        if( ImGui::BeginTabItem( "Background" ) )
+        {
+            updateBackgroundTexture( pEmulatorInstance );
+            ImGui::Image( (ImTextureID)debugViewState.backgroundTextureHandle, ImVec2( backgroundHorizontalResolution, backgroundVerticalResolution ) );
+            ImGui::EndTabItem();
+        }
+    }
+
+    {
+        if( ImGui::BeginTabItem( "VRAM" ) )
+        {
+            updateVRamTexture( pEmulatorInstance );
+            ImGui::Image( (ImTextureID)debugViewState.vramTextureHandle, ImVec2( vramTextureHorizontalResolution, vramTextureVerticalResolution) );
+            ImGui::EndTabItem();
+        }
+    }
+
+#if 0
+    {
+        if( ImGui::BeginTabItem( "Window" ) )
+        {
+
+        }
+
+        ImGui::EndTabItem();
+    }
+#endif
+  
+
+   
+    ImGui::EndTabBar();
+}
+
 void doUiFrame( GBEmulatorInstance* pEmulatorInstance )
 {
-    //ImGui::ShowDemoWindow();
     doGbCpuDebugView( pEmulatorInstance );
     doInstructionView( pEmulatorInstance );
     doInstructionHistoryView( pEmulatorInstance );
@@ -598,6 +854,7 @@ void doUiFrame( GBEmulatorInstance* pEmulatorInstance )
     doPpuStateView( pEmulatorInstance );
     doMemoryStateView( pEmulatorInstance );
     doEmulatorStateSaveLoadView( pEmulatorInstance );
+    doVRamView( pEmulatorInstance );
     doEmulatorInstructionView();
 
     //FK: TODO

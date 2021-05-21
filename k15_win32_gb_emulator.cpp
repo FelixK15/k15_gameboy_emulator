@@ -314,7 +314,7 @@ void createOpenGLContext(HWND hwnd)
 
 const uint8_t* mapRomFile( const char* pRomFileName )
 {
-	HANDLE pRomHandle = CreateFile(pRomFileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr);
+	HANDLE pRomHandle = CreateFile( pRomFileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr );
 	if( pRomHandle == INVALID_HANDLE_VALUE )
 	{
 		printf("Could not open '%s'.\n", pRomFileName);
@@ -334,7 +334,8 @@ const uint8_t* mapRomFile( const char* pRomFileName )
 void setup( HWND hwnd )
 {	
 	createOpenGLContext( hwnd );
-	const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
+	const uint8_t* pRomData = mapRomFile( "cpu_instrs.gb" );
+	//const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
 	//const uint8_t* pRomData = mapRomFile( "Tetris (Japan) (En).gb" );
 	if( pRomData == nullptr )
 	{
