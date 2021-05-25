@@ -334,8 +334,9 @@ const uint8_t* mapRomFile( const char* pRomFileName )
 void setup( HWND hwnd )
 {	
 	createOpenGLContext( hwnd );
-	const uint8_t* pRomData = mapRomFile( "cpu_instrs.gb" );
-	//const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
+	//const uint8_t* pRomData = mapRomFile( "cpu_instrs.gb" );
+	//const uint8_t* pRomData = mapRomFile( "BattleCity (Japan).gb" );
+	const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
 	//const uint8_t* pRomData = mapRomFile( "Tetris (Japan) (En).gb" );
 	if( pRomData == nullptr )
 	{

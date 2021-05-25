@@ -677,7 +677,6 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     patchIOTimerMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pTimerState );
     patchIOPpuMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pPpuState );
     patchIOCpuMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pCpuState );
-    patchIOCartridgeMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pCartridge );
 
     pEmulatorInstance->pPpuState->pGBFrameBuffer = pGBFrameBuffer;
 
@@ -1764,24 +1763,28 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             if( lsn <= 0x07 )
             {
                 //RLC
-                const uint8_t newValue = value << 1 | ((value & (1<<7)) >> 7);
-                value = newValue;
+                const uint8_t msb = (value >> 7) & 0x1;
+                const uint8_t newValue = value << 1 | msb;
 
                 pCpuState->registers.F.Z = (newValue == 0);
-                pCpuState->registers.F.C = (value >> 7) & 0x1;
+                pCpuState->registers.F.C = msb;
                 pCpuState->registers.F.N = 0;
                 pCpuState->registers.F.H = 0;
+
+                value = newValue;
             }
             else
             {
                 //RRC
-                const uint8_t newValue = value >> 1 | ((value & 0x1) << 7);
-                value = newValue;
+                const uint8_t lsb       = value & 0x1;
+                const uint8_t newValue  = value >> 1 | (lsb << 7);
 
                 pCpuState->registers.F.Z = (newValue == 0);
-                pCpuState->registers.F.C = value & 0x1;
+                pCpuState->registers.F.C = lsb;
                 pCpuState->registers.F.N = 0;
                 pCpuState->registers.F.H = 0;
+
+                value = newValue;
             }
             break;
         }
@@ -1790,24 +1793,28 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             if( lsn <= 0x07 )
             {
                 //RL
+                const uint8_t msb = (value >> 7) & 0x1;
                 const uint8_t newValue = value << 1 | pCpuState->registers.F.C;
-                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
-                pCpuState->registers.F.C = (value >> 7) & 0x1;
+                pCpuState->registers.F.C = msb;
                 pCpuState->registers.F.N = 0;
                 pCpuState->registers.F.H = 0;
+
+                value = newValue;
             }
             else
             {
                 //RR
+                const uint8_t lsb = (value & 0x1);
                 const uint8_t newValue = value >> 1 | (pCpuState->registers.F.C << 7);
-                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
-                pCpuState->registers.F.C = value & 0x1;
+                pCpuState->registers.F.C = lsb;
                 pCpuState->registers.F.N = 0;
                 pCpuState->registers.F.H = 0;
+
+                value = newValue;
             }
             break;
         }
@@ -1816,24 +1823,29 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             if( lsn <= 0x07 )
             {
                 //SLA
+                const uint8_t msb = ( value >> 7 ) & 0x1;
                 const uint8_t newValue = value << 1;
-                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
-                pCpuState->registers.F.C = (value >> 7) & 0x1;
+                pCpuState->registers.F.C = msb;
                 pCpuState->registers.F.N = 0;
                 pCpuState->registers.F.H = 0;
+
+                value = newValue;
             }
             else
             {
                 //SRA
-                const uint8_t newValue = value >> 1 | (value & (1<<7) << 7);
-                value = newValue;
+                const uint8_t lsb = ( value & 0x1 );
+                const uint8_t msb = ( ( value >> 7 ) & 0x1 );
+                const uint8_t newValue = value >> 1 | ( msb << 7 );
 
                 pCpuState->registers.F.Z = (newValue == 0);
-                pCpuState->registers.F.C = value & 0x1;
+                pCpuState->registers.F.C = lsb;
                 pCpuState->registers.F.N = 0;
                 pCpuState->registers.F.H = 0;
+
+                value = newValue;
             }
             break;
         }
@@ -1842,7 +1854,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             if( lsn <= 0x07 )
             {
                 //SWAP
-                const uint8_t highNibble = value & 0xF0;
+                const uint8_t highNibble = ( value & 0xF0 ) >> 4;
                 const uint8_t lowNibble  = value & 0x0F;
                 const uint8_t newValue = lowNibble << 4 | highNibble << 0;
                 value = newValue;
@@ -1855,13 +1867,15 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             else
             {
                 //SRL
+                const uint8_t lsb = value & 0x1;
                 const uint8_t newValue = value >> 1;
-                value = newValue;
 
                 pCpuState->registers.F.Z = (newValue == 0);
-                pCpuState->registers.F.C = value & 0x1;
+                pCpuState->registers.F.C = lsb;
                 pCpuState->registers.F.N = 0;
                 pCpuState->registers.F.H = 0;
+
+                value = newValue;
             }
             break;
         }
