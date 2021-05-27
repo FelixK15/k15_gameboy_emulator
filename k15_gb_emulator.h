@@ -407,7 +407,6 @@ struct GBCartridge
     GBCartridgeHeader   header;
     uint8_t             romBankCount;
     uint8_t             mappedRomBankNumber;
-    uint32_t            romSizeInBytes;
 };
 
 struct GBEmulatorInstance
@@ -628,7 +627,7 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->IOPorts,             0x0080 );
 
     memcpy( pStateMemory + 0, &gbStateFourCC, sizeof( gbStateFourCC ) );
-    memcpy( pStateMemory + sizeof( gbStateFourCC ) + 2, &state, sizeof( GBEmulatorState ) );
+    memcpy( pStateMemory + sizeof( gbStateFourCC ), &state, sizeof( GBEmulatorState ) );
 }
 
 size_t uncompressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource )
@@ -669,10 +668,14 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     GBEmulatorState state;
     memcpy( &state, pStateMemory + sizeof( gbStateFourCC ), sizeof( GBEmulatorState ) );
 
+    const uint8_t* pRomBaseAddress = pEmulatorInstance->pCartridge->pRomBaseAddress;
+
     *pEmulatorInstance->pCpuState   = state.cpuState;
-    *pEmulatorInstance->pTimerState = state.timerState;
     *pEmulatorInstance->pPpuState   = state.ppuState;
+    *pEmulatorInstance->pTimerState = state.timerState;
     *pEmulatorInstance->pCartridge  = state.cartridge;
+
+    pEmulatorInstance->pCartridge->pRomBaseAddress = pRomBaseAddress;
 
     patchIOTimerMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pTimerState );
     patchIOPpuMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pPpuState );
