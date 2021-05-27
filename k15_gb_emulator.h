@@ -2111,6 +2111,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             const uint16_t address = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             write16BitValueToMappedMemory(pMemoryMapper, address, pCpuState->registers.SP);
             pCpuState->registers.PC += 2;
+            break;
         }
 
         //JP nn
@@ -2742,7 +2743,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         addOpcodeToOpcodeHistory( pEmulatorInstance, opcodeAddress, opcode );
         cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
 
-        if( pCpuState->registers.PC == 0xC370)
+        if( pCpuState->registers.PC == 0x662A)
         {
             breakPointHook();
         }
