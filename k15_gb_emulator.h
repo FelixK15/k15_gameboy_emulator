@@ -6,6 +6,8 @@
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
 #define K15_BREAK_ON_ILLEGAL_INSTRUCTION        1
 
+#define K15_UNUSED_VAR(x) (void)x
+
 #include "k15_gb_opcodes.h"
 
 #define Kbyte(x) ((x)*1024)
@@ -1589,6 +1591,12 @@ void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
             {
                 push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
                 pCpuState->registers.PC = 0x40 + 0x08 * ( 4u - interruptIndex );
+
+                if( pCpuState->registers.PC == 0xC370 )
+                {
+                    breakPointHook();
+                }
+
                 *pCpuState->pIF &= ~interruptFlag;
                 break;
             }
@@ -2291,7 +2299,16 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         
         //HALT
         case 0x76:
-            pCpuState->flags.halt = 1;
+            if( pCpuState->flags.IME == 0 )
+            {
+                //FK: If interrupts are disabled, halt doesn't suspend operation but it does
+                //    cause the program counter to stop counting for one instruction
+                //++pCpuState->registers.PC;
+            }
+            else
+            {
+                pCpuState->flags.halt = 1;
+            }
             break;
 
         //LDH (n),A
@@ -2467,11 +2484,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         {
             const uint8_t operand = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
             const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + operand;
+            const uint8_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) + pCpuState->registers.F.C + ( operand & 0x0F );
             pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
             
-            pCpuState->registers.F.Z = (accumulator16BitValue == 0);
+            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
             pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
-            pCpuState->registers.F.H = (accumulator16BitValue > 0x0F);
+            pCpuState->registers.F.H = (accumulatorLN > 0x0F);
             pCpuState->registers.F.N = 0;
             break;
         }
@@ -2685,6 +2703,27 @@ void setGBEmulatorInstanceJoypadState( GBEmulatorInstance* pEmulatorInstance, GB
     interLockedExchange16BitValue( &pEmulatorInstance->joypadState.value, joypadState.value );
 }
 
+void addOpcodeToOpcodeHistory( GBEmulatorInstance* pEmulatorInstance, uint16_t address, uint8_t opcode )
+{
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 0
+    K15_UNUSED_VAR(pEmulatorInstance);
+    K15_UNUSED_VAR(address);
+    K15_UNUSED_VAR(opcode);
+    return;
+#endif
+
+    memmove(pEmulatorInstance->debug.opcodeHistory + 1, pEmulatorInstance->debug.opcodeHistory + 0, pEmulatorInstance->debug.opcodeHistorySize * sizeof( GBOpcodeHistoryElement ) );
+
+    pEmulatorInstance->debug.opcodeHistory[0].address     = address; 
+    pEmulatorInstance->debug.opcodeHistory[0].opcode      = opcode; 
+    pEmulatorInstance->debug.opcodeHistory[0].registers   = pEmulatorInstance->pCpuState->registers; 
+
+    if( pEmulatorInstance->debug.opcodeHistorySize + 1 != gbOpcodeHistoryBufferCapacity )
+    {
+        pEmulatorInstance->debug.opcodeHistorySize++;
+    }
+}
+
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
@@ -2699,7 +2738,14 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     {
         const uint16_t opcodeAddress = pCpuState->registers.PC++;
         const uint8_t opcode         = read8BitValueFromMappedMemory( pMemoryMapper, opcodeAddress );
+
+        addOpcodeToOpcodeHistory( pEmulatorInstance, opcodeAddress, opcode );
         cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
+
+        if( pCpuState->registers.PC == 0xC370)
+        {
+            breakPointHook();
+        }
     }
 
     updateTimerRegisters( pMemoryMapper, pTimerState );
