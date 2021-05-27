@@ -2357,11 +2357,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
 
             //FK: promoting to 16bit to check for potential carry or half carry...Is there a better way?
             const uint16_t accumulator16BitValue = pCpuState->registers.A + operand;
+            const uint8_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) + ( operand & 0x0F );
             pCpuState->registers.A += operand;
 
             pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
             pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
-            pCpuState->registers.F.H = (accumulator16BitValue > 0x0F);
+            pCpuState->registers.F.H = (accumulatorLN > 0x0F);
             pCpuState->registers.F.N = 0;
             break;
         }
@@ -2496,24 +2497,11 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x27:
         {
             uint16_t accumulator = pCpuState->registers.A;
-
-            if( !pCpuState->registers.F.N )
-            {
-                if( pCpuState->registers.F.H || ( accumulator & 0xF ) > 9 )
-                {
-                    accumulator += 0x06;
-                }
-
-                if( pCpuState->registers.F.C || ( accumulator > 0x9F ) )
-                {
-                    accumulator += 0x60;
-                }
-            }
-            else
+            if( pCpuState->registers.F.N )
             {
                 if( pCpuState->registers.F.H )
                 {
-                    accumulator = ( accumulator - 6 ) & 0xFF;
+                    accumulator = (accumulator - 0x06) & 0xFF;
                 }
 
                 if( pCpuState->registers.F.C )
@@ -2521,13 +2509,24 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
                     accumulator -= 0x60;
                 }
             }
+            else
+            {
+                if( pCpuState->registers.F.H || (accumulator & 0x0F) > 0x09 )
+                {
+                    accumulator += 0x06;
+                }
 
+                if( pCpuState->registers.F.C || accumulator > 0x9F )
+                {
+                    accumulator += 0x60;
+                }
+            }
+
+            pCpuState->registers.F.Z = ( ( accumulator & 0xFF ) == 0 );
+            pCpuState->registers.F.C = ( ( accumulator & 0x100 ) == 0x100 );
             pCpuState->registers.F.H = 0;
-            pCpuState->registers.F.C = ( accumulator & 0x100 ) == 0x100;
 
-            pCpuState->registers.A = accumulator & 0xFF;
-            pCpuState->registers.F.Z = ( pCpuState->registers.A == 0 );
-
+            pCpuState->registers.A = (uint8_t)accumulator;
             break;
         }
 
