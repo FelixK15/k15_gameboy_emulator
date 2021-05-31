@@ -35,13 +35,13 @@ Inside `k15_win32_gb_emulator.cpp` you can find the Win32 platform layer for ori
 Basically, all you have to do is create an emulator instance by first providing the API with a block of memory.
 The required memory size can be calculated by calling `calculateGBEmulatorInstanceMemoryRequirementsInBytes()`.
 
-An emulator instance can be created by call `createGBEmulatorInstance()` (this function will take the aforemention memory block).
-Each emulator instance is independent from one another (goal would be link cable multiplayer using multiple instances)
+An emulator instance can be created by calling `createGBEmulatorInstance()` (this function will take the aforemention memory block).
+Each emulator instance is independent from one another (goal would be link cable multiplayer using multiple instances in a single process)
 
 After an emulator instance could be created, load a game rom using `loadGBEmulatorInstanceRom()` (this rom data should be provided as a memory blob
 either by mapping the rom file or by copying the rom file content to a memory buffer).
 
-Now, call `runGBEmulatorInstance()` each frame and check with `hasGBEmulatorInstanceHitVBlank()` if the GameBoy frame has finished (should always be true if not single stepping). By calling `getGBEmulatorInstanceFrameBuffer()` you can get a pointer to the framebuffer data (attention: the pixel format is still in gameboy format - 2bpp. To convert to RGB8 call `convertGBFrameBufferToRGB8Buffer()`).
+Now, call `runGBEmulatorInstance()` each frame and check with `hasGBEmulatorInstanceHitVBlank()` if the GameBoy frame has finished. By calling `getGBEmulatorInstanceFrameBuffer()` you can get a pointer to the framebuffer data (attention: the pixel format is still in gameboy format - 2bpp. To convert to RGB8 call `convertGBFrameBufferToRGB8Buffer()`).
 
 To set the joystick state of the emulator instance, call `setGBEmulatorInstanceJoypadState()` (this function is thread-safe so that input code can 
 high frequently poll asynchronously for smaller input lag). 
