@@ -57,13 +57,13 @@ In case the emulator isn't run on a 60Hz monitor, the monitor refresh rate can b
 - [x] Display video ram and show the tetris tileset
 - [x] Emulate correct frame timings independend of monitor refresh rate
 - [x] Implement opcodes to get into tetris menu and start a game
-- [ ] Test Tetris
+- [x] Test Tetris
 - [x] Add IMGUI dependency to be able to add debug features
   - [x] Add breakpoints
   - [x] Add conditional breakpoints
   - [x] Add code stepping
   - [x] Add memory inspection
-  - [ ] Add VRAM viewer
+  - [x] Add VRAM viewer
 - [ ] Implement rom-switching
   - [ ] MBC1
   - [ ] MBC3
