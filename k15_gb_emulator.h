@@ -1201,7 +1201,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
 
     const uint8_t scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
 
-    uint8_t* pScanlinePixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+    uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
     for( size_t spriteIndex = 0; spriteIndex < spriteCounter; ++spriteIndex )
     {
         const GBObjectAttributes* pSprite = scanlineSprites + spriteIndex;
@@ -1213,7 +1213,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
 
         //FK: Get pixel data of top most pixel line of current tile
         const uint8_t* pTileTopPixelData = pPpuState->pTileBlocks[0] + pSprite->tileIndex * gbTileSizeInBytes;
-        uint32_t tileScanlineOffset = ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 );
+        uint32_t tileScanlineOffset = ( scanlineYCoordinate - pSprite->y + gbSpriteHeight );
         if( pSprite->flags.yflip )
         {
             tileScanlineOffset = 7 - tileScanlineOffset;
@@ -1250,8 +1250,8 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         }
 
         const uint8_t scanlinePixelIndex = ( pSprite->x - 8u ) / 4;
-        pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0] | ( pScanlinePixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[0] );
-        pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1] | ( pScanlinePixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[1] );
+        pFrameBufferPixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0] | ( pFrameBufferPixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[0] );
+        pFrameBufferPixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1] | ( pFrameBufferPixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[1] );
     }
 }
 
@@ -1313,7 +1313,7 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_
     //FK: Get the y offset inside the tile row to where the scanline currently is.
     const uint8_t tileRowYOffset    = y - tileRowStartYPos;
 
-    uint8_t* pScanlinePixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+    uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
 
     for( uint8_t tileIdIndex = 0; tileIdIndex < gbBackgroundTileCountPerScanline; ++tileIdIndex )
     {
@@ -1345,8 +1345,8 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_
         }
 
         const uint8_t scanlinePixelIndex = tileIdIndex * 2;
-        pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0];
-        pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1];
+        pFrameBufferPixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0];
+        pFrameBufferPixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1];
     }
 }
 
