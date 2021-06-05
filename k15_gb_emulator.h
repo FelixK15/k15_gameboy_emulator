@@ -1154,6 +1154,13 @@ void sortSpritesByXCoordinate( GBObjectAttributes* pSprites, uint8_t spriteCount
     qsort( pSprites, spriteCount, sizeof(GBObjectAttributes), qsort_sortSpritesByXCoordinate );
 }
 
+uint8_t reverseBitsInByte( uint8_t value )
+{
+    //FK: https://developer.squareup.com/blog/reversing-bits-in-c/
+    return (uint8_t)(((value * 0x0802LU & 0x22110LU) |
+            (value * 0x8020LU & 0x88440LU)) * 0x10101LU >> 16);
+}
+
 void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     const uint8_t objHeight = pPpuState->pLcdControl->objSize == 0 ? 8 : 16;
@@ -1206,11 +1213,17 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
 
         //FK: Get pixel data of top most pixel line of current tile
         const uint8_t* pTileTopPixelData = pPpuState->pTileBlocks[0] + pSprite->tileIndex * gbTileSizeInBytes;
-        const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
+        uint32_t tileScanlineOffset = ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 );
+        if( pSprite->flags.yflip )
+        {
+            tileScanlineOffset = 7 - tileScanlineOffset;
+        }
+
+        const uint8_t* pTileScanlinePixelData = pTileTopPixelData + tileScanlineOffset * 2;
         
         //FK: Get pixel data of this tile for the current scanline
-        const uint8_t pixelDataMSB = pTileScanlinePixelData[0];
-        const uint8_t pixelDataLSB = pTileScanlinePixelData[1];
+        const uint8_t pixelDataMSB = pSprite->flags.xflip ? reverseBitsInByte(pTileScanlinePixelData[0]) : pTileScanlinePixelData[0];
+        const uint8_t pixelDataLSB = pSprite->flags.xflip ? reverseBitsInByte(pTileScanlinePixelData[1]) : pTileScanlinePixelData[1];
 
         //FK: Pixel will be written interleaved here
         uint8_t interleavedScanlinePixelData[2] = {0};
@@ -1223,7 +1236,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
 
             for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
             {
-                const uint8_t scanlinePixelShift             = pSprite->flags.xflip ? (pixelIndex-startPixelIndex)*2 : 6 - (pixelIndex-startPixelIndex)*2;
+                const uint8_t scanlinePixelShift             = 6 - (pixelIndex-startPixelIndex)*2;
                 const uint8_t colorIdShift                   = 7 - pixelIndex;
                 const uint8_t colorIdMSB                     = ( pixelDataMSB >> colorIdShift ) & 0x1;
                 const uint8_t colorIdLSB                     = ( pixelDataLSB >> colorIdShift ) & 0x1;
@@ -1237,27 +1250,14 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         }
 
         const uint8_t scanlinePixelIndex = ( pSprite->x - 8u ) / 4;
-
-        if( pSprite->flags.xflip )
-        {
-            pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[1] | ( pScanlinePixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[1] );
-            pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[0] | ( pScanlinePixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[0] );
-       }
-        else
-        {
-            pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0] | ( pScanlinePixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[0] );
-            pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1] | ( pScanlinePixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[1] );
-        }
+        pScanlinePixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0] | ( pScanlinePixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[0] );
+        pScanlinePixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1] | ( pScanlinePixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[1] );
     }
 }
 
 template<typename IndexType>
 void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_t* pTileData, uint8_t scanlineYCoordinate )
 {
-    if( scanlineYCoordinate == 64 )
-    {
-        breakPointHook();
-    }
     const IndexType* pWindowTileIds      = (IndexType*)pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->windowTileMapArea ];
     const IndexType* pBackgroundTileIds  = (IndexType*)pPpuState->pBackgroundOrWindowTileIds[ pPpuState->pLcdControl->bgTileMapArea ];
     const uint8_t wy = *pPpuState->lcdRegisters.pWy;
@@ -1393,6 +1393,9 @@ void updatePPULcdControl( GBPpuState* pPpuState, GBLcdControl lcdControlValue )
         if( !lcdControlValue.enable )
         {
             clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
+            *pPpuState->lcdRegisters.pLy = 0;
+            pPpuState->lcdRegisters.pStatus->mode = 0;
+            pPpuState->dotCounter = 0;
         }
     }
 
@@ -1591,11 +1594,6 @@ void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
             {
                 push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
                 pCpuState->registers.PC = 0x40 + 0x08 * ( 4u - interruptIndex );
-
-                if( pCpuState->registers.PC == 0xC370 )
-                {
-                    breakPointHook();
-                }
 
                 *pCpuState->pIF &= ~interruptFlag;
                 break;
@@ -1880,13 +1878,13 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
                 //SRL
                 const uint8_t lsb = value & 0x1;
                 const uint8_t newValue = value >> 1;
+                value = newValue;
 
-                pCpuState->registers.F.Z = (newValue == 0);
+                pCpuState->registers.F.Z = (value == 0);
                 pCpuState->registers.F.C = lsb;
                 pCpuState->registers.F.N = 0;
                 pCpuState->registers.F.H = 0;
 
-                value = newValue;
             }
             break;
         }
@@ -1931,7 +1929,6 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
     }
 
     write8BitValueToMappedMemory( pMemoryMapper, pCpuState->registers.HL, value );
-    return;
 }
 
 uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode )
@@ -2142,10 +2139,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             }
 
             opcodeCondition = condition;
-
             break;
         }
-
 
         //JR n
         case 0x18:
@@ -2397,7 +2392,6 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             pCpuState->registers.F.C = (accumulatorValue < operand);
             pCpuState->registers.F.H = ((accumulatorValue & 0x0F) < (operand & 0x0F));
             pCpuState->registers.F.N = 1;
-
             break;
         }
 
@@ -2570,7 +2564,6 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             pCpuState->registers.F.H = ((pCpuState->registers.A & 0x0F) < (value & 0x0F));
             pCpuState->registers.F.C = (pCpuState->registers.A < value);
             pCpuState->registers.F.N = 1;
-
             break;
         }
 
@@ -2742,11 +2735,6 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
         addOpcodeToOpcodeHistory( pEmulatorInstance, opcodeAddress, opcode );
         cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
-
-        if( pCpuState->registers.PC == 0x662A)
-        {
-            breakPointHook();
-        }
     }
 
     updateTimerRegisters( pMemoryMapper, pTimerState );

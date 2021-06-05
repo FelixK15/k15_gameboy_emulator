@@ -215,7 +215,6 @@ void doCpuStateView(GBEmulatorInstance* pEmulatorInstance)
     ImGui::RadioButton("H", pCpuState->registers.F.H);
     ImGui::RadioButton("N", pCpuState->registers.F.N);
 
-
     ImGui::Separator();
     ImGui::Text("CPU Internals");
     ImGui::Text("Cycle Counter");  ImGui::SameLine();

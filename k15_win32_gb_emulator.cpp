@@ -42,6 +42,7 @@ uint8_t directionInput							= 0x0F;
 uint8_t buttonInput								= 0x0F;
 
 GBEmulatorInstance* pEmulatorInstance 			= nullptr;
+GBEmulatorJoypadState joypadState;
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
 
@@ -84,8 +85,6 @@ void K15_WindowClosed(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	GBEmulatorJoypadState joypadState;
-
 	if( message == WM_KEYDOWN )
 	{
 		if((lparam & (1 >> 30)) == 0)
@@ -265,9 +264,12 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 		width, height, 0, 0, pInstance, 0);
 
 	if (hwnd == INVALID_HANDLE_VALUE)
+	{
 		MessageBox(0, "Error creating Window.\n", "Error!", 0);
-	else
-		ShowWindow(hwnd, SW_SHOW);
+		return nullptr;
+	}
+
+	ShowWindow(hwnd, SW_SHOW);
 	return hwnd;
 }
 
@@ -336,7 +338,9 @@ void setup( HWND hwnd )
 	createOpenGLContext( hwnd );
 	//const uint8_t* pRomData = mapRomFile( "cpu_instrs.gb" );
 	//const uint8_t* pRomData = mapRomFile( "BattleCity (Japan).gb" );
-	const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
+	//const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
+	const uint8_t* pRomData = mapRomFile( "Bomb Jack (Europe).gb" );
+	//const uint8_t* pRomData = mapRomFile( "Alleyway (World).gb" );
 	//const uint8_t* pRomData = mapRomFile( "Tetris (Japan) (En).gb" );
 	if( pRomData == nullptr )
 	{
