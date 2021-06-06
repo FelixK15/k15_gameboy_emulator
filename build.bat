@@ -11,24 +11,33 @@ if not "%BUILD_CONFIG%"=="debug" if not "%BUILD_CONFIG%"=="release" (
 	set BUILD_CONFIG="debug"
 )
 
-echo Searching for Visual Studio installation...
 setlocal enableextensions enabledelayedexpansion
 
 set PROJECT_NAME=k15_win32_gb_emulator_%BUILD_CONFIG%
 set C_FILE_NAME=k15_win32_gb_emulator.cpp
 
-set COMPILER_OPTIONS=/nologo /TP /MTd /W3 /Fe!PROJECT_NAME!.exe
+::FK: Add /Bt to get a compile performance profile
+set COMPILER_OPTIONS=/nologo /TP /W3 /Fe!PROJECT_NAME!.exe
 set LINKER_OPTIONS=/PDB:!PROJECT_NAME!.pdb
 
 if "%BUILD_CONFIG%"=="debug" (
 	echo Build config = debug
-	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Z7
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Zi /GS /MTd
 ) else (
 	echo Build config = optimized release
-	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /O2 /Z7
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /O2 /Zi /GL /Gw /MT
 )
 
 set CL_OPTIONS=!COMPILER_OPTIONS! /link !LINKER_OPTIONS!
+
+::is cl.exe part of PATH?
+where /Q cl.exe
+if !errorlevel! == 0 (
+	echo Found cl.exe in PATH
+	goto START_COMPILATION
+)
+
+echo Didn't find cl.exe in PATH - searching for Visual Studio installation...
 
 set FOUND_PATH=0
 set VS_PATH=
@@ -40,7 +49,7 @@ IF %OS%==64BIT set REG_FOLDER=HKLM\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\S
 IF %OS%==32BIT set REG_FOLDER=HKLM\SOFTWARE\Microsoft\VisualStudio\SxS\VS7
 
 ::Go to end if nothing was found
-IF %REG_FOLDER%=="" GOTO DECISION
+IF %REG_FOLDER%=="" GOTO PATH_FOUND
 
 ::try to get get visual studio path from registry for different versions
 FOR /l %%G IN (20, -1, 8) DO (
@@ -55,26 +64,29 @@ FOR /l %%G IN (20, -1, 8) DO (
 			::truncate stuff we don't want from the output
 			set VS_PATH=!VS_PATH:~18!
 			set FOUND_PATH=1
-			goto DECISION
+			goto PATH_FOUND
 		)
 	)
 )
 
-:DECISION
+:PATH_FOUND
 ::check if a path was found
 IF !FOUND_PATH!==0 (
 	echo Could not find valid Visual Studio installation.
 ) ELSE (
-	echo Starting build process...
-	set VCVARS_PATH="!VS_PATH!VC\vcvarsall.bat"
+	echo Found Visual Studio installation at !VS_PATH!
+	echo Searching and executing vsvars64.bat ...
+	set VCVARS_PATH="!VS_PATH!VC\vcvars64.bat"
 
 	call !VCVARS_PATH! >nul 2>nul
 
 	if !errorlevel! neq 0 (
-		set VCVARS_PATH="!VS_PATH!VC\Auxiliary\Build\vcvarsall.bat"
+		set VCVARS_PATH="!VS_PATH!VC\Auxiliary\Build\vcvars64.bat"
 		call !VCVARS_PATH! x86 >nul 2>nul
 	)
 
+:START_COMPILATION
+	echo Starting build process...
 	set CL_PATH="cl.exe"
 	set BUILD_COMMAND=!CL_PATH! !C_FILE_NAME! !CL_OPTIONS!
 	call !BUILD_COMMAND!
