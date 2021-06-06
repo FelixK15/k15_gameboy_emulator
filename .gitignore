@@ -6,5 +6,6 @@
 *.gb
 *.sn1
 *.k15_gb_state.bin
+*.suo
 .vscode
 k15_win32_gb_emulator_release_disassembly.asm
