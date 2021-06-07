@@ -2,9 +2,9 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+
 #include <stdio.h>
 #include <gl/GL.h>
-
 #include "k15_gb_emulator.h"
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
@@ -18,7 +18,6 @@
 #	include "k15_gb_emulator_ui.cpp"
 #endif
 
-#pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "opengl32.lib")
@@ -195,8 +194,10 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 {
 	uint8_t messageHandled = false;
 
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 	if (ImGui_ImplWin32_WndProcHandler(hwnd, message, wparam, lparam))
         return true;
+#endif
 
 	switch (message)
 	{
@@ -338,8 +339,8 @@ void setup( HWND hwnd )
 	createOpenGLContext( hwnd );
 	//const uint8_t* pRomData = mapRomFile( "cpu_instrs.gb" );
 	//const uint8_t* pRomData = mapRomFile( "BattleCity (Japan).gb" );
-	//const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
-	const uint8_t* pRomData = mapRomFile( "Bomb Jack (Europe).gb" );
+	const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
+	//const uint8_t* pRomData = mapRomFile( "Bomb Jack (Europe).gb" );
 	//const uint8_t* pRomData = mapRomFile( "Alleyway (World).gb" );
 	//const uint8_t* pRomData = mapRomFile( "Tetris (Japan) (En).gb" );
 	if( pRomData == nullptr )
@@ -350,11 +351,15 @@ void setup( HWND hwnd )
 	const uint16_t monitorRefreshRate = queryMonitorRefreshRate( hwnd );
 	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorInstanceMemoryRequirementsInBytes();
 
-	uint8_t* pEmulatorInstanceMemory = (uint8_t*)malloc(emulatorMemorySizeInBytes);
+	//FK: at address 0x100000000 for better debugging of memory errors (eg: access violation > 0x100000000 indicated emulator instance memory is at fault)
+	uint8_t* pEmulatorInstanceMemory = (uint8_t*)VirtualAlloc( ( LPVOID )0x100000000, emulatorMemorySizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
 	pEmulatorInstance = createGBEmulatorInstance(pEmulatorInstanceMemory);
-	setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, monitorRefreshRate );
 
-	pGameboyVideoBuffer = (uint8_t*)malloc(gbScreenHeight*gbScreenWidth*3);
+	setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, monitorRefreshRate );
+	loadGBEmulatorInstanceRom( pEmulatorInstance, pRomData );
+
+	//FK: at address 0x200000000 for better debugging of memory errors (eg: access violation > 0x200000000 indicated emulator instance memory is at fault)
+	pGameboyVideoBuffer = (uint8_t*)VirtualAlloc( ( LPVOID )0x200000000, (gbScreenHeight*gbScreenWidth*3), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
 
 	const GBCartridgeHeader header = getGBCartridgeHeader(pRomData);
 	memcpy(gameTitle, header.gameTitle, sizeof(header.gameTitle) );
@@ -366,6 +371,7 @@ void setup( HWND hwnd )
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO(); (void)io;
@@ -374,14 +380,14 @@ void setup( HWND hwnd )
 
 	ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplOpenGL2_Init();
+#endif
 
-	loadGBEmulatorInstanceRom( pEmulatorInstance, pRomData );
 }
 
 void doFrame(HWND hwnd)
 {
-	char windowTitle[64];
-	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms - ui: %.3f", gameTitle, (float)deltaTimeInMicroseconds/1000.f, (float)uiDeltaTimeInMicroseconds/1000.f );
+	char windowTitle[128];
+	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms - ui: %.3f - %d hz monitor refresh rate", gameTitle, (float)deltaTimeInMicroseconds/1000.f, (float)uiDeltaTimeInMicroseconds/1000.f, pEmulatorInstance->monitorRefreshRate );
 	SetWindowText(hwnd, (LPCSTR)windowTitle);
 
 	const float pixelUnitH = 1.0f/(float)screenWidth;
@@ -442,7 +448,7 @@ void testCompression()
 	memset(testData + 60, 3, 68);
 
 	const size_t compressedTestSizeInBytes = calculateCompressedMemorySizeRLE( testData, sizeof( testData ) );
-	uint8_t* pCompressedBuffer = (uint8_t*)malloc( compressedTestSizeInBytes );
+	uint8_t* pCompressedBuffer = (uint8_t*)VirtualAlloc( nullptr, compressedTestSizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
 	compressMemoryBlockRLE(pCompressedBuffer, testData, sizeof( testData ));
 	memset( testData, 0, sizeof( testData ) );
 	if(!uncompressMemoryBlockRLE( testData, pCompressedBuffer ))

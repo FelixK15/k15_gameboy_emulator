@@ -6,8 +6,8 @@ constexpr ImGuiInputTextFlags hexTextInputFlags = ImGuiInputTextFlags_CharsHexad
 constexpr uint8_t vramVerticalResolutionInTiles   = 24;
 constexpr uint8_t vramHorizontalResolutionInTiles = 16;
 
-constexpr uint8_t vramVerticalResolutionInPixels    = vramVerticalResolutionInTiles * gbTileResolution;
-constexpr uint8_t vramHorizontalResolutionInPixels  = vramHorizontalResolutionInTiles * gbTileResolution;
+constexpr uint8_t vramVerticalResolutionInPixels    = vramVerticalResolutionInTiles * gbTileResolutionInPixels;
+constexpr uint8_t vramHorizontalResolutionInPixels  = vramHorizontalResolutionInTiles * gbTileResolutionInPixels;
 
 constexpr uint8_t gridCountX = vramHorizontalResolutionInTiles;
 constexpr uint8_t gridCountY = vramVerticalResolutionInTiles;
@@ -16,8 +16,8 @@ constexpr uint8_t vramTextureVerticalResolution   = vramVerticalResolutionInPixe
 constexpr uint8_t vramTextureHorizontalResolution = vramHorizontalResolutionInPixels + gridCountX;
 constexpr uint32_t vramTextureSizeInBytes         = vramTextureVerticalResolution * vramTextureHorizontalResolution * 3;
 
-constexpr uint32_t backgroundHorizontalResolution = gbBackgroundTileCount * gbTileResolution;
-constexpr uint32_t backgroundVerticalResolution   = gbBackgroundTileCount * gbTileResolution;
+constexpr uint32_t backgroundHorizontalResolution = gbBackgroundTileCount * gbTileResolutionInPixels;
+constexpr uint32_t backgroundVerticalResolution   = gbBackgroundTileCount * gbTileResolutionInPixels;
 constexpr uint32_t backgroundTextureSizeInBytes   = backgroundHorizontalResolution * backgroundVerticalResolution * 3;
 
 
@@ -364,8 +364,12 @@ void doEmulatorStateSaveLoadView( GBEmulatorInstance* pEmulatorInstance )
             {
                 storeGBEmulatorInstanceState( pEmulatorInstance, pSaveStateMemory, stateSaveMemorySizeInBytes );
 
+                const GBCartridgeHeader cartridgeHeader = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
+                char gameTitle[16] = {0};
+                memcpy(gameTitle, cartridgeHeader.gameTitle, sizeof( cartridgeHeader.gameTitle ) );
+
                 char fileNameBuffer[64];
-                sprintf( fileNameBuffer, "state_%d.k15_gb_state.bin", saveIndex );
+                sprintf( fileNameBuffer, "%s_%d.k15_gb_state.bin", gameTitle, saveIndex );
 
                 FILE* pStateFileHandle = fopen(fileNameBuffer, "wb");
                 if( pStateFileHandle != nullptr )
@@ -400,8 +404,13 @@ void doEmulatorStateSaveLoadView( GBEmulatorInstance* pEmulatorInstance )
 
         if( loadIndex != ~0 )
         {
+            const GBCartridgeHeader cartridgeHeader = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
+
+            char gameTitle[16] = {0};
+            memcpy(gameTitle, cartridgeHeader.gameTitle, sizeof( cartridgeHeader.gameTitle ) );
+
             char fileNameBuffer[64];
-            sprintf( fileNameBuffer, "state_%d.k15_gb_state.bin", loadIndex );
+            sprintf( fileNameBuffer, "%s_%d.k15_gb_state.bin", gameTitle, loadIndex );
 
             size_t fileSizeInBytes = 0;
             FILE* pStateFileHandle = fopen(fileNameBuffer, "rb");
@@ -629,10 +638,10 @@ void updateVRamTexture( GBEmulatorInstance* pEmulatorInstance )
             const uint16_t tileIndex = tileX + tileY * gbTileSizeInBytes;
             const uint8_t* pTileData = pVRam + tileIndex * gbTileSizeInBytes;
 
-            const uint32_t vramPixelX = tileX * gbTileResolution + ( tileX + 1 );
-            const uint32_t vramPixelY = tileY * gbTileResolution + ( tileY + 1 );
+            const uint32_t vramPixelX = tileX * gbTileResolutionInPixels + ( tileX + 1 );
+            const uint32_t vramPixelY = tileY * gbTileResolutionInPixels + ( tileY + 1 );
 
-            for( uint8_t tilePixelLine = 0; tilePixelLine < gbTileResolution; ++tilePixelLine )
+            for( uint8_t tilePixelLine = 0; tilePixelLine < gbTileResolutionInPixels; ++tilePixelLine )
             {
                 uint8_t pixelBytes[2] = {
                     *pTileData++,
@@ -678,7 +687,7 @@ void pushDebugUiBackgroundTilePixels( const GBPpuState* pPpuState, const uint8_t
 
     //FK: Calculate the tile row that intersects with the current scanline
     //FK: TODO: implement sx/sy here
-    const uint8_t scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
+    const uint8_t scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolutionInPixels;
     const uint16_t startTileIndex = scanlineYCoordinateInTileSpace * gbBackgroundTileCount;
     const uint16_t endTileIndex = startTileIndex + gbBackgroundTileCount;
 
@@ -691,7 +700,7 @@ void pushDebugUiBackgroundTilePixels( const GBPpuState* pPpuState, const uint8_t
     }
 
     //FK: Get the y position of the top most pixel inside the tile row that the current scanline is in
-    const uint8_t tileRowStartYPos  = startTileIndex / gbBackgroundTileCount * gbTileResolution;
+    const uint8_t tileRowStartYPos  = startTileIndex / gbBackgroundTileCount * gbTileResolutionInPixels;
 
     //FK: Get the y offset inside the tile row to where the scanline currently is.
     const uint8_t tileRowYOffset    = scanlineYCoordinate - tileRowStartYPos;
@@ -711,8 +720,8 @@ void pushDebugUiBackgroundTilePixels( const GBPpuState* pPpuState, const uint8_t
         uint8_t interleavedScanlinePixelData[2] = {0};
         for( uint8_t scanlinePixelDataIndex = 0; scanlinePixelDataIndex < 2; ++scanlinePixelDataIndex )
         {
-            const uint8_t startPixelIndex = scanlinePixelDataIndex * gbHalfTileResolution;
-            const uint8_t endPixelIndex = startPixelIndex + gbHalfTileResolution;
+            const uint8_t startPixelIndex = scanlinePixelDataIndex * gbHalfTileResolutionInPixels;
+            const uint8_t endPixelIndex = startPixelIndex + gbHalfTileResolutionInPixels;
             for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
             {
                 const uint8_t scanlinePixelShift          = 6 - (pixelIndex-startPixelIndex)*2;
@@ -725,7 +734,7 @@ void pushDebugUiBackgroundTilePixels( const GBPpuState* pPpuState, const uint8_t
             }
         }
 
-        const uint32_t backgroundX = tileIdIndex * gbTileResolution;
+        const uint32_t backgroundX = tileIdIndex * gbTileResolutionInPixels;
         const uint32_t backgroundY = scanlineYCoordinate;
         const uint32_t backgroundPixelIndex = ( backgroundX + backgroundY * backgroundHorizontalResolution ) * 3;
         uint8_t* pBackgroundPixelData = debugViewState.textureMemory.backgroundTextureMemory + backgroundPixelIndex;
@@ -814,7 +823,8 @@ void doVRamView( GBEmulatorInstance* pEmulatorInstance )
         if( ImGui::BeginTabItem( "Background" ) )
         {
             updateBackgroundTexture( pEmulatorInstance );
-            ImGui::Image( (ImTextureID)debugViewState.backgroundTextureHandle, ImVec2( backgroundHorizontalResolution, backgroundVerticalResolution ) );
+            const size_t textureHandle = ( size_t )debugViewState.backgroundTextureHandle;
+            ImGui::Image( (ImTextureID)textureHandle, ImVec2( backgroundHorizontalResolution, backgroundVerticalResolution ) );
             ImGui::EndTabItem();
         }
     }
@@ -823,7 +833,8 @@ void doVRamView( GBEmulatorInstance* pEmulatorInstance )
         if( ImGui::BeginTabItem( "VRAM" ) )
         {
             updateVRamTexture( pEmulatorInstance );
-            ImGui::Image( (ImTextureID)debugViewState.vramTextureHandle, ImVec2( vramTextureHorizontalResolution, vramTextureVerticalResolution) );
+            const size_t textureHandle = ( size_t )debugViewState.vramTextureHandle;
+            ImGui::Image( (ImTextureID)textureHandle, ImVec2( vramTextureHorizontalResolution, vramTextureVerticalResolution) );
             ImGui::EndTabItem();
         }
     }

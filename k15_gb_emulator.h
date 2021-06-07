@@ -1,6 +1,4 @@
 #include "stdint.h"
-#include "stdio.h"
-#include "stdlib.h"
 
 #define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
@@ -20,11 +18,8 @@
 
 //FK: Compiler specific functions
 #ifdef _MSC_VER
-#   define breakPointHook() \
-__asm\
-{\
-    nop\
-}
+#   include <intrin.h>
+#   define breakPointHook() __nop()
 #   define debugBreak __debugbreak
 #else
 #   define breakPointHook()
@@ -33,30 +28,22 @@ __asm\
 
 #define illegalCodePath() debugBreak()
 
-//FK: Platform specific functions
-#if defined( _M_X64 ) || defined( _M_IX86 )
-#   define interLockedExchange16BitValue(pTarget, value)  InterlockedExchange16((SHORT*)pTarget, value)
-#else
-#   error platform not supported yet 
-#endif
-
 static constexpr uint32_t   gbStateFourCC                      = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
 static constexpr uint32_t   gbCpuFrequency                     = 4194304u;
 static constexpr uint32_t   gbCyclesPerFrame                   = 70224u;
 static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                    = 160u;
 static constexpr uint8_t    gbSpriteHeight                     = 16u;
-static constexpr uint8_t    gbTileResolution                   = 8u;  //FK: Tiles are 8x8 pixels
-static constexpr uint8_t    gbHalfTileResolution               = gbTileResolution / 2;
+static constexpr uint8_t    gbTileResolutionInPixels           = 8u;  //FK: Tiles are 8x8 pixels
+static constexpr uint8_t    gbHalfTileResolutionInPixels       = 4u;
 static constexpr uint8_t    gbHorizontalResolutionInPixels     = 160u;
 static constexpr uint8_t    gbVerticalResolutionInPixels       = 144u;
-static constexpr uint8_t    gbHorizontalResolutionInTiles      = gbHorizontalResolutionInPixels / gbTileResolution;
-static constexpr uint8_t    gbVerticalResolutuionInTiles       = gbVerticalResolutionInPixels / gbTileResolution;
+static constexpr uint8_t    gbHorizontalResolutionInTiles      = gbHorizontalResolutionInPixels / gbTileResolutionInPixels;
+static constexpr uint8_t    gbVerticalResolutuionInTiles       = gbVerticalResolutionInPixels / gbTileResolutionInPixels;
 static constexpr uint8_t    gbBackgroundTileCount              = 32u; //FK: BG maps are 32x32 tiles
 static constexpr uint8_t    gbTileSizeInBytes                  = 16u; //FK: 8x8 pixels with 2bpp
 static constexpr uint8_t    gbOpcodeHistoryBufferCapacity      = 255u;
 static constexpr uint8_t    gbObjectAttributeCapacity          = 40u;
-static constexpr uint8_t    gbBackgroundTileCountPerScanline   = 20u; //FK: 20 Background Tiles fit on one scanline (horizontally)
 static constexpr uint8_t    gbSpritesPerScanline               = 10u; //FK: the hardware allowed no more than 10 sprites per scanline
 static constexpr uint8_t    gbFrameBufferScanlineSizeInBytes   = gbHorizontalResolutionInPixels / 4;
 static constexpr size_t     gbFrameBufferSizeInBytes           = gbFrameBufferScanlineSizeInBytes * gbVerticalResolutionInPixels;
@@ -517,6 +504,26 @@ void patchIOPpuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBPpuState* p
     pPpuState->lcdRegisters.pWx     = pMemoryMapper->pBaseAddress + 0xFF4B;
 }
 
+GBCartridgeHeader getGBCartridgeHeader(const uint8_t* pRomMemory)
+{
+    GBCartridgeHeader header;
+    memcpy(&header, pRomMemory + 0x0100, sizeof(GBCartridgeHeader));
+    return header;
+}
+
+GBCartridgeHeader getGBEmulatorInstanceCurrentCartridgeHeader( const GBEmulatorInstance* pEmulatorInstance )
+{
+    if( pEmulatorInstance->pCartridge->pRomBaseAddress == nullptr )
+    {
+        debugBreak();
+
+        GBCartridgeHeader header = {};
+        return header;
+    }
+
+    return getGBCartridgeHeader( pEmulatorInstance->pCartridge->pRomBaseAddress );
+}
+
 void setGBEmulatorInstanceMonitorRefreshRate( GBEmulatorInstance* pEmulatorInstance, uint16_t monitorRefreshRate )
 {
     pEmulatorInstance->monitorRefreshRate                   = monitorRefreshRate;
@@ -551,14 +558,14 @@ size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySi
 
 size_t calculateGBEmulatorStateSizeInBytes( const GBEmulatorInstance* pEmulatorInstance )
 {
+    constexpr size_t checksumSizeInBytes   = 2;
     const size_t compressedVRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pVideoRAM,            0x2000 );
     const size_t compressedLRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pLowRam,              0x2000 );
     const size_t compressedOAMSizeInBytes  = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pSpriteAttributes,    0x00A0 );
     const size_t compressedHRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pHighRam,             0x0080 ); //FK: include interrupt register
     const size_t compressedIOSizeInBytes   = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->IOPorts,              0x0080 );
-    const size_t stateSizeInBytes = sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) +
-        compressedVRAMSizeInBytes + compressedLRAMSizeInBytes + 
-        compressedOAMSizeInBytes + compressedHRAMSizeInBytes +
+    const size_t stateSizeInBytes = sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + checksumSizeInBytes +
+        compressedVRAMSizeInBytes + compressedLRAMSizeInBytes + compressedOAMSizeInBytes + compressedHRAMSizeInBytes +
         compressedIOSizeInBytes;
 
     return stateSizeInBytes;
@@ -618,7 +625,7 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     state.timerState                = *pTimerState;
     state.cartridge                 = *pCartridge;
 
-    uint8_t* pCompressedMemory = pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC );
+    uint8_t* pCompressedMemory = pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + 2;
     
     //FK: Store cartridge data as well...?
     size_t offset = 0;
@@ -628,8 +635,12 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pHighRam,            0x0080 ); //FK: include interrupt register
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->IOPorts,             0x0080 );
 
-    memcpy( pStateMemory + 0, &gbStateFourCC, sizeof( gbStateFourCC ) );
-    memcpy( pStateMemory + sizeof( gbStateFourCC ), &state, sizeof( GBEmulatorState ) );
+    const GBCartridgeHeader header = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
+    const uint16_t cartridgeChecksum = header.checksumHigher << 8 | header.checksumLower;
+
+    memcpy( pStateMemory + 0,                                                       &gbStateFourCC,     sizeof( gbStateFourCC ) );
+    memcpy( pStateMemory + sizeof( gbStateFourCC ),                                 &cartridgeChecksum, sizeof( cartridgeChecksum ) );
+    memcpy( pStateMemory + sizeof( gbStateFourCC ) + sizeof( cartridgeChecksum ),   &state,             sizeof( GBEmulatorState ) );
 }
 
 size_t uncompressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource )
@@ -664,11 +675,20 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
         return false;
     }
 
+    const uint16_t* pStateCartridgeChecksum = (uint16_t*)( pStateMemory + sizeof( gbStateFourCC ) );
+    const GBCartridgeHeader cartridgeHeader = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
+
+    const uint16_t cartridgeChecksum = cartridgeHeader.checksumHigher << 8 | cartridgeHeader.checksumLower;
+    if( cartridgeChecksum != *pStateCartridgeChecksum )
+    {
+        return false;
+    }
+
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
     uint8_t* pGBFrameBuffer = pEmulatorInstance->pPpuState->pGBFrameBuffer;
 
     GBEmulatorState state;
-    memcpy( &state, pStateMemory + sizeof( gbStateFourCC ), sizeof( GBEmulatorState ) );
+    memcpy( &state, pStateMemory + sizeof( gbStateFourCC ) + sizeof( cartridgeChecksum ), sizeof( GBEmulatorState ) );
 
     const uint8_t* pRomBaseAddress = pEmulatorInstance->pCartridge->pRomBaseAddress;
 
@@ -691,7 +711,7 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
 
     setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, pEmulatorInstance->monitorRefreshRate );
 
-    const uint8_t* pCompressedMemory = ( uint8_t* )( pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) );
+    const uint8_t* pCompressedMemory = ( uint8_t* )( pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + sizeof( cartridgeChecksum ) );
 
     size_t offset = 0;
     offset += uncompressMemoryBlockRLE( pMemoryMapper->pVideoRAM,          pCompressedMemory + offset );
@@ -842,13 +862,6 @@ void write16BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addr
     write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 1, (uint8_t)(value & 0xF0 >> 8) );
 }
 
-GBCartridgeHeader getGBCartridgeHeader(const uint8_t* pRomMemory)
-{
-    GBCartridgeHeader header;
-    memcpy(&header, pRomMemory + 0x0100, sizeof(GBCartridgeHeader));
-    return header;
-}
-
 size_t mapRomSizeToByteSize(uint8_t romSize)
 {
     switch(romSize)
@@ -869,7 +882,7 @@ size_t mapRomSizeToByteSize(uint8_t romSize)
             return Mbit(16u);
     }
 
-    printf("Unsupported romSize identifier '%.2hhx'\n", romSize);
+    //FK: Unsupported romSize identifier
     debugBreak();
     return 0;
 }
@@ -896,7 +909,7 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
     pCartridge->romBankCount    = ( uint8_t )( romSizeInBytes / Kbyte( 16 ) );
 
     //FK: Map first rom bank to 0x0000-0x4000
-    memcpy(pMemoryMapper->pBaseAddress, pRomMemory, Kbyte( 16 ) );
+    memcpy( pMemoryMapper->pBaseAddress, pRomMemory, Kbyte( 16 ) );
 
     //FK: Selectively enable different cartridge types after testing
     switch(pCartridge->header.cartridgeType)
@@ -909,7 +922,7 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
         }
         default:
         {
-            printf("Cartridge type '%.2hhx' not supported.\n", pCartridge->header.cartridgeType);
+            //FK: Cartridge type not supported
             debugBreak();
         }
     }
@@ -1139,21 +1152,6 @@ void loadGBEmulatorInstanceRom( GBEmulatorInstance* pEmulator, const uint8_t* pR
     mapCartridgeMemory( pEmulator->pCartridge, pEmulator->pMemoryMapper, pRomMemory );
 }
 
-int qsort_sortSpritesByXCoordinate( void const* pSpriteA, void const* pSpriteB )
-{
-    const GBObjectAttributes* pOAMs[2] = {
-        (const GBObjectAttributes*)pSpriteA,
-        (const GBObjectAttributes*)pSpriteB
-    };
-
-    return (int)pOAMs[0]->x - (int)pOAMs[1]->x;
-}
-
-void sortSpritesByXCoordinate( GBObjectAttributes* pSprites, uint8_t spriteCount )
-{
-    qsort( pSprites, spriteCount, sizeof(GBObjectAttributes), qsort_sortSpritesByXCoordinate );
-}
-
 uint8_t reverseBitsInByte( uint8_t value )
 {
     //FK: https://developer.squareup.com/blog/reversing-bits-in-c/
@@ -1193,13 +1191,13 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         return;
     }
 
+#if 0
     if( spriteCounter > 1 )
     {
         //FK: TODO: This shouldn't happen in CGB mode
         sortSpritesByXCoordinate( scanlineSprites, spriteCounter );
     }
-
-    const uint8_t scanlineYCoordinateInTileSpace = scanlineYCoordinate / gbTileResolution;
+#endif
 
     uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
     for( size_t spriteIndex = 0; spriteIndex < spriteCounter; ++spriteIndex )
@@ -1222,36 +1220,48 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         const uint8_t* pTileScanlinePixelData = pTileTopPixelData + tileScanlineOffset * 2;
         
         //FK: Get pixel data of this tile for the current scanline
-        const uint8_t pixelDataMSB = pSprite->flags.xflip ? reverseBitsInByte(pTileScanlinePixelData[0]) : pTileScanlinePixelData[0];
-        const uint8_t pixelDataLSB = pSprite->flags.xflip ? reverseBitsInByte(pTileScanlinePixelData[1]) : pTileScanlinePixelData[1];
+        const uint8_t tilePixelDataMSB = pSprite->flags.xflip ? reverseBitsInByte(pTileScanlinePixelData[0]) : pTileScanlinePixelData[0];
+        const uint8_t tilePixelDataLSB = pSprite->flags.xflip ? reverseBitsInByte(pTileScanlinePixelData[1]) : pTileScanlinePixelData[1];
 
-        //FK: Pixel will be written interleaved here
-        uint8_t interleavedScanlinePixelData[2] = {0};
-        uint8_t scanlinePixelMask[2] = {0};
+        //FK: Tile pixel will be written interleaved here
+        uint16_t interleavedTilePixelData = 0;
+        uint16_t tilePixelMask = 0;
 
-        for( uint8_t scanlinePixelDataIndex = 0; scanlinePixelDataIndex < 2; ++scanlinePixelDataIndex )
+        uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+        const uint8_t spritePos = pSprite->x - 8;
+
+        uint8_t scanlineByteIndex = spritePos/4;
+        uint8_t scanlinePixelDataShift = 6 - (spritePos%4) * 2;
+        for( uint8_t pixelIndex = 0u; pixelIndex < gbTileResolutionInPixels; ++pixelIndex )
         {
-            const uint8_t startPixelIndex   = scanlinePixelDataIndex * gbHalfTileResolution;
-            const uint8_t endPixelIndex     = startPixelIndex + gbHalfTileResolution;
-
-            for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
+            const uint8_t scanlinePixelShift             = 14 - pixelIndex * 2;
+            const uint8_t colorIdShift                   = 7 - pixelIndex;
+            const uint8_t colorIdMSB                     = ( tilePixelDataMSB >> colorIdShift ) & 0x1;
+            const uint8_t colorIdLSB                     = ( tilePixelDataLSB >> colorIdShift ) & 0x1;
+            const uint8_t colorIdData                    = colorIdMSB << 1 | colorIdLSB << 0;
+            
+            if( colorIdData != 0 )
             {
-                const uint8_t scanlinePixelShift             = 6 - (pixelIndex-startPixelIndex)*2;
-                const uint8_t colorIdShift                   = 7 - pixelIndex;
-                const uint8_t colorIdMSB                     = ( pixelDataMSB >> colorIdShift ) & 0x1;
-                const uint8_t colorIdLSB                     = ( pixelDataLSB >> colorIdShift ) & 0x1;
-                const uint8_t colorIdData                    = colorIdMSB << 1 | colorIdLSB << 0;
-                scanlinePixelMask[ scanlinePixelDataIndex ]  |= ( colorIdData == 0 ? 0x3 : 0x0 ) << scanlinePixelShift;
-
+                //FK: only write non-transparent sprite pixels
                 const uint8_t paletteOffset = pSprite->flags.paletteNumber * 4;
                 const uint8_t pixelData = pPpuState->objectMonochromePlatte[ colorIdData + paletteOffset ];
-                interleavedScanlinePixelData[ scanlinePixelDataIndex ]  |= ( pixelData << scanlinePixelShift );
-            }
-        }
+            
+                //FK: TODO: I'm sure there's a better way to do this but it's 2am and I'm tired...
+                //FK: Clear existing background pixel
+                pFrameBufferPixelData[ scanlineByteIndex ] &= ~( 0x3 << scanlinePixelDataShift );
 
-        const uint8_t scanlinePixelIndex = ( pSprite->x - 8u ) / 4;
-        pFrameBufferPixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0] | ( pFrameBufferPixelData[ scanlinePixelIndex + 0 ] & scanlinePixelMask[0] );
-        pFrameBufferPixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1] | ( pFrameBufferPixelData[ scanlinePixelIndex + 1 ] & scanlinePixelMask[1] );
+                //FK: Write sprite pixel
+                pFrameBufferPixelData[ scanlineByteIndex ] |= ( pixelData << scanlinePixelDataShift );
+            }
+
+            if( scanlinePixelDataShift == 0 )
+            {
+                scanlinePixelDataShift = 8;
+                ++scanlineByteIndex;
+            }
+            
+            scanlinePixelDataShift -= 2;
+        }
     }
 }
 
@@ -1267,7 +1277,7 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_
     //FK: Calculate the tile row that intersects with the current scanline
     //FK: TODO: implement sx/sy here
     const uint8_t y = sy + scanlineYCoordinate;
-    const uint8_t yInTileSpace = y / gbTileResolution;
+    const uint8_t yInTileSpace = y / gbTileResolutionInPixels;
     const uint16_t startTileIndex = yInTileSpace * gbBackgroundTileCount;
 
     uint8_t scanlineBackgroundTilesIds[ gbBackgroundTileCount ] = { 0 };
@@ -1308,45 +1318,74 @@ void pushBackgroundOrWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_
     }
 
     //FK: Get the y position of the top most pixel inside the tile row that the current scanline is in
-    const uint8_t tileRowStartYPos  = startTileIndex / gbBackgroundTileCount * gbTileResolution;
+    const uint8_t tileRowStartYPos  = startTileIndex / gbBackgroundTileCount * gbTileResolutionInPixels;
 
     //FK: Get the y offset inside the tile row to where the scanline currently is.
     const uint8_t tileRowYOffset    = y - tileRowStartYPos;
+    uint8_t interleavedScanlinePixelData[ gbBackgroundTileCount * 2 ] = { 0 };
 
-    uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
-
-    for( uint8_t tileIdIndex = 0; tileIdIndex < gbBackgroundTileCountPerScanline; ++tileIdIndex )
+    //FK: rasterize the pixels of the background/window tiles at the scanline position
+    //    Note: the whole 256 pixels scanline will be rasterized eventhough only 144 pixels 
+    //          will be shown in the end - this is done to simplify the implementation
+    for( uint8_t tileIdIndex = 0; tileIdIndex < gbBackgroundTileCount; ++tileIdIndex )
     {
         const IndexType tileIndex = scanlineBackgroundTilesIds[ tileIdIndex ];
         
         //FK: Get pixel data of top most pixel line of current tile
         const uint8_t* pTileTopPixelData = pTileData + tileIndex * gbTileSizeInBytes;
         const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( y - yInTileSpace * 8 ) * 2;
+
         //FK: Get pixel data of this tile for the current scanline
-        const uint8_t pixelDataMSB = pTileScanlinePixelData[0];
-        const uint8_t pixelDataLSB = pTileScanlinePixelData[1];
+        const uint8_t tilePixelDataMSB = pTileScanlinePixelData[0];
+        const uint8_t tilePixelDataLSB = pTileScanlinePixelData[1];
 
         //FK: Pixel will be written interleaved here
-        uint8_t interleavedScanlinePixelData[2] = {0};
-        for( uint8_t scanlinePixelDataIndex = 0; scanlinePixelDataIndex < 2; ++scanlinePixelDataIndex )
+        uint16_t interleavedTilePixelData = 0;
+        for( uint8_t pixelIndex = 0; pixelIndex < gbTileResolutionInPixels; ++pixelIndex )
         {
-            const uint8_t startPixelIndex = scanlinePixelDataIndex * gbHalfTileResolution;
-            const uint8_t endPixelIndex = startPixelIndex + gbHalfTileResolution;
-            for( uint8_t pixelIndex = startPixelIndex; pixelIndex < endPixelIndex; ++pixelIndex )
-            {
-                const uint8_t scanlinePixelShift          = 6 - (pixelIndex-startPixelIndex)*2;
-                const uint8_t colorIdShift                = 7 - pixelIndex;
-                const uint8_t colorIdMSB                  = ( pixelDataMSB >> colorIdShift ) & 0x1;
-                const uint8_t colorIdLSB                  = ( pixelDataLSB >> colorIdShift ) & 0x1;
-                const uint8_t colorIdData                 = colorIdMSB << 1 | colorIdLSB << 0;
-                const uint8_t pixelData                   = pPpuState->backgroundMonochromePalette[ colorIdData ];
-                interleavedScanlinePixelData[ scanlinePixelDataIndex ] |= ( pixelData << scanlinePixelShift );
-            }
+            const uint8_t scanlinePixelShift          = 14 - pixelIndex*2;
+            const uint8_t colorIdShift                = 7 - pixelIndex;
+            const uint8_t colorIdMSB                  = ( tilePixelDataMSB >> colorIdShift ) & 0x1;
+            const uint8_t colorIdLSB                  = ( tilePixelDataLSB >> colorIdShift ) & 0x1;
+            const uint8_t colorIdData                 = colorIdMSB << 1 | colorIdLSB << 0;
+            const uint8_t pixelData                   = pPpuState->backgroundMonochromePalette[ colorIdData ];
+            interleavedTilePixelData |= ( pixelData << scanlinePixelShift );
         }
 
         const uint8_t scanlinePixelIndex = tileIdIndex * 2;
-        pFrameBufferPixelData[ scanlinePixelIndex + 0 ] = interleavedScanlinePixelData[0];
-        pFrameBufferPixelData[ scanlinePixelIndex + 1 ] = interleavedScanlinePixelData[1];
+        interleavedScanlinePixelData[ scanlinePixelIndex + 0 ] = ( interleavedTilePixelData >> 8 ) & 0xFF;
+        interleavedScanlinePixelData[ scanlinePixelIndex + 1 ] = ( interleavedTilePixelData >> 0 ) & 0xFF;
+    }
+
+    //FK: scanlinePixelData now contains a fully rastered 256 pixel wide scanline
+    //    now we have to evaluate sx to copy the correct 144 pixel range to the framebuffer.
+    //      Note: scanlinePixelData is now 2bpp
+
+    uint8_t scanlinePixelDataShift = 6 - (sx%4) * 2;
+    uint8_t scanlinePixelDataIndex = sx/4;
+
+    uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+    for( uint8_t scanlineByteIndex = 0; scanlineByteIndex < gbFrameBufferScanlineSizeInBytes; ++scanlineByteIndex )
+    {
+        uint8_t frameBufferByte = 0; //FK: 1 framebuffer byte = 4 pixels with 2bpp
+
+        for( uint8_t pixelIndex = 0; pixelIndex < 4; ++pixelIndex )
+        {
+            const uint8_t pixelValue = ( interleavedScanlinePixelData[ scanlinePixelDataIndex ] >> scanlinePixelDataShift ) & 0x3;
+            frameBufferByte |= pixelValue << ( 6 - ( pixelIndex * 2 ) );
+
+            if( scanlinePixelDataShift == 0 )
+            {
+                scanlinePixelDataShift = 6;
+                scanlinePixelDataIndex = ++scanlinePixelDataIndex % (gbBackgroundTileCount * 2);
+            }
+            else
+            {
+                scanlinePixelDataShift -= 2;
+            }
+        }
+        
+        pFrameBufferPixelData[scanlineByteIndex] = frameBufferByte;
     }
 }
 
@@ -1527,20 +1566,11 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
         }
     }
 
-    if( pLcdStatus->enableLycEqLyInterrupt )
-    {
-        if( pLcdStatus->LycEqLyFlag == 1 && ly == lyc )
-        {
-            triggerLCDStatInterrupt = 1;
-        }
+    pLcdStatus->LycEqLyFlag = (ly == lyc);
 
-#if 0
-        //FK: TODO: Check if this accurate...
-        else if ( pLcdStatus->LycEqLyFlag == 0 && ly != lyc )
-        {
-            triggerLCDStatInterrupt = 1;
-        }
-#endif
+    if( pLcdStatus->enableLycEqLyInterrupt == 1 && pLcdStatus->LycEqLyFlag )
+    {
+        triggerLCDStatInterrupt = 1;
     }
 
     if( triggerLCDStatInterrupt )
@@ -1596,6 +1626,8 @@ void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
                 pCpuState->registers.PC = 0x40 + 0x08 * ( 4u - interruptIndex );
 
                 *pCpuState->pIF &= ~interruptFlag;
+
+                pCpuState->cycleCounter += 20;
                 break;
             }
         }
@@ -2571,14 +2603,14 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xE3: case 0xE4: case 0xEB: case 0xEC: case 0xED: 
         case 0xF4: case 0xFC: case 0xFD:
         {
-            printf( "Illegal opcode '%.2hhX\n", opcode );
+            //FK: illegal opcode
 #if K15_BREAK_ON_ILLEGAL_INSTRUCTION == 1
             debugBreak();
 #endif
             break;
         }
         default:
-            printf( "not implemented opcode '$%.2hhX' at pc '$%.4hX'\n", opcode, ( pCpuState->registers.PC - pOpcode->byteCount ) );
+            //FK: opcode not implemented
 #if K15_BREAK_ON_UNKNOWN_INSTRUCTION == 1
             debugBreak();
 #endif
@@ -2694,7 +2726,7 @@ void handleCartridgeRomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMa
 
 void setGBEmulatorInstanceJoypadState( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypadState joypadState )
 {
-    interLockedExchange16BitValue( &pEmulatorInstance->joypadState.value, joypadState.value );
+    pEmulatorInstance->joypadState.value = joypadState.value;
 }
 
 void addOpcodeToOpcodeHistory( GBEmulatorInstance* pEmulatorInstance, uint16_t address, uint8_t opcode )
@@ -2704,8 +2736,7 @@ void addOpcodeToOpcodeHistory( GBEmulatorInstance* pEmulatorInstance, uint16_t a
     K15_UNUSED_VAR(address);
     K15_UNUSED_VAR(opcode);
     return;
-#endif
-
+#else
     memmove(pEmulatorInstance->debug.opcodeHistory + 1, pEmulatorInstance->debug.opcodeHistory + 0, pEmulatorInstance->debug.opcodeHistorySize * sizeof( GBOpcodeHistoryElement ) );
 
     pEmulatorInstance->debug.opcodeHistory[0].address     = address; 
@@ -2716,6 +2747,7 @@ void addOpcodeToOpcodeHistory( GBEmulatorInstance* pEmulatorInstance, uint16_t a
     {
         pEmulatorInstance->debug.opcodeHistorySize++;
     }
+#endif
 }
 
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
@@ -2791,8 +2823,8 @@ void convertGBFrameBufferToRGB8Buffer( uint8_t* pRGBFrameBuffer, const uint8_t* 
 
 	const float pixelIntensity[4] = {
 		1.0f, 
-		0.75f,
 		0.5f,
+		0.75f,
 		0.25f
 	};
 
@@ -2873,7 +2905,6 @@ void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
     {
         return;
     }
-
 #endif
 
     while( pCpuState->cycleCounter < pCpuState->targetCycleCountPerUpdate )
@@ -2881,11 +2912,13 @@ void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
         const uint8_t cycleCount = runSingleInstruction( pInstance );
         pCpuState->cycleCounter += cycleCount;
 
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
         if( pInstance->debug.pauseAtBreakpoint && pInstance->debug.breakpointAddress == pInstance->pCpuState->registers.PC )
         {
             pInstance->debug.pauseExecution = 1;
             return;
         }
+#endif
     }
 
     if( pPpuState->cycleCounter >= gbCyclesPerFrame )
