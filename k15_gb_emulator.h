@@ -28,9 +28,12 @@
 
 #define illegalCodePath() debugBreak()
 
+#define K15_RUNTIME_ASSERT(x) if(!(x)) debugBreak()
+
 static constexpr uint32_t   gbStateFourCC                      = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
 static constexpr uint32_t   gbCpuFrequency                     = 4194304u;
 static constexpr uint32_t   gbCyclesPerFrame                   = 70224u;
+static constexpr uint8_t    gbStateVersion                     = 1;
 static constexpr uint8_t    gbOAMSizeInBytes                   = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                    = 160u;
 static constexpr uint8_t    gbSpriteHeight                     = 16u;
@@ -158,9 +161,10 @@ struct GBCpuRegisters
 
 struct GBCpuStateFlags
 {
-    uint8_t IME     : 1;
-    uint8_t halt    : 1;
-    uint8_t dma     : 1;
+    uint8_t IME                 : 1;
+    uint8_t halt                : 1;
+    uint8_t dma                 : 1;
+    uint8_t haltBug             : 1;
 };
 
 struct GBCpuState
@@ -276,19 +280,18 @@ struct GBLcdRegisters
 
 struct GBPpuState
 {
-    uint32_t            dotCounter;
-    uint32_t            cycleCounter;
     GBLcdRegisters      lcdRegisters;
-
-    uint8_t             backgroundMonochromePalette[4];
-    uint8_t             objectMonochromePlatte[8];
-
     GBObjectAttributes* pOAM;
     GBLcdControl*       pLcdControl;
     GBPalette*          pPalettes;
     uint8_t*            pBackgroundOrWindowTileIds[2];
     uint8_t*            pTileBlocks[3];
     uint8_t*            pGBFrameBuffer;
+
+    uint8_t             objectMonochromePlatte[8];
+    uint32_t            dotCounter;
+    uint32_t            cycleCounter;
+    uint8_t             backgroundMonochromePalette[4];
 };
 
 struct GBMemoryMapper
@@ -564,7 +567,7 @@ size_t calculateGBEmulatorStateSizeInBytes( const GBEmulatorInstance* pEmulatorI
     const size_t compressedOAMSizeInBytes  = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pSpriteAttributes,    0x00A0 );
     const size_t compressedHRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pHighRam,             0x0080 ); //FK: include interrupt register
     const size_t compressedIOSizeInBytes   = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->IOPorts,              0x0080 );
-    const size_t stateSizeInBytes = sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + checksumSizeInBytes +
+    const size_t stateSizeInBytes = sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + checksumSizeInBytes + sizeof(gbStateVersion) +
         compressedVRAMSizeInBytes + compressedLRAMSizeInBytes + compressedOAMSizeInBytes + compressedHRAMSizeInBytes +
         compressedIOSizeInBytes;
 
@@ -619,13 +622,28 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
     const GBCartridge* pCartridge       = pEmulatorInstance->pCartridge;
 
+    const GBCartridgeHeader header = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
+    const uint16_t cartridgeChecksum = header.checksumHigher << 8 | header.checksumLower;
+
     GBEmulatorState state;
     state.cpuState                  = *pCpuState;
     state.ppuState                  = *pPpuState;
     state.timerState                = *pTimerState;
     state.cartridge                 = *pCartridge;
 
-    uint8_t* pCompressedMemory = pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + 2;
+    memcpy( pStateMemory, &gbStateFourCC, sizeof( gbStateFourCC ) );
+    pStateMemory += sizeof( gbStateFourCC );
+
+    memcpy( pStateMemory, &cartridgeChecksum, sizeof( cartridgeChecksum ) );
+    pStateMemory += sizeof( cartridgeChecksum );
+
+    *pStateMemory = gbStateVersion;
+    ++pStateMemory;
+
+    memcpy( pStateMemory, &state, sizeof( GBEmulatorState ) );
+    pStateMemory += sizeof( GBEmulatorState );
+
+    uint8_t* pCompressedMemory = pStateMemory;
     
     //FK: Store cartridge data as well...?
     size_t offset = 0;
@@ -634,13 +652,6 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pSpriteAttributes,   0x00A0 );
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pHighRam,            0x0080 ); //FK: include interrupt register
     offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->IOPorts,             0x0080 );
-
-    const GBCartridgeHeader header = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
-    const uint16_t cartridgeChecksum = header.checksumHigher << 8 | header.checksumLower;
-
-    memcpy( pStateMemory + 0,                                                       &gbStateFourCC,     sizeof( gbStateFourCC ) );
-    memcpy( pStateMemory + sizeof( gbStateFourCC ),                                 &cartridgeChecksum, sizeof( cartridgeChecksum ) );
-    memcpy( pStateMemory + sizeof( gbStateFourCC ) + sizeof( cartridgeChecksum ),   &state,             sizeof( GBEmulatorState ) );
 }
 
 size_t uncompressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource )
@@ -669,17 +680,29 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
 {
     uint32_t fourCC;
     memcpy( &fourCC, pStateMemory, sizeof( gbStateFourCC ) );
+    pStateMemory += sizeof( gbStateFourCC );
 
     if( fourCC != gbStateFourCC )
     {
         return false;
     }
 
-    const uint16_t* pStateCartridgeChecksum = (uint16_t*)( pStateMemory + sizeof( gbStateFourCC ) );
+    const uint16_t stateCartridgeChecksum = *(uint16_t*)pStateMemory;
+    pStateMemory += sizeof( stateCartridgeChecksum );
+
     const GBCartridgeHeader cartridgeHeader = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
 
     const uint16_t cartridgeChecksum = cartridgeHeader.checksumHigher << 8 | cartridgeHeader.checksumLower;
-    if( cartridgeChecksum != *pStateCartridgeChecksum )
+    if( cartridgeChecksum != stateCartridgeChecksum )
+    {
+        return false;
+    }
+
+
+    const uint8_t stateVersion = *pStateMemory;
+    ++pStateMemory;
+
+    if( stateVersion != gbStateVersion )
     {
         return false;
     }
@@ -688,7 +711,8 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     uint8_t* pGBFrameBuffer = pEmulatorInstance->pPpuState->pGBFrameBuffer;
 
     GBEmulatorState state;
-    memcpy( &state, pStateMemory + sizeof( gbStateFourCC ) + sizeof( cartridgeChecksum ), sizeof( GBEmulatorState ) );
+    memcpy( &state, pStateMemory, sizeof( GBEmulatorState ) );
+    pStateMemory += sizeof( GBEmulatorState );
 
     const uint8_t* pRomBaseAddress = pEmulatorInstance->pCartridge->pRomBaseAddress;
 
@@ -711,7 +735,7 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
 
     setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, pEmulatorInstance->monitorRefreshRate );
 
-    const uint8_t* pCompressedMemory = ( uint8_t* )( pStateMemory + sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + sizeof( cartridgeChecksum ) );
+    const uint8_t* pCompressedMemory = pStateMemory;
 
     size_t offset = 0;
     offset += uncompressMemoryBlockRLE( pMemoryMapper->pVideoRAM,          pCompressedMemory + offset );
@@ -741,7 +765,6 @@ uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addr
 
     return 1;
 }
-
 
 uint8_t read8BitValueFromMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
@@ -858,8 +881,10 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
 
 void write16BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset, uint16_t value )
 {
-    write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 0, (uint8_t)(value & 0x0F >> 0) );
-    write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 1, (uint8_t)(value & 0xF0 >> 8) );
+    const uint8_t lsn = (uint8_t)( ( value >> 0 ) & 0xFF );
+    const uint8_t msn = (uint8_t)( ( value >> 8 ) & 0xFF );
+    write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 0, lsn );
+    write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 1, msn );
 }
 
 size_t mapRomSizeToByteSize(uint8_t romSize)
@@ -958,9 +983,10 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->dmaCycleCounter = 0;
     pState->cycleCounter    = 0;
 
-    pState->flags.dma   = 0;
-    pState->flags.IME   = 1;
-    pState->flags.halt  = 0;
+    pState->flags.dma               = 0;
+    pState->flags.IME               = 1;
+    pState->flags.halt              = 0;
+    pState->flags.haltBug           = 0;
 }
 
 void resetMemoryMapper( GBMemoryMapper* pMapper )
@@ -1605,30 +1631,34 @@ uint16_t pop16BitValueFromStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryM
 
 void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper )
 {
-    if( !pCpuState->flags.IME )
-    {
-        return;
-    }
-
     const uint8_t interruptEnable       = *pCpuState->pIE;
     const uint8_t interruptFlags        = *pCpuState->pIF;
     const uint8_t interruptHandleMask   = ( interruptEnable & interruptFlags );
     if( interruptHandleMask > 0u )
     {
-        for( uint8_t interruptIndex = 0u; interruptIndex < 5u; ++interruptIndex )
+        if( pCpuState->flags.IME )
         {
-            //FK:   start with lowest prio interrupt, that way the program counter will eventually be overwritten with the higher prio interrupts
-            //      with the lower prio interrupts being pushed to the stack
-            const uint8_t interruptFlag = 1 << ( 4u - interruptIndex );
-            if( interruptHandleMask & interruptFlag )
+            for( uint8_t interruptIndex = 0u; interruptIndex < 5u; ++interruptIndex )
             {
-                push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
-                pCpuState->registers.PC = 0x40 + 0x08 * ( 4u - interruptIndex );
+                //FK:   start with lowest prio interrupt, that way the program counter will eventually be overwritten with the higher prio interrupts
+                //      with the lower prio interrupts being pushed to the stack
+                const uint8_t interruptFlag = 1 << ( 4u - interruptIndex );
+                if( interruptHandleMask & interruptFlag )
+                {
+                    push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
+                    pCpuState->registers.PC = 0x40 + 0x08 * ( 4u - interruptIndex );
 
-                *pCpuState->pIF &= ~interruptFlag;
+                    *pCpuState->pIF &= ~interruptFlag;
 
-                pCpuState->cycleCounter += 20;
-                break;
+                    pCpuState->flags.IME = 0;
+                    pCpuState->cycleCounter += 20;
+                    if( pCpuState->flags.halt )
+                    {
+                        pCpuState->cycleCounter += 4;
+                    }
+
+                    break;
+                }
             }
         }
 
@@ -2327,18 +2357,29 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         
         //HALT
         case 0x76:
-            if( pCpuState->flags.IME == 0 )
-            {
-                //FK: If interrupts are disabled, halt doesn't suspend operation but it does
-                //    cause the program counter to stop counting for one instruction
-                //++pCpuState->registers.PC;
-            }
-            else
+        {
+            if( pCpuState->flags.IME )
             {
                 pCpuState->flags.halt = 1;
             }
+            else
+            {
+                //FK: If interrupts are disabled, halt doesn't suspend operation but it does
+                //    cause the program counter to stop counting for one instruction and thus
+                //    execute the next instruction twice
+                const uint8_t interruptEnable = *pCpuState->pIE;
+                const uint8_t interruptFlags  = *pCpuState->pIF;
+                if( interruptEnable & interruptFlags & 0x1F )
+                {
+                    pCpuState->flags.haltBug = 1;
+                }
+                else
+                {
+                    pCpuState->flags.halt = 1;
+                }
+            }
             break;
-
+        }
         //LDH (n),A
         case 0xE0:
         {
@@ -2506,8 +2547,22 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
 
         //ADC
-        case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8C: case 0x8D: case 0x8E: case 0x8F:
         case 0xCE:
+        {
+            const uint8_t value = pCpuState->registers.F.C + read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
+            const uint16_t accumulator16BitValue = pCpuState->registers.A + value;
+            const uint8_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) + pCpuState->registers.F.C + ( value & 0x0F );
+            pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
+            
+            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
+            pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
+            pCpuState->registers.F.H = (accumulatorLN > 0x0F);
+            pCpuState->registers.F.N = 0;
+            break;
+        }
+
+        //ADC
+        case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8C: case 0x8D: case 0x8E: case 0x8F:
         {
             const uint8_t operand = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
             const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + operand;
@@ -2522,18 +2577,32 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //SBC
-        case 0x98: case 0x99: case 0x9A: case 0x9B: case 0x9C: case 0x9D: case 0x9E: case 0x9F:
         case 0xDE:
         {
-            uint8_t value = read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
-            const uint8_t accumulatorValue = pCpuState->registers.A;
-            value += pCpuState->registers.F.C;
+            const uint8_t value = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
+            const int16_t accumulator16BitValue = pCpuState->registers.A - value - pCpuState->registers.F.C;
+            const int16_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) - pCpuState->registers.F.C - ( value & 0x0F );
 
-            pCpuState->registers.A = accumulatorValue - value;
-            
-            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
-            pCpuState->registers.F.C = (accumulatorValue < value);
-            pCpuState->registers.F.H = ((accumulatorValue & 0x0F) < (value & 0x0F));
+            pCpuState->registers.A   = (uint8_t)accumulator16BitValue;
+            pCpuState->registers.F.Z = (accumulator16BitValue == 0);
+            pCpuState->registers.F.C = (accumulator16BitValue < 0);
+            pCpuState->registers.F.H = (accumulatorLN < 0);
+            pCpuState->registers.F.N = 1;
+            break;
+        }
+
+        //SBC
+        case 0x98: case 0x99: case 0x9A: case 0x9B: case 0x9C: case 0x9D: case 0x9E: case 0x9F:
+        {
+            const uint8_t operand = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t value = pCpuState->registers.F.C + operand;
+            const int16_t accumulator16BitValue = pCpuState->registers.A - value;
+            const int16_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) - pCpuState->registers.F.C - ( operand & 0x0F );
+
+            pCpuState->registers.A   = ( uint8_t ) accumulator16BitValue;
+            pCpuState->registers.F.Z = (accumulator16BitValue == 0);
+            pCpuState->registers.F.C = (accumulator16BitValue < 0);
+            pCpuState->registers.F.H = (accumulatorLN < 0);
             pCpuState->registers.F.N = 1;
             break;
         }
@@ -2759,14 +2828,24 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
     executePendingInterrupts( pCpuState, pMemoryMapper );
 
-    uint8_t cycleCost = 2u;
+    uint8_t cycleCost = 2u; //FK: Default cycle cost when CPU is halted
+
     if( !pCpuState->flags.halt )
     {
-        const uint16_t opcodeAddress = pCpuState->registers.PC++;
-        const uint8_t opcode         = read8BitValueFromMappedMemory( pMemoryMapper, opcodeAddress );
+        const uint8_t haltBug = pCpuState->flags.haltBug;
+        pCpuState->flags.haltBug = 0;
+
+        const uint16_t opcodeAddress    = pCpuState->registers.PC++;
+        const uint8_t opcode            = read8BitValueFromMappedMemory( pMemoryMapper, opcodeAddress );
+        const uint8_t opcodeByteCount   = opcode == 0xCB ? cbPrefixedOpcodes[opcode].byteCount : unprefixedOpcodes[opcode].byteCount;
 
         addOpcodeToOpcodeHistory( pEmulatorInstance, opcodeAddress, opcode );
         cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
+
+        if( haltBug )
+        {
+            pCpuState->registers.PC -= opcodeByteCount;
+        }
     }
 
     updateTimerRegisters( pMemoryMapper, pTimerState );
@@ -2823,8 +2902,8 @@ void convertGBFrameBufferToRGB8Buffer( uint8_t* pRGBFrameBuffer, const uint8_t* 
 
 	const float pixelIntensity[4] = {
 		1.0f, 
-		0.5f,
 		0.75f,
+		0.5f,
 		0.25f
 	};
 
