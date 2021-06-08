@@ -2271,7 +2271,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x01: case 0x11: case 0x21: case 0x31:
         {
             uint16_t* pDestination = getOpcode16BitOperand( pCpuState, opcode );
-            *pDestination = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
+            const uint16_t value = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
             pCpuState->registers.PC += 2u;
             break;
         }
@@ -2391,7 +2391,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         //LDH A,(n)
         case 0xF0:
         {
-            const uint16_t address = 0xFF00 + read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
+            const uint8_t value = read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
+            const uint16_t address = 0xFF00 + value;
             pCpuState->registers.A = read8BitValueFromMappedMemory(pMemoryMapper, address);
             break;
         }
@@ -2496,7 +2497,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             break;
         }
 
-        // CPL
+        //CPL
         case 0x2F:
         {
             pCpuState->registers.A = ~pCpuState->registers.A;
@@ -2532,10 +2533,22 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         //POP nn
-        case 0xC1: case 0xD1: case 0xE1: case 0xF1:
+        case 0xC1: case 0xD1: case 0xE1:
         {
             uint16_t* pOperand = getOpcode16BitOperand( pCpuState, opcode );
-            *pOperand = pop16BitValueFromStack( pCpuState, pMemoryMapper );
+            const uint16_t value = pop16BitValueFromStack( pCpuState, pMemoryMapper );
+            *pOperand = value;
+            break;
+        }
+
+        //POP AF
+        case 0xF1:
+        {
+            uint16_t* pOperand = getOpcode16BitOperand( pCpuState, opcode );
+            const uint16_t value = pop16BitValueFromStack( pCpuState, pMemoryMapper );
+
+            //FK: For AF we don't want to set the last 4 bits of F
+            *pOperand = value & 0xFFF0;
             break;
         }
 
@@ -2638,8 +2651,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             }
 
             pCpuState->registers.F.Z = ( ( accumulator & 0xFF ) == 0 );
-            pCpuState->registers.F.C = ( ( accumulator & 0x100 ) == 0x100 );
             pCpuState->registers.F.H = 0;
+
+            if( ( accumulator & 0x100 ) == 0x100 )
+            {
+                pCpuState->registers.F.C = 1;
+            }
 
             pCpuState->registers.A = (uint8_t)accumulator;
             break;
