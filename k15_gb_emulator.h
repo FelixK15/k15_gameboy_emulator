@@ -2272,6 +2272,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         {
             uint16_t* pDestination = getOpcode16BitOperand( pCpuState, opcode );
             const uint16_t value = read16BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC);
+            *pDestination = value;
             pCpuState->registers.PC += 2u;
             break;
         }
