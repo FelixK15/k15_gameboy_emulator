@@ -2611,6 +2611,7 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x27:
         {
             uint16_t accumulator = pCpuState->registers.A;
+
             if( pCpuState->registers.F.N )
             {
                 if( pCpuState->registers.F.H )
