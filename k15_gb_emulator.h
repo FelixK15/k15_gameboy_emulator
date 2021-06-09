@@ -516,14 +516,7 @@ GBCartridgeHeader getGBCartridgeHeader(const uint8_t* pRomMemory)
 
 GBCartridgeHeader getGBEmulatorInstanceCurrentCartridgeHeader( const GBEmulatorInstance* pEmulatorInstance )
 {
-    if( pEmulatorInstance->pCartridge->pRomBaseAddress == nullptr )
-    {
-        debugBreak();
-
-        GBCartridgeHeader header = {};
-        return header;
-    }
-
+    K15_RUNTIME_ASSERT( pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr );
     return getGBCartridgeHeader( pEmulatorInstance->pCartridge->pRomBaseAddress );
 }
 
@@ -697,7 +690,6 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     {
         return false;
     }
-
 
     const uint8_t stateVersion = *pStateMemory;
     ++pStateMemory;
@@ -975,13 +967,13 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->registers.PC = 0x0100;
 
     //FK: defualt values from BGB
-    pState->registers.F.value   = 0xB0;
-    pState->registers.C         = 0x13;
-    pState->registers.DE        = 0x00D8;
-    pState->registers.HL        = 0x014D;
+    pState->registers.F.value       = 0xB0;
+    pState->registers.C             = 0x13;
+    pState->registers.DE            = 0x00D8;
+    pState->registers.HL            = 0x014D;
 
-    pState->dmaCycleCounter = 0;
-    pState->cycleCounter    = 0;
+    pState->dmaCycleCounter         = 0;
+    pState->cycleCounter            = 0;
 
     pState->flags.dma               = 0;
     pState->flags.IME               = 1;
@@ -1504,7 +1496,7 @@ void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cyc
 {
     //FK: timer divier runs at 16384hz (update counter every 256 cpu cycles to be accurate)
     pTimer->dividerCounter += cycleCount;
-    if( pTimer->dividerCounter > 0xFF )
+    while( pTimer->dividerCounter > 0xFF )
     {
         pTimer->dividerCounter -= 0xFF;
         *pTimer->pDivider += 1;
@@ -1516,8 +1508,9 @@ void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cyc
     }
 
     pTimer->counterValue += cycleCount;
-    if( pTimer->counterValue > pTimer->counterTarget )
+    while( pTimer->counterValue > pTimer->counterTarget )
     {
+        pTimer->counterValue -= pTimer->counterTarget;
         if( *pTimer->pCounter == 0xFF )
         {
             *pTimer->pCounter = *pTimer->pModulo;
