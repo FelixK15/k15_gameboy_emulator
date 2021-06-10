@@ -284,29 +284,25 @@ struct GBPpuState
     GBObjectAttributes* pOAM;
     GBLcdControl*       pLcdControl;
     GBPalette*          pPalettes;
-    uint8_t*            pBackgroundOrWindowTileIds[2];
-    uint8_t*            pTileBlocks[3];
+    uint8_t*            pBackgroundOrWindowTileIds[ 2 ];
+    uint8_t*            pTileBlocks[ 3 ];
     uint8_t*            pGBFrameBuffer;
 
-    uint8_t             objectMonochromePlatte[8];
+    GBObjectAttributes  scanlineSprites[ gbSpritesPerScanline ];
+    uint8_t             scanlineSpriteCounter;
+    uint8_t             objectMonochromePlatte[ 8 ];
     uint32_t            dotCounter;
     uint32_t            cycleCounter;
-    uint8_t             backgroundMonochromePalette[4];
+    uint8_t             backgroundMonochromePalette[ 4 ];
 };
 
 struct GBMemoryMapper
 {
     uint8_t*            pBaseAddress;
-    uint8_t*            pRomBank0;
     uint8_t*            pRomBankSwitch;
     uint8_t*            pVideoRAM;
     uint8_t*            pRamBankSwitch;
-    uint8_t*            pLowRam;
-    uint8_t*            pLowRamEcho;
     uint8_t*            pSpriteAttributes;
-    uint8_t*            IOPorts;
-    uint8_t*            pHighRam;
-    uint8_t*            pInterruptRegister;
     uint16_t            lastAddressWrittenTo;
     uint16_t            lastAddressReadFrom;
     uint8_t             lastValueWritten;
@@ -555,15 +551,8 @@ size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySi
 size_t calculateGBEmulatorStateSizeInBytes( const GBEmulatorInstance* pEmulatorInstance )
 {
     constexpr size_t checksumSizeInBytes   = 2;
-    const size_t compressedVRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pVideoRAM,            0x2000 );
-    const size_t compressedLRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pLowRam,              0x2000 );
-    const size_t compressedOAMSizeInBytes  = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pSpriteAttributes,    0x00A0 );
-    const size_t compressedHRAMSizeInBytes = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pHighRam,             0x0080 ); //FK: include interrupt register
-    const size_t compressedIOSizeInBytes   = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->IOPorts,              0x0080 );
-    const size_t stateSizeInBytes = sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + checksumSizeInBytes + sizeof(gbStateVersion) +
-        compressedVRAMSizeInBytes + compressedLRAMSizeInBytes + compressedOAMSizeInBytes + compressedHRAMSizeInBytes +
-        compressedIOSizeInBytes;
-
+    const size_t compressedRAMSizeInBytes  = calculateCompressedMemorySizeRLE( pEmulatorInstance->pMemoryMapper->pBaseAddress + 0x8000, 0x8000 );
+    const size_t stateSizeInBytes = sizeof( GBEmulatorState ) + sizeof( gbStateFourCC ) + checksumSizeInBytes + sizeof(gbStateVersion) + compressedRAMSizeInBytes;
     return stateSizeInBytes;
 }
 
@@ -639,12 +628,7 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     uint8_t* pCompressedMemory = pStateMemory;
     
     //FK: Store cartridge data as well...?
-    size_t offset = 0;
-    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pVideoRAM,           0x2000 );
-    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pLowRam,             0x2000 );
-    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pSpriteAttributes,   0x00A0 );
-    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->pHighRam,            0x0080 ); //FK: include interrupt register
-    offset += compressMemoryBlockRLE( pCompressedMemory + offset, pMemoryMapper->IOPorts,             0x0080 );
+    compressMemoryBlockRLE( pCompressedMemory, pMemoryMapper->pBaseAddress + 0x8000, 0x8000 );
 }
 
 size_t uncompressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource )
@@ -728,14 +712,7 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, pEmulatorInstance->monitorRefreshRate );
 
     const uint8_t* pCompressedMemory = pStateMemory;
-
-    size_t offset = 0;
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->pVideoRAM,          pCompressedMemory + offset );
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->pLowRam,            pCompressedMemory + offset );
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->pSpriteAttributes,  pCompressedMemory + offset );
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->pHighRam,           pCompressedMemory + offset );
-    offset += uncompressMemoryBlockRLE( pMemoryMapper->IOPorts,            pCompressedMemory + offset );
-
+    uncompressMemoryBlockRLE( pMemoryMapper->pBaseAddress + 0x8000, pCompressedMemory );
     return true;
 }
 
@@ -984,7 +961,7 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
 void resetMemoryMapper( GBMemoryMapper* pMapper )
 {
     memset(pMapper->pBaseAddress, 0, gbMappedMemorySizeInBytes);
-    memset(pMapper->IOPorts, 0xFF, 0x80);
+    memset(pMapper->pBaseAddress + 0xFF00, 0xFF, 0x80); //FK: reset IO ports
 
     pMapper->dmaActive  = 0;
     pMapper->lcdEnabled = 0;
@@ -993,16 +970,10 @@ void resetMemoryMapper( GBMemoryMapper* pMapper )
 void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
 {
     pMapper->pBaseAddress           = pMemory;
-    pMapper->pRomBank0              = pMemory;
     pMapper->pRomBankSwitch         = pMemory + 0x4000;
     pMapper->pVideoRAM              = pMemory + 0x8000;
     pMapper->pRamBankSwitch         = pMemory + 0xA000;
-    pMapper->pLowRam                = pMemory + 0xC000;
-    pMapper->pLowRamEcho            = pMemory + 0xE000;
     pMapper->pSpriteAttributes      = pMemory + 0xFE00;
-    pMapper->IOPorts                = pMemory + 0xFF00;
-    pMapper->pHighRam               = pMemory + 0xFF80;
-    pMapper->pInterruptRegister     = pMemory + 0xFFFF;
 
     resetMemoryMapper( pMapper );
 }
@@ -1063,7 +1034,9 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 0,  0xFF );
     extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 4,  0xFF );
 
+    //FK: Dot counter after boot rom...?
     pPpuState->dotCounter = 424;
+    pPpuState->scanlineSpriteCounter = 0;
 
     clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
 }
@@ -1179,48 +1152,15 @@ uint8_t reverseBitsInByte( uint8_t value )
 
 void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
-    const uint8_t objHeight = pPpuState->pLcdControl->objSize == 0 ? 8 : 16;
-
-    uint8_t spriteCounter = 0;
-    GBObjectAttributes scanlineSprites[10] = {}; //FK: Max 10 sprites per scanline
-    for( size_t spriteIndex = 0u; spriteIndex < gbObjectAttributeCapacity; ++spriteIndex )
-    {
-        const GBObjectAttributes* pSprite = pPpuState->pOAM + spriteIndex;
-        if( pSprite->y < gbSpriteHeight || pSprite->y > gbVerticalResolutionInPixels + gbSpriteHeight )
-        {
-            //FK: Sprite is invisible
-            continue;
-        }
-
-        const uint8_t spriteTopPosition = pSprite->y - gbSpriteHeight;
-        if( spriteTopPosition <= scanlineYCoordinate && spriteTopPosition + objHeight > scanlineYCoordinate )
-        {
-            scanlineSprites[spriteCounter++] = *pSprite;
-            
-            if( spriteCounter == gbSpritesPerScanline )
-            {
-                break;
-            }
-        }
-    }
-
-    if( spriteCounter == 0 )
+    if( pPpuState->scanlineSpriteCounter == 0 )
     {
         return;
     }
 
-#if 0
-    if( spriteCounter > 1 )
-    {
-        //FK: TODO: This shouldn't happen in CGB mode
-        sortSpritesByXCoordinate( scanlineSprites, spriteCounter );
-    }
-#endif
-
     uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
-    for( size_t spriteIndex = 0; spriteIndex < spriteCounter; ++spriteIndex )
+    for( size_t spriteIndex = 0; spriteIndex < pPpuState->scanlineSpriteCounter; ++spriteIndex )
     {
-        const GBObjectAttributes* pSprite = scanlineSprites + spriteIndex;
+        const GBObjectAttributes* pSprite = pPpuState->scanlineSprites + spriteIndex;
         if( pSprite->x < 8 || pSprite->x >= 168 )
         {
             //FK: Sprite is off screen
@@ -1412,11 +1352,42 @@ void clearGBFrameBufferScanline( uint8_t* pGBFrameBuffer, uint8_t scanlineYCoord
     memset( pGBFrameBuffer + scanlineYCoordinate * gbFrameBufferScanlineSizeInBytes, 0, gbFrameBufferScanlineSizeInBytes );
 }
 
-void pushScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
+void collectScanlineSprites( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
-    //FK: Clear scanline first, so we know what we're working with
-    clearGBFrameBufferScanline( pPpuState->pGBFrameBuffer, scanlineYCoordinate );
+    const uint8_t objHeight = pPpuState->pLcdControl->objSize == 0 ? 8 : 16;
 
+    uint8_t spriteCounter = 0;
+    for( size_t spriteIndex = 0u; spriteIndex < gbObjectAttributeCapacity; ++spriteIndex )
+    {
+        const GBObjectAttributes* pSprite = pPpuState->pOAM + spriteIndex;
+        if( pSprite->x == 0 || pSprite->y < gbSpriteHeight || pSprite->y > gbVerticalResolutionInPixels + gbSpriteHeight )
+        {
+            //FK: Sprite is invisible
+            continue;
+        }
+
+        const uint8_t spriteTopPosition = pSprite->y - gbSpriteHeight;
+        if( spriteTopPosition <= scanlineYCoordinate && spriteTopPosition + objHeight > scanlineYCoordinate )
+        {
+            pPpuState->scanlineSprites[spriteCounter++] = *pSprite;
+            
+            if( spriteCounter == gbSpritesPerScanline )
+            {
+                break;
+            }
+        }
+    }
+
+    pPpuState->scanlineSpriteCounter = spriteCounter;
+
+#if 0
+    //FK: TODO: This shouldn't happen in CGB mode
+    sortSpritesByXCoordinate( scanlineSprites, spriteCounter );
+#endif
+}
+
+void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
+{
     if( pPpuState->pLcdControl->bgAndWindowEnable )
     {
         //FK: Determine tile addressing mode
@@ -1542,15 +1513,15 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
 
     if( lcdMode == 2 && lcdDotCounter >= 80 )
     {
+        collectScanlineSprites( pPpuState, ly );
         lcdDotCounter -= 80;
-
         lcdMode = 3;
-        pushScanline( pPpuState, ly );
     }
     else if( lcdMode == 3 && lcdDotCounter >= 172 )
     {
-        lcdDotCounter -= 172;
+        drawScanline( pPpuState, ly );
 
+        lcdDotCounter -= 172;
         lcdMode = 0;
         triggerLCDStatInterrupt = pLcdStatus->enableMode0HBlankInterrupt;
     }
@@ -2730,20 +2701,21 @@ void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
     }
 }
 
-uint8_t fixJoypadState( uint8_t joypadState )
+GBEmulatorJoypadState fixJoypadState( GBEmulatorJoypadState joypadState )
 {
     //FK: disallow simultaneous input of opposite dpad values
-    const uint8_t leftAndRight = joypadState & (1<<0) | joypadState & (1<<1);
-    const uint8_t upAndDown = ( joypadState & (1<<2) | joypadState & (1<<3) ) << 2;
-
-    if( leftAndRight == 0 )
+    if( joypadState.left == 1 && joypadState.right == 1 )
     {
-        joypadState |= 0x3; //FK: ignore both left and right
+        //FK: ignore both left and right
+        joypadState.left = 0;
+        joypadState.right = 0;
     }
 
-    if( upAndDown == 0 )
+    if( joypadState.up == 1 && joypadState.down == 1 )
     {
-        joypadState |= 0xC; //FK: ignore both up and down
+        //FK: ignore both up and down
+        joypadState.up = 0;
+        joypadState.down = 0;
     }
 
     return joypadState;
@@ -2753,6 +2725,8 @@ bool handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypadState joypadSta
 {
     if( pMemoryMapper->lastAddressWrittenTo == 0xFF00 )
     {
+        joypadState = fixJoypadState( joypadState );
+
         //FK: bit 7&6 aren't used so we'll set them (mimicing bgb)
         const uint8_t queryJoypadValue          = pMemoryMapper->pBaseAddress[0xFF00];
         const uint8_t selectActionButtons       = ( queryJoypadValue & (1 << 5) ) == 0;
@@ -2771,7 +2745,6 @@ bool handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypadState joypadSta
             newJoypadState = ~joypadState.dpadButtonMask & 0x0F;
         }
 
-        newJoypadState = fixJoypadState( newJoypadState );
         pMemoryMapper->pBaseAddress[0xFF00] = 0xC0 | ( queryJoypadValue & 0x30 ) | newJoypadState;
 
         return prevJoypadState != newJoypadState;
