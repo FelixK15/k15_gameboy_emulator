@@ -718,7 +718,8 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
 
 uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
-    if( pMemoryMapper->lcdEnabled && pMemoryMapper->lcdStatus.mode == 3 )
+    //FK: Don't allow VRAM and OAM access while ppu is in mode 3 or 2 (drawing and oam search respectively)
+    if( pMemoryMapper->lcdEnabled && ( pMemoryMapper->lcdStatus.mode == 3 || pMemoryMapper->lcdStatus.mode == 2 ) )
     {
         if( isInVRAMAddressRange( addressOffset ) || 
             isInOAMAddressRange( addressOffset ) )
@@ -727,6 +728,7 @@ uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addr
         }
     }
     
+    //FK: Only allow access to HRAM while DMA is active
     if( pMemoryMapper->dmaActive && !isInHRAMAddressRange( addressOffset ) )
     {
         return 0;
@@ -1388,6 +1390,11 @@ void collectScanlineSprites( GBPpuState* pPpuState, uint8_t scanlineYCoordinate 
 
 void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
+    if( scanlineYCoordinate == 6 )
+    {
+        breakPointHook();
+    }
+
     if( pPpuState->pLcdControl->bgAndWindowEnable )
     {
         //FK: Determine tile addressing mode
@@ -1604,13 +1611,11 @@ void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
         {
             for( uint8_t interruptIndex = 0u; interruptIndex < 5u; ++interruptIndex )
             {
-                //FK:   start with lowest prio interrupt, that way the program counter will eventually be overwritten with the higher prio interrupts
-                //      with the lower prio interrupts being pushed to the stack
-                const uint8_t interruptFlag = 1 << ( 4u - interruptIndex );
+                const uint8_t interruptFlag = ( 1 << interruptIndex );
                 if( interruptHandleMask & interruptFlag )
                 {
                     push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
-                    pCpuState->registers.PC = 0x40 + 0x08 * ( 4u - interruptIndex );
+                    pCpuState->registers.PC = 0x40 + 0x08 * interruptIndex;
 
                     *pCpuState->pIF &= ~interruptFlag;
 
