@@ -168,6 +168,7 @@ struct GBCpuStateFlags
 {
     uint8_t IME                 : 1;
     uint8_t halt                : 1;
+    uint8_t stop                : 1;
     uint8_t dma                 : 1;
     uint8_t haltBug             : 1;
 };
@@ -994,6 +995,7 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
 
     pState->flags.dma               = 0;
     pState->flags.IME               = 1;
+    pState->flags.stop              = 0;
     pState->flags.halt              = 0;
     pState->flags.haltBug           = 0;
 }
@@ -1664,15 +1666,18 @@ uint16_t readTimerControlFrequency( const uint8_t timerControlValue )
     const uint8_t frequency = timerControlValue & 0x3;
     switch( frequency )
     {
-        case 0b00:
+        case 0x0:
             return 1024u;
-        case 0xb01:
+        case 0x1:
             return 16u;
-        case 0xb10:
-            return 64;
+        case 0x2:
+            return 64u;
+        case 0x3:
+            return 256u;
     }
 
-    return 256;
+    illegalCodePath();
+    return 0;
 }
 
 void updateTimerRegisters( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimer )
@@ -1694,11 +1699,16 @@ void updateTimerRegisters( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimer )
 
 void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cycleCount )
 {
+    if( pCpuState->flags.stop )
+    {
+        return;
+    }
+
     //FK: timer divier runs at 16384hz (update counter every 256 cpu cycles to be accurate)
     pTimer->dividerCounter += cycleCount;
-    while( pTimer->dividerCounter > 0xFF )
+    while( pTimer->dividerCounter >= 256 )
     {
-        pTimer->dividerCounter -= 0xFF;
+        pTimer->dividerCounter -= 256;
         *pTimer->pDivider += 1;
     }
 
@@ -2193,7 +2203,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
 uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode )
 {
     uint8_t opcodeCondition = 0;
-    const GBOpcode* pOpcode = opcode == 0xCB ? cbPrefixedOpcodes + opcode : unprefixedOpcodes + opcode;
+    const GBOpcode* pOpcode = unprefixedOpcodes + opcode;
 
     switch( opcode )
     {
@@ -2578,6 +2588,16 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             }
             break;
         }
+
+        //STOP
+        case 0x10:
+        {
+            //FK: Reset timer div
+            write8BitValueToMappedMemory(pMemoryMapper, 0xFF04, 0);
+            pCpuState->flags.stop = !pCpuState->flags.stop;
+            break;
+        }
+        
         //LDH (n),A
         case 0xE0:
         {
@@ -2751,8 +2771,10 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         }
 
         case 0xCB: 
-            opcode = read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
-            //FK: let it fall through
+            opcode = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
+            pOpcode = cbPrefixedOpcodes + opcode;
+            //FK: let it fall through...
+
         case 0x07: case 0x17: case 0x0F: case 0x1F:
             handleCbOpcode(pCpuState, pMemoryMapper, opcode);
             break;
@@ -3046,7 +3068,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
     executePendingInterrupts( pCpuState, pMemoryMapper );
 
-    uint8_t cycleCost = 2u; //FK: Default cycle cost when CPU is halted
+    uint8_t cycleCost = 4u; //FK: Default cycle cost when CPU is halted
 
     if( !pCpuState->flags.halt )
     {
