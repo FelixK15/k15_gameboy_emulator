@@ -4,7 +4,7 @@
 This project tries to emulate the Nintendo GameBoy and Nintendo GameBoy Color game system hardware accurately so that games for these game systems can be played on hardware
 that is natively not able to do so.
 
-![image](https://user-images.githubusercontent.com/7531672/120161123-42fea680-c1f7-11eb-91d4-3522f0989919.png)
+![image](https://user-images.githubusercontent.com/7531672/122221913-08149800-ceb2-11eb-877d-7a253811b252.png)
 
 ## How do I build this software locally?
 
@@ -15,12 +15,14 @@ the project and output a `k15_win32_gb_emulator.exe`
 ## How do I navigate the codebase?
 
 The win32 entry point and interface is located in the `k15_win32_gb_emulator.cpp` file.
-All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h` with the main entry point being `runGBEmulator()`.
+All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h` with the main entry point being `runGBEmulatorInstance()`.
 
 ## Can I run this emulator locally?
 
-Yes, although it's currently only being tested with tetris. If you want to run tetris using this emulator though copy your tetris rom file
-next to the compiled exe and rename it to "rom.gb". After that you should be able to start the emulator and run tetris.
+Yes, there's currently no ui to select a rom to load. To load a rom you have to pass the rom path as a command line argument.
+eg: `k15_win32_gb_emulator.exe C:\Roms\SuperMarioLand.gb`
+
+Input is supported via keyboard and xinput gamepads.
 
 Input on keyboard:
 arrow keys  =     digi pad
@@ -28,6 +30,11 @@ ctrl        =     start
 alt         =     select
 a           =     a
 b           =     b
+
+input on xinput pad:
+digi pad
+x,a         =     a
+y,b         =     b
 
 ## What do I have to do to port this to platform X?
 
