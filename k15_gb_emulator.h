@@ -974,9 +974,7 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->registers.SP = 0xFFFE;
 
     //FK: TODO: Make the following values user defined
-    //FK: A value of 11h indicates CGB (or GBA) hardware
-    //pState->registers.A = 0x11;
-    pState->registers.A = 0x01;
+    
 
     //FK: examine Bit 0 of the CPUs B-Register to separate between CGB (bit cleared) and GBA (bit set)
     //pState->registers.B = 0x1;
@@ -985,8 +983,10 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->registers.PC = 0x0100;
 
     //FK: defualt values from BGB
-    pState->registers.F.value       = 0xB0;
-    pState->registers.C             = 0x13;
+    //FK: A value of 11h indicates CGB (or GBA) hardware
+    //pState->registers.A             = 0x11B0;
+    pState->registers.AF            = 0x01B0;
+    pState->registers.BC            = 0x0013;
     pState->registers.DE            = 0x00D8;
     pState->registers.HL            = 0x014D;
 
@@ -1686,6 +1686,7 @@ void updateTimerRegisters( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimer )
     if( pMemoryMapper->lastAddressWrittenTo == 0xFF04 )
     {
         pMemoryMapper->pBaseAddress[0xFF04] = 0x00;
+        pTimer->dividerCounter = 0;
     }
 
     //FK: Timer Control
@@ -2200,7 +2201,7 @@ void handleCbOpcode(GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
     write8BitValueToMappedMemory( pMemoryMapper, pCpuState->registers.HL, value );
 }
 
-uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode )
+uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t opcode )
 {
     uint8_t opcodeCondition = 0;
     const GBOpcode* pOpcode = unprefixedOpcodes + opcode;
@@ -2368,6 +2369,8 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
             pCpuState->registers.HL = pCpuState->registers.SP + offset;
             pCpuState->registers.F.Z = 0;
             pCpuState->registers.F.N = 0;
+            pCpuState->registers.F.H = ((pCpuState->registers.SP & 0x0F) + (offset & 0x0F)) > 0x0F;
+            pCpuState->registers.F.C = ((pCpuState->registers.SP & 0xFF) + (offset & 0xFF)) > 0xFF;
             break;
         }
 
@@ -2633,11 +2636,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0x09: case 0x19: case 0x29: case 0x39:
         {
             const uint16_t* pOperand = getOpcode16BitOperand( pCpuState, opcode );
-            const uint32_t new32BitRegisterValue = pCpuState->registers.HL + *pOperand;
+            const uint16_t value = *pOperand;
+            const uint32_t new32BitRegisterValue = pCpuState->registers.HL + value;
 
             pCpuState->registers.F.N = 0;
-            pCpuState->registers.F.H = (new32BitRegisterValue > 0xFFF0);
-            pCpuState->registers.F.C = (new32BitRegisterValue > 0xFFFF);
+            pCpuState->registers.F.H = ((pCpuState->registers.HL & 0xFFF) + (value & 0xFFF)) & 0x1000;
+            pCpuState->registers.F.C = new32BitRegisterValue > 0xFFFF;
 
             pCpuState->registers.HL = (uint16_t)new32BitRegisterValue;
             break;
@@ -2647,10 +2651,12 @@ uint8_t executeOpcode( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uin
         case 0xE8:
         {
             const int8_t value = (int8_t)read8BitValueFromMappedMemory(pMemoryMapper, pCpuState->registers.PC++);
-            pCpuState->registers.SP += value;
-
+            pCpuState->registers.F.H = ((pCpuState->registers.SP & 0x0F) + (value & 0x0F)) > 0x0F;
+            pCpuState->registers.F.C = ((pCpuState->registers.SP & 0xFF) + (value & 0xFF)) > 0xFF;
             pCpuState->registers.F.Z = 0;
             pCpuState->registers.F.N = 0;
+
+            pCpuState->registers.SP += value;
             break;
         }
 
@@ -3080,7 +3086,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         const uint8_t opcodeByteCount   = opcode == 0xCB ? cbPrefixedOpcodes[opcode].byteCount : unprefixedOpcodes[opcode].byteCount;
 
         addOpcodeToOpcodeHistory( pEmulatorInstance, opcodeAddress, opcode );
-        cycleCost = executeOpcode( pCpuState, pMemoryMapper, opcode );
+        cycleCost = executeInstruction( pCpuState, pMemoryMapper, opcode );
 
         if( haltBug )
         {
@@ -3119,10 +3125,22 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
     }
 
+    //FK: Serial - only used for printf right now
+    if( pMemoryMapper->lastAddressWrittenTo == 0xFF02 && pMemoryMapper->lastValueWritten == 0x81 )
+    {
+        const char c = (const char)pMemoryMapper->pBaseAddress[0xFF01];
+        printf("%c", c);
+        pMemoryMapper->pBaseAddress[0xFF02] = 0x0;
+    }
+
     if( isInCartridgeRomAddressRange( pMemoryMapper->lastAddressWrittenTo ) )
     {
         handleCartridgeRomWrite( pEmulatorInstance->pCartridge, pMemoryMapper );
     }
+
+    //FK: Only keep these values alive for one instruction tick
+    pMemoryMapper->lastAddressWrittenTo = 0x0;
+    pMemoryMapper->lastValueWritten     = 0x0;
 
     pMemoryMapper->lcdStatus    = *pPpuState->lcdRegisters.pStatus;
     pMemoryMapper->lcdEnabled   = pPpuState->pLcdControl->enable;
