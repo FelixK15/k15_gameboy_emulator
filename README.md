@@ -65,10 +65,10 @@ In case the emulator isn't run on a 60Hz monitor, the monitor refresh rate can b
   - [x] Add memory inspection
   - [x] Add VRAM viewer
 - [ ] Implement rom-switching
-  - [ ] MBC1
+  - [x] MBC1
   - [ ] MBC3
   - [ ] MBC5
-- [ ] implement window support
+- [x] implement window support
 - [x] implement background scrolling
 - [x] complete sprite features
   - [x] 10 sprite per line limit
@@ -76,6 +76,10 @@ In case the emulator isn't run on a 60Hz monitor, the monitor refresh rate can b
   - [x] y flip
   - [x] support for different palettes
 - [ ] verify correctness with Blargg's Gameboy hardware test ROMs
+  - [x] pass instr_timing
+  - [ ] pass interrupt_time
+  - [ ] pass mem_timing
+  - [ ] pass cpu_instrs
 - [ ] Implement Nintendo GameBoy Color features
 - [ ] Implement sound
 
