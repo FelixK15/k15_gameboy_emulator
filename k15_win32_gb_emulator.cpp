@@ -7,6 +7,9 @@
 #include <gl/GL.h>
 #include "k15_gb_emulator.h"
 
+typedef BOOL(*wglSwapIntervalEXTProc)(int);
+wglSwapIntervalEXTProc wglSwapIntervalEXT = nullptr;
+
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 #	include "imgui/imgui.cpp"
 #	include "imgui/imgui_demo.cpp"
@@ -21,6 +24,14 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "opengl32.lib")
+
+enum InputType
+{
+	Gamepad,
+	Keyboard
+};
+
+InputType dominantInputType = Gamepad;
 
 char gameTitle[16] = {0};
 constexpr uint32_t gbScreenWidth 			 	= 160;
@@ -51,7 +62,7 @@ uint16_t queryMonitorRefreshRate( HWND hwnd )
 
 	MONITORINFOEX monitorInfo;
 	monitorInfo.cbSize = sizeof(MONITORINFOEX);
-	if( GetMonitorInfo(monitorHandle, &monitorInfo) == FALSE )
+	if( GetMonitorInfo( monitorHandle, &monitorInfo ) == FALSE )
 	{
 		return 60; //FK: assume 60hz as default
 	}
@@ -84,6 +95,8 @@ void K15_WindowClosed(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
+	dominantInputType = InputType::Keyboard;
+
 	if( message == WM_KEYDOWN )
 	{
 		if((lparam & (1 >> 30)) == 0)
@@ -277,24 +290,24 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 void createOpenGLContext(HWND hwnd)
 {
 	PIXELFORMATDESCRIPTOR pfd =
-		{
-			sizeof(PIXELFORMATDESCRIPTOR),
-			1,
-			PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,    //Flags
-			PFD_TYPE_RGBA,            //The kind of framebuffer. RGBA or palette.
-			32,                        //Colordepth of the framebuffer.
-			0, 0, 0, 0, 0, 0,
-			0,
-			0,
-			0,
-			0, 0, 0, 0,
-			24,                        //Number of bits for the depthbuffer
-			8,                        //Number of bits for the stencilbuffer
-			0,                        //Number of Aux buffers in the framebuffer.
-			PFD_MAIN_PLANE,
-			0,
-			0, 0, 0
-		};
+	{
+		sizeof(PIXELFORMATDESCRIPTOR),
+		1,
+		PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,    //Flags
+		PFD_TYPE_RGBA,            //The kind of framebuffer. RGBA or palette.
+		32,                        //Colordepth of the framebuffer.
+		0, 0, 0, 0, 0, 0,
+		0,
+		0,
+		0,
+		0, 0, 0, 0,
+		24,                        //Number of bits for the depthbuffer
+		8,                        //Number of bits for the stencilbuffer
+		0,                        //Number of Aux buffers in the framebuffer.
+		PFD_MAIN_PLANE,
+		0,
+		0, 0, 0
+	};
 
 	HDC mainDC = GetDC(hwnd);
 
@@ -305,6 +318,11 @@ void createOpenGLContext(HWND hwnd)
 
 	wglMakeCurrent(mainDC, glContext);
 	
+	wglSwapIntervalEXT = ( wglSwapIntervalEXTProc )wglGetProcAddress( "wglSwapIntervalEXT" );
+	K15_RUNTIME_ASSERT( wglSwapIntervalEXT != nullptr );
+
+	wglSwapIntervalEXT(1);
+
 	//set default gl state
 	glShadeModel(GL_SMOOTH);
 
@@ -315,8 +333,35 @@ void createOpenGLContext(HWND hwnd)
 	glLoadIdentity();
 }
 
+const char* fixRomFileName( char* pRomFileName )
+{
+	//FK: This needs to be done purely because visual studio code wraps the argument in double quotes for whatever reason...
+	while( *pRomFileName == '\"' )
+	{
+		++pRomFileName;
+	}
+
+	const char* pFixedRomFileName = pRomFileName;
+
+	while( *pRomFileName != '\"' && *pRomFileName != 0 )
+	{
+		++pRomFileName;
+	}
+
+	if( *pRomFileName == '\"' )
+	{
+		*pRomFileName = 0;
+	}
+
+	return pFixedRomFileName;
+}
+
 const uint8_t* mapRomFile( const char* pRomFileName )
 {
+	char fixedRomFileName[MAX_PATH] = {0};
+	strcpy_s( fixedRomFileName, pRomFileName );
+
+	pRomFileName = fixRomFileName( fixedRomFileName );
 	HANDLE pRomHandle = CreateFile( pRomFileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr );
 	if( pRomHandle == INVALID_HANDLE_VALUE )
 	{
@@ -334,18 +379,92 @@ const uint8_t* mapRomFile( const char* pRomFileName )
 	return (const uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
 }
 
-void setup( HWND hwnd )
-{	
-	createOpenGLContext( hwnd );
-	//const uint8_t* pRomData = mapRomFile( "cpu_instrs.gb" );
-	//const uint8_t* pRomData = mapRomFile( "BattleCity (Japan).gb" );
-	const uint8_t* pRomData = mapRomFile( "Super Mario Land (World).gb" );
-	//const uint8_t* pRomData = mapRomFile( "Bomb Jack (Europe).gb" );
-	//const uint8_t* pRomData = mapRomFile( "Alleyway (World).gb" );
-	//const uint8_t* pRomData = mapRomFile( "Tetris (Japan) (En).gb" );
-	if( pRomData == nullptr )
+
+typedef void (WINAPI *XInputEnableProc)(BOOL);
+typedef DWORD (WINAPI *XInputGetStateProc)(DWORD, XINPUT_STATE*);
+
+XInputGetStateProc	w32XInputGetState	= nullptr;
+XInputEnableProc	w32XInputEnable 	= nullptr;
+
+void queryXInputController()
+{
+	if( w32XInputGetState == nullptr )
 	{
 		return;
+	}
+
+	XINPUT_STATE state;
+	const DWORD result = w32XInputGetState(0, &state);
+	if( result != ERROR_SUCCESS )
+	{
+		return;
+	}
+
+	const WORD gamepadButtons = state.Gamepad.wButtons;
+
+	if( dominantInputType != InputType::Gamepad && gamepadButtons == 0)
+	{
+		return;
+	}
+
+	dominantInputType = InputType::Gamepad;
+	joypadState.a 		= ( gamepadButtons & XINPUT_GAMEPAD_A ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_B ) > 0;
+	joypadState.b 		= ( gamepadButtons & XINPUT_GAMEPAD_X ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_Y ) > 0;
+	joypadState.start 	= ( gamepadButtons & XINPUT_GAMEPAD_START ) > 0;
+	joypadState.select 	= ( gamepadButtons & XINPUT_GAMEPAD_BACK ) > 0;
+	joypadState.left 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_LEFT ) > 0;
+	joypadState.right 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_RIGHT ) > 0;
+	joypadState.down 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_DOWN ) > 0;
+	joypadState.up 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_UP ) > 0;
+
+	setGBEmulatorInstanceJoypadState( pEmulatorInstance, joypadState );
+}
+
+void loadXInput()
+{
+	HMODULE pXInput = LoadLibraryA("xinput1_4.dll");
+	if( pXInput == nullptr )
+	{
+		pXInput = LoadLibraryA("xinput1_3.dll");
+	}
+
+	if( pXInput == nullptr )
+	{
+		return;
+	}
+
+	w32XInputGetState = (XInputGetStateProc)GetProcAddress( pXInput, "XInputGetState");
+	w32XInputEnable = (XInputEnableProc)GetProcAddress( pXInput, "XInputEnable");
+
+	K15_RUNTIME_ASSERT(w32XInputGetState != nullptr);
+	K15_RUNTIME_ASSERT(w32XInputEnable != nullptr);
+
+	w32XInputEnable(TRUE);
+}
+
+void initializeImGui( HWND hwnd )
+{
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO(); (void)io;
+
+	ImGui::StyleColorsDark();
+
+	ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplOpenGL2_Init();
+#endif
+}
+
+BOOL setup( HWND hwnd, LPSTR romPath )
+{	
+	loadXInput();
+	createOpenGLContext( hwnd );
+
+	const uint8_t* pRomData = mapRomFile( romPath );
+	if( pRomData == nullptr )
+	{
+		return FALSE;
 	}
 
 	const uint16_t monitorRefreshRate = queryMonitorRefreshRate( hwnd );
@@ -371,17 +490,9 @@ void setup( HWND hwnd )
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-	IMGUI_CHECKVERSION();
-	ImGui::CreateContext();
-	ImGuiIO& io = ImGui::GetIO(); (void)io;
+	initializeImGui( hwnd );
 
-	ImGui::StyleColorsDark();
-
-	ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplOpenGL2_Init();
-#endif
-
+	return TRUE;
 }
 
 void doFrame(HWND hwnd)
@@ -440,53 +551,6 @@ void doFrame(HWND hwnd)
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void testCompression()
-{
-	uint8_t testData[128];
-	memset(testData + 0, 1, 20);
-	memset(testData + 20, 2, 40);
-	memset(testData + 60, 3, 68);
-
-	const size_t compressedTestSizeInBytes = calculateCompressedMemorySizeRLE( testData, sizeof( testData ) );
-	uint8_t* pCompressedBuffer = (uint8_t*)VirtualAlloc( nullptr, compressedTestSizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
-	compressMemoryBlockRLE(pCompressedBuffer, testData, sizeof( testData ));
-	memset( testData, 0, sizeof( testData ) );
-	if(!uncompressMemoryBlockRLE( testData, pCompressedBuffer ))
-	{
-		printf("Compressed failed! FourCC check failed.\n");
-		return;
-	}
-
-	for( size_t i = 0; i < 20; ++ i)
-	{
-		if( testData[i] != 1 )
-		{
-			printf("Compressed failed, test data is not the same as before compression.\n");
-			return;
-		}
-	}
-
-	for( size_t i = 20; i < 60; ++ i)
-	{
-		if( testData[i] != 2 )
-		{
-			printf("Compressed failed, test data is not the same as before compression.\n");
-			return;
-		}
-	}
-
-	for( size_t i = 60; i < 128; ++ i)
-	{
-		if( testData[i] != 3 )
-		{
-			printf("Compressed failed, test data is not the same as before compression.\n");
-			return;
-		}
-	}
-
-	printf("Compression test successful!\n");
-}
-
 int CALLBACK WinMain(HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine, int nShowCmd)
@@ -500,10 +564,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		return -1;
 	}
 
-	//FK: only for testing, duh
-	//testCompression();
-
-	setup(hwnd);
+	setup( hwnd, lpCmdLine );
 
 	uint8_t loopRunning = true;
 	MSG msg = {0};
@@ -537,6 +598,8 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		{
 			break;
 		}
+
+		queryXInputController();
 
 		QueryPerformanceCounter(&start);
 		runGBEmulatorInstance( pEmulatorInstance );
