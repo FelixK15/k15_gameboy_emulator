@@ -20,7 +20,6 @@ constexpr uint32_t backgroundHorizontalResolution = gbBackgroundTileCount * gbTi
 constexpr uint32_t backgroundVerticalResolution   = gbBackgroundTileCount * gbTileResolutionInPixels;
 constexpr uint32_t backgroundTextureSizeInBytes   = backgroundHorizontalResolution * backgroundVerticalResolution * 3;
 
-
 static struct debugViewState
 {
     struct
@@ -42,12 +41,21 @@ static struct debugViewState
 
     struct
     {
+        bool drawObjects    = true;
+        bool drawWindow     = true;
+        bool drawBackground = true;
+    } gbPpu;
+
+    struct
+    {
+        uint8_t windowTextureMemory[ backgroundTextureSizeInBytes ];
         uint8_t backgroundTextureMemory[ backgroundTextureSizeInBytes ];
         uint8_t vramTextureMemory[ vramTextureSizeInBytes ];
     } textureMemory;
 
-    GLuint  vramTextureHandle = 0;
+    GLuint  vramTextureHandle       = 0;
     GLuint  backgroundTextureHandle = 0;
+    GLuint  windowTextureHandle     = 0;
 } debugViewState;
 
 
@@ -623,6 +631,64 @@ void doEmulatorInstructionView()
     ImGui::End();
 }
 
+#if 0
+void updateWindowTexture( GBEmulatorInstance* pEmulatorInstance )
+{
+    const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
+    const GBPpuState* pPpuState = pEmulatorInstance->pPpuState;
+
+    //FK: clear texture with white color
+    memset( debugViewState.textureMemory.windowTextureMemory, 0xFF, windowTextureSizeInBytes );
+
+    if( pPpuState->pLcdControl->windowEnable )
+    {
+        const uint8_t wx = *pPpuState->lcdRegisters.pWx;
+        const uint8_t wy = *pPpuState->lcdRegisters.pWy;
+
+        for( uint32_t y = 0; y < backgroundVerticalResolution; ++y )
+        {
+            if( pPpuState->pLcdControl->windowTileMapArea )
+            {   
+                const uint8_t* pTileData = pPpuState->pTileBlocks[2];
+                pushDebugUiBackgroundTilePixels< int8_t >( pPpuState, pTileData, y );
+            }
+            else
+            {
+                const uint8_t* pTileData = pPpuState->pTileBlocks[0];
+                pushDebugUiBackgroundTilePixels< uint8_t >( pPpuState, pTileData, y );
+            }
+        }
+
+        for( uint8_t cy = 0; cy < gbVerticalResolutionInPixels; ++cy )
+        {
+            const uint8_t y = scy + cy;
+            for( uint8_t cx = 0; cx < gbHorizontalResolutionInPixels; ++cx )
+            {
+                const uint8_t x = scx + cx;
+                const uint32_t backgroundPixelIndex = ( x + y * backgroundHorizontalResolution ) * 3;
+
+                if( y == scy || ( y + 1 ) == scyEnd || x == scx || ( x + 1 ) == scxEnd )
+                {
+                    debugViewState.textureMemory.backgroundTextureMemory[ backgroundPixelIndex + 0 ] = 0xFF;
+                    debugViewState.textureMemory.backgroundTextureMemory[ backgroundPixelIndex + 1 ] = 0x00;
+                    debugViewState.textureMemory.backgroundTextureMemory[ backgroundPixelIndex + 2 ] = 0x00;
+                }
+            }
+        }
+    }
+
+    GLuint backgroundTextureHandle;
+    glGenTextures( 1, &backgroundTextureHandle );
+    glBindTexture(GL_TEXTURE_2D, backgroundTextureHandle);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, backgroundHorizontalResolution, backgroundVerticalResolution, 0, GL_RGB, GL_UNSIGNED_BYTE, debugViewState.textureMemory.backgroundTextureMemory);
+
+    glDeleteTextures( 1, &debugViewState.backgroundTextureHandle );
+    debugViewState.backgroundTextureHandle = backgroundTextureHandle;
+}
+#endif
+
 void updateVRamTexture( GBEmulatorInstance* pEmulatorInstance )
 {
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
@@ -654,8 +720,8 @@ void updateVRamTexture( GBEmulatorInstance* pEmulatorInstance )
                 for( uint8_t pixelIndex = 0; pixelIndex < 8; ++pixelIndex )
                 {
                     const uint8_t bitIndex = (7 - pixelIndex);
-                    const uint8_t pixelMSB = ( pixelBytes[0] >> bitIndex ) & 0x1;
-                    const uint8_t pixelLSB = ( pixelBytes[1] >> bitIndex ) & 0x1;
+                    const uint8_t pixelLSB = ( pixelBytes[0] >> bitIndex ) & 0x1;
+                    const uint8_t pixelMSB = ( pixelBytes[1] >> bitIndex ) & 0x1;
                     const uint8_t pixelValue = pixelMSB << 1 | pixelLSB;
 
                     const float intensity = 1.0f - (float)pixelValue * (1.0f/3.0f);
@@ -713,8 +779,8 @@ void pushDebugUiBackgroundTilePixels( const GBPpuState* pPpuState, const uint8_t
         const uint8_t* pTileTopPixelData = pTileData + tileIndex * gbTileSizeInBytes;
         const uint8_t* pTileScanlinePixelData = pTileTopPixelData + ( scanlineYCoordinate - scanlineYCoordinateInTileSpace * 8 ) * 2;
         //FK: Get pixel data of this tile for the current scanline
-        const uint8_t pixelDataMSB = pTileScanlinePixelData[0];
-        const uint8_t pixelDataLSB = pTileScanlinePixelData[1];
+        const uint8_t pixelDataLSB = pTileScanlinePixelData[0];
+        const uint8_t pixelDataMSB = pTileScanlinePixelData[1];
 
         //FK: Pixel will be written interleaved here
         uint8_t interleavedScanlinePixelData[2] = {0};
@@ -761,7 +827,7 @@ void updateBackgroundTexture( GBEmulatorInstance* pEmulatorInstance )
     //FK: clear texture with white color
     memset( debugViewState.textureMemory.backgroundTextureMemory, 0xFF, backgroundTextureSizeInBytes );
 
-    if( pPpuState->pLcdControl->bgAndWindowEnable )
+    if( pPpuState->pLcdControl->bgEnable )
     {
         const uint8_t scx = *pPpuState->lcdRegisters.pScx;
         const uint8_t scy = *pPpuState->lcdRegisters.pScy;
@@ -770,7 +836,7 @@ void updateBackgroundTexture( GBEmulatorInstance* pEmulatorInstance )
 
         for( uint32_t y = 0; y < backgroundVerticalResolution; ++y )
         {
-            if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
+            if( !pPpuState->pLcdControl->bgTileDataArea )
             {   
                 const uint8_t* pTileData = pPpuState->pTileBlocks[2];
                 pushDebugUiBackgroundTilePixels< int8_t >( pPpuState, pTileData, y );
@@ -843,16 +909,25 @@ void doVRamView( GBEmulatorInstance* pEmulatorInstance )
     {
         if( ImGui::BeginTabItem( "Window" ) )
         {
-
+            updateWindowTexture( pEmulatorInstance );
+            const size_t textureHandle = ( size_t )debugViewState.windowTextureHandle;
+            ImGui::Image( (ImTextureID)textureHandle, ImVec2( gbHorizontalWindowResolutionInPixels, gbVerticalWindowResolutionInPixels ) );
+            ImGui::EndTabItem();
         }
 
         ImGui::EndTabItem();
     }
 #endif
-  
-
    
     ImGui::EndTabBar();
+
+    ImGui::Checkbox("Show Objects",     &debugViewState.gbPpu.drawObjects );
+    ImGui::Checkbox("Show Background",  &debugViewState.gbPpu.drawBackground );
+    ImGui::Checkbox("Show Window",      &debugViewState.gbPpu.drawWindow );
+
+    pEmulatorInstance->pPpuState->flags.drawBackground  = debugViewState.gbPpu.drawBackground;
+    pEmulatorInstance->pPpuState->flags.drawWindow      = debugViewState.gbPpu.drawWindow;
+    pEmulatorInstance->pPpuState->flags.drawObjects     = debugViewState.gbPpu.drawObjects;
 }
 
 void doUiFrame( GBEmulatorInstance* pEmulatorInstance )
