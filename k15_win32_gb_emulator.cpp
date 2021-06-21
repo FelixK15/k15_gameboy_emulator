@@ -19,6 +19,38 @@ wglSwapIntervalEXTProc wglSwapIntervalEXT = nullptr;
 #	include "imgui/imgui_impl_win32.cpp"
 #	include "imgui/imgui_impl_opengl2.cpp"
 #	include "k15_gb_emulator_ui.cpp"
+#else
+#	define XINPUT_GAMEPAD_DPAD_UP          0x0001
+#	define XINPUT_GAMEPAD_DPAD_DOWN        0x0002
+#	define XINPUT_GAMEPAD_DPAD_LEFT        0x0004
+#	define XINPUT_GAMEPAD_DPAD_RIGHT       0x0008
+#	define XINPUT_GAMEPAD_START            0x0010
+#	define XINPUT_GAMEPAD_BACK             0x0020
+#	define XINPUT_GAMEPAD_LEFT_THUMB       0x0040
+#	define XINPUT_GAMEPAD_RIGHT_THUMB      0x0080
+#	define XINPUT_GAMEPAD_LEFT_SHOULDER    0x0100
+#	define XINPUT_GAMEPAD_RIGHT_SHOULDER   0x0200
+#	define XINPUT_GAMEPAD_A                0x1000
+#	define XINPUT_GAMEPAD_B                0x2000
+#	define XINPUT_GAMEPAD_X                0x4000
+#	define XINPUT_GAMEPAD_Y                0x8000
+
+typedef struct _XINPUT_GAMEPAD
+{
+    WORD                                wButtons;
+    BYTE                                bLeftTrigger;
+    BYTE                                bRightTrigger;
+    SHORT                               sThumbLX;
+    SHORT                               sThumbLY;
+    SHORT                               sThumbRX;
+    SHORT                               sThumbRY;
+} XINPUT_GAMEPAD, *PXINPUT_GAMEPAD;
+
+typedef struct _XINPUT_STATE
+{
+    DWORD                               dwPacketNumber;
+    XINPUT_GAMEPAD                      Gamepad;
+} XINPUT_STATE, *PXINPUT_STATE;
 #endif
 
 #pragma comment(lib, "user32.lib")
@@ -30,6 +62,12 @@ enum InputType
 	Gamepad,
 	Keyboard
 };
+
+typedef void (WINAPI *XInputEnableProc)(BOOL);
+typedef DWORD (WINAPI *XInputGetStateProc)(DWORD, XINPUT_STATE*);
+
+XInputGetStateProc	w32XInputGetState	= nullptr;
+XInputEnableProc	w32XInputEnable 	= nullptr;
 
 InputType dominantInputType = Gamepad;
 
@@ -379,13 +417,6 @@ const uint8_t* mapRomFile( const char* pRomFileName )
 	return (const uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
 }
 
-
-typedef void (WINAPI *XInputEnableProc)(BOOL);
-typedef DWORD (WINAPI *XInputGetStateProc)(DWORD, XINPUT_STATE*);
-
-XInputGetStateProc	w32XInputGetState	= nullptr;
-XInputEnableProc	w32XInputEnable 	= nullptr;
-
 void queryXInputController()
 {
 	if( w32XInputGetState == nullptr )
@@ -498,7 +529,7 @@ BOOL setup( HWND hwnd, LPSTR romPath )
 void doFrame(HWND hwnd)
 {
 	char windowTitle[128];
-	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms - ui: %.3f - %d hz monitor refresh rate", gameTitle, (float)deltaTimeInMicroseconds/1000.f, (float)uiDeltaTimeInMicroseconds/1000.f, pEmulatorInstance->monitorRefreshRate );
+	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms - ui: %.3f ms - %d hz monitor refresh rate", gameTitle, (float)deltaTimeInMicroseconds/1000.f, (float)uiDeltaTimeInMicroseconds/1000.f, pEmulatorInstance->monitorRefreshRate );
 	SetWindowText(hwnd, (LPCSTR)windowTitle);
 
 	const float pixelUnitH = 1.0f/(float)screenWidth;
