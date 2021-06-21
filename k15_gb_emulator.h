@@ -1668,12 +1668,11 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
         drawScanline( pPpuState, *pLy );
         lcdDotCounter -= 172;
         lcdMode = 0;
+        triggerLCDStatInterrupt = pLcdStatus->enableMode0HBlankInterrupt;
     }
     else if( lcdMode == 0 && lcdDotCounter >= 204 )
     {
         incrementLy( &pPpuState->lcdRegisters, pLy );
-
-        triggerLCDStatInterrupt = pLcdStatus->enableMode0HBlankInterrupt;
 		if( pLcdStatus->enableLycEqLyInterrupt == 1 && pLcdStatus->LycEqLyFlag )
 		{
 			triggerLCDStatInterrupt = 1;
