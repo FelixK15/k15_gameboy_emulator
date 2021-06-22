@@ -71,6 +71,8 @@ In case the emulator isn't run on a 60Hz monitor, the monitor refresh rate can b
   - [x] Add code stepping
   - [x] Add memory inspection
   - [x] Add VRAM viewer
+  - [x] Add background tile viewer
+  - [ ] Add window tile viewer
 - [ ] Implement rom-switching
   - [x] MBC1
   - [ ] MBC3
@@ -86,7 +88,7 @@ In case the emulator isn't run on a 60Hz monitor, the monitor refresh rate can b
   - [x] pass instr_timing
   - [ ] pass interrupt_time
   - [ ] pass mem_timing
-  - [ ] pass cpu_instrs
+  - [x] pass cpu_instrs
 - [ ] Implement Nintendo GameBoy Color features
 - [ ] Implement sound
 
