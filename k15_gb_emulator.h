@@ -2687,31 +2687,16 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
 
         case 0x07: case 0x17: case 0x0F: case 0x1F:
             handleCbOpcode(pCpuState, pMemoryMapper, opcode);
+
+            //FK: Reset Zero flag for these instructions.
             pCpuState->registers.F.Z = 0;
             break;
 
         //ADC
-        case 0xCE:
+        case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8C: case 0x8D: case 0x8E: case 0x8F: case 0xCE:
         {
-            const uint8_t value             = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
-            const uint8_t accumulator       = pCpuState->registers.A;
-            const uint8_t carry             = pCpuState->registers.F.C;
-            const uint16_t newValue         = ( uint16_t )accumulator + ( uint16_t )value + carry;
-            const uint8_t  newValueNibble   = ( accumulator & 0x0F ) + ( value & 0x0F ) + carry;
-
-            pCpuState->registers.A = ( uint8_t )newValue;
-
-            pCpuState->registers.F.Z = pCpuState->registers.A == 0;
-            pCpuState->registers.F.C = newValue > 0xFF;
-            pCpuState->registers.F.H = newValueNibble > 0x0F;
-            pCpuState->registers.F.N = 0;
-            break;
-        }
-
-        //ADC
-        case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8C: case 0x8D: case 0x8E: case 0x8F:
-        {
-            const uint8_t value             = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t value             = opcode == 0xCE ? read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ ) :
+                                                               getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
             const uint8_t accumulator       = pCpuState->registers.A;
             const uint8_t carry             = pCpuState->registers.F.C;
             const uint16_t newValue         = accumulator + value + carry;
@@ -2727,28 +2712,10 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
         }
 
         //SBC
-        case 0xDE:
+        case 0x98: case 0x99: case 0x9A: case 0x9B: case 0x9C: case 0x9D: case 0x9E: case 0x9F: case 0xDE:
         {
-            const uint8_t value         = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
-            const uint8_t carry         = pCpuState->registers.F.C;
-            const uint8_t accumulator   = pCpuState->registers.A;
-
-            const int16_t newValue = accumulator - value - carry;
-            const int16_t newValueNibble = ( accumulator & 0x0F ) - ( value & 0x0F ) - carry;
-
-            pCpuState->registers.A = ( uint8_t )newValue;
-
-            pCpuState->registers.F.Z = pCpuState->registers.A == 0;
-            pCpuState->registers.F.C = newValue < 0;
-            pCpuState->registers.F.H = newValueNibble < 0;
-            pCpuState->registers.F.N = 1;
-            break;
-        }
-
-        //SBC
-        case 0x98: case 0x99: case 0x9A: case 0x9B: case 0x9C: case 0x9D: case 0x9E: case 0x9F:
-        {
-            const uint8_t value         = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t value         = opcode == 0xDE ? read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ ) : 
+                                                           getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
             const uint8_t carry         = pCpuState->registers.F.C;
             const uint8_t accumulator   = pCpuState->registers.A;
 
