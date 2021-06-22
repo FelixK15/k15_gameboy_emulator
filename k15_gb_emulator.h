@@ -1069,8 +1069,7 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 0,  0b11100100 );
     extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 4,  0b11100100 );
 
-    //FK: Dot counter after boot rom...?
-    pPpuState->dotCounter = 424;
+    pPpuState->dotCounter = 0;
     pPpuState->scanlineSpriteCounter = 0;
 
     pPpuState->flags.drawBackground = 1;
