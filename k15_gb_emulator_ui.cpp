@@ -836,7 +836,7 @@ void updateBackgroundTexture( GBEmulatorInstance* pEmulatorInstance )
 
         for( uint32_t y = 0; y < backgroundVerticalResolution; ++y )
         {
-            if( !pPpuState->pLcdControl->bgTileDataArea )
+            if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
             {   
                 const uint8_t* pTileData = pPpuState->pTileBlocks[2];
                 pushDebugUiBackgroundTilePixels< int8_t >( pPpuState, pTileData, y );
