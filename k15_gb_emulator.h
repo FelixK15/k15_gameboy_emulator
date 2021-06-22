@@ -33,7 +33,7 @@
 static constexpr uint32_t   gbStateFourCC                           = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
 static constexpr uint32_t   gbCpuFrequency                          = 4194304u;
 static constexpr uint32_t   gbPPUCyclesPerFrame                     = 70224u;
-static constexpr uint8_t    gbStateVersion                          = 1;
+static constexpr uint8_t    gbStateVersion                          = 2;
 static constexpr uint8_t    gbOAMSizeInBytes                        = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                         = 160u;
 static constexpr uint8_t    gbSpriteHeight                          = 16u;
@@ -240,14 +240,14 @@ struct GBObjectAttributes
 
 struct GBLcdControl
 {
-    uint8_t bgEnable                : 1;
-    uint8_t objEnable               : 1;
-    uint8_t objSize                 : 1;
-    uint8_t bgTileMapArea           : 1;
-    uint8_t bgTileDataArea          : 1;
-    uint8_t windowEnable            : 1;
-    uint8_t windowTileMapArea       : 1;
-    uint8_t enable                  : 1;
+    uint8_t bgEnable                    : 1;
+    uint8_t objEnable                   : 1;
+    uint8_t objSize                     : 1;
+    uint8_t bgTileMapArea               : 1;
+    uint8_t bgAndWindowTileDataArea     : 1;
+    uint8_t windowEnable                : 1;
+    uint8_t windowTileMapArea           : 1;
+    uint8_t enable                      : 1;
 };
 
 struct GBPalette
@@ -404,6 +404,7 @@ struct GBCartridge
     GBCartridgeHeader   header;
     uint8_t             romBankCount;
     uint8_t             mappedRomBankNumber;
+    uint8_t             ramEnabled              : 1;
 };
 
 struct GBEmulatorInstance
@@ -428,6 +429,7 @@ struct GBEmulatorState
     GBCpuState    cpuState;
     GBPpuState    ppuState;
     GBTimerState  timerState;
+    GBCartridge   cartridge;
     uint8_t       mappedRomBankNumber;
 };
 
@@ -658,6 +660,7 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     state.cpuState                  = *pCpuState;
     state.ppuState                  = *pPpuState;
     state.timerState                = *pTimerState;
+    state.cartridge                 = *pCartridge;
     state.mappedRomBankNumber       = pCartridge->mappedRomBankNumber;
 
     memcpy( pStateMemory, &gbStateFourCC, sizeof( gbStateFourCC ) );
@@ -742,11 +745,13 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     *pEmulatorInstance->pCpuState   = state.cpuState;
     *pEmulatorInstance->pPpuState   = state.ppuState;
     *pEmulatorInstance->pTimerState = state.timerState;
+    *pEmulatorInstance->pCartridge  = state.cartridge;
 
     GBCartridge* pCartridge = pEmulatorInstance->pCartridge;
-    pCartridge->pRomBaseAddress = pRomBaseAddress;
-    pCartridge->header          = getGBCartridgeHeader( pRomBaseAddress );
-    
+    pCartridge->pRomBaseAddress     = pRomBaseAddress;
+    pCartridge->mappedRomBankNumber = 0;
+    pCartridge->header              = getGBCartridgeHeader( pRomBaseAddress );
+
     const size_t romSizeInBytes = mapRomSizeToByteSize( pCartridge->header.romSize );
     pCartridge->romBankCount    = ( uint8_t )( romSizeInBytes / Kbyte( 16 ) );
     
@@ -926,6 +931,7 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
 {
     const GBCartridgeHeader header = getGBCartridgeHeader( pRomMemory );
     const size_t romSizeInBytes = mapRomSizeToByteSize( header.romSize );
+    pCartridge->ramEnabled      = 0;
     pCartridge->header          = header;
     pCartridge->pRomBaseAddress = pRomMemory;
     pCartridge->romBankCount    = ( uint8_t )( romSizeInBytes / Kbyte( 16 ) );
@@ -1225,7 +1231,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         uint16_t tilePixelMask = 0;
 
         uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
-        const uint8_t spritePos = pSprite->x - 8;
+        const uint8_t spritePos = pSprite->x < 8 ? 0 : pSprite->x - 8;
 
         uint8_t scanlineByteIndex = spritePos/4;
         uint8_t scanlinePixelDataShift = 6 - (spritePos%4) * 2;
@@ -1328,18 +1334,18 @@ void pushWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_t* pTileData
     //    now we have to evaluate sx to copy the correct 144 pixel range to the framebuffer.
     //      Note: scanlinePixelData is now 2bpp
 
-    const uint8_t wxpos = wx+8;
+    const uint8_t wxpos = wx < 7 ? 0 : wx-7;
     uint8_t scanlinePixelDataShift = 6 - (wxpos%4) * 2;
     uint8_t scanlinePixelDataIndex = wxpos/4;
 
     uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
-    for( uint8_t scanlineByteIndex = 0; scanlineByteIndex < gbFrameBufferScanlineSizeInBytes; ++scanlineByteIndex )
+    for( uint8_t scanlineByteIndex = scanlinePixelDataIndex; scanlineByteIndex < gbFrameBufferScanlineSizeInBytes; ++scanlineByteIndex )
     {
         uint8_t frameBufferByte = 0; //FK: 1 framebuffer byte = 4 pixels with 2bpp
 
         for( uint8_t pixelIndex = 0; pixelIndex < 4; ++pixelIndex )
         {
-            const uint8_t pixelValue = ( interleavedScanlinePixelData[ scanlinePixelDataIndex ] >> scanlinePixelDataShift ) & 0x3;
+            const uint8_t pixelValue = ( interleavedScanlinePixelData[ scanlinePixelDataIndex - (wxpos/4) ] >> scanlinePixelDataShift ) & 0x3;
             frameBufferByte |= pixelValue << ( 6 - ( pixelIndex * 2 ) );
 
             if( scanlinePixelDataShift == 0 )
@@ -1499,7 +1505,7 @@ void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
     if( pPpuState->pLcdControl->bgEnable && pPpuState->flags.drawBackground )
     {
         //FK: Determine tile addressing mode
-        if( !pPpuState->pLcdControl->bgTileDataArea )
+        if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
         {
             const uint8_t* pTileData = pPpuState->pTileBlocks[2];
             pushBackgroundPixelsToScanline< int8_t >( pPpuState, pTileData, scanlineYCoordinate );
@@ -1518,8 +1524,8 @@ void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 
         if( wx <= 166 && wy <= 143 && scanlineYCoordinate >= wy )
         {
-                 //FK: Determine tile addressing mode
-            if( pPpuState->pLcdControl->windowTileMapArea )
+            //FK: Determine tile addressing mode
+            if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
             {
                 const uint8_t* pTileData = pPpuState->pTileBlocks[2];
                 pushWindowPixelsToScanline< int8_t >( pPpuState, pTileData, scanlineYCoordinate, wx, wy );
@@ -2531,15 +2537,16 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
         //ADD HL, nn
         case 0x09: case 0x19: case 0x29: case 0x39:
         {
-            const uint16_t* pOperand = getOpcode16BitOperand( pCpuState, opcode );
-            const uint16_t value = *pOperand;
-            const uint32_t new32BitRegisterValue = pCpuState->registers.HL + value;
+            const uint16_t* pOperand    = getOpcode16BitOperand( pCpuState, opcode );
+            const uint16_t value        = *pOperand;
+            const uint16_t hl           = pCpuState->registers.HL;
+            const uint32_t newValueHL   = hl + value;
 
             pCpuState->registers.F.N = 0;
-            pCpuState->registers.F.H = ((pCpuState->registers.HL & 0xFFF) + (value & 0xFFF)) & 0x1000;
-            pCpuState->registers.F.C = new32BitRegisterValue > 0xFFFF;
+            pCpuState->registers.F.C = ( newValueHL & 0x10000 ) > 0;
+            pCpuState->registers.F.H = ( (hl & 0x0FFF) + ( value & 0x0FFF ) & 0x1000 ) > 0;
 
-            pCpuState->registers.HL = (uint16_t)new32BitRegisterValue;
+            pCpuState->registers.HL = (uint16_t)newValueHL;
             break;
         }
 
@@ -2675,23 +2682,28 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
         case 0xCB: 
             opcode = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
             pOpcode = cbPrefixedOpcodes + opcode;
-            //FK: let it fall through...
+            handleCbOpcode(pCpuState, pMemoryMapper, opcode);
+            break;
 
         case 0x07: case 0x17: case 0x0F: case 0x1F:
             handleCbOpcode(pCpuState, pMemoryMapper, opcode);
+            pCpuState->registers.F.Z = 0;
             break;
 
         //ADC
         case 0xCE:
         {
-            const uint8_t value = pCpuState->registers.F.C + read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
-            const uint16_t accumulator16BitValue = pCpuState->registers.A + value;
-            const uint8_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) + pCpuState->registers.F.C + ( value & 0x0F );
-            pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
-            
-            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
-            pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
-            pCpuState->registers.F.H = (accumulatorLN > 0x0F);
+            const uint8_t value             = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
+            const uint8_t accumulator       = pCpuState->registers.A;
+            const uint8_t carry             = pCpuState->registers.F.C;
+            const uint16_t newValue         = ( uint16_t )accumulator + ( uint16_t )value + carry;
+            const uint8_t  newValueNibble   = ( accumulator & 0x0F ) + ( value & 0x0F ) + carry;
+
+            pCpuState->registers.A = ( uint8_t )newValue;
+
+            pCpuState->registers.F.Z = pCpuState->registers.A == 0;
+            pCpuState->registers.F.C = newValue > 0xFF;
+            pCpuState->registers.F.H = newValueNibble > 0x0F;
             pCpuState->registers.F.N = 0;
             break;
         }
@@ -2699,14 +2711,17 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
         //ADC
         case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8C: case 0x8D: case 0x8E: case 0x8F:
         {
-            const uint8_t operand = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
-            const uint16_t accumulator16BitValue = pCpuState->registers.A + pCpuState->registers.F.C + operand;
-            const uint8_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) + pCpuState->registers.F.C + ( operand & 0x0F );
-            pCpuState->registers.A = ( uint8_t )accumulator16BitValue;
-            
-            pCpuState->registers.F.Z = (pCpuState->registers.A == 0);
-            pCpuState->registers.F.C = (accumulator16BitValue > 0xFF);
-            pCpuState->registers.F.H = (accumulatorLN > 0x0F);
+            const uint8_t value             = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t accumulator       = pCpuState->registers.A;
+            const uint8_t carry             = pCpuState->registers.F.C;
+            const uint16_t newValue         = accumulator + value + carry;
+            const uint8_t  newValueNibble   = ( accumulator & 0x0F ) + ( value & 0x0F ) + carry;
+
+            pCpuState->registers.A = ( uint8_t )newValue;
+
+            pCpuState->registers.F.Z = pCpuState->registers.A == 0;
+            pCpuState->registers.F.C = newValue > 0xFF;
+            pCpuState->registers.F.H = newValueNibble > 0x0F;
             pCpuState->registers.F.N = 0;
             break;
         }
@@ -2714,14 +2729,18 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
         //SBC
         case 0xDE:
         {
-            const uint8_t value = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
-            const int16_t accumulator16BitValue = pCpuState->registers.A - value - pCpuState->registers.F.C;
-            const int16_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) - pCpuState->registers.F.C - ( value & 0x0F );
+            const uint8_t value         = read8BitValueFromMappedMemory( pMemoryMapper, pCpuState->registers.PC++ );
+            const uint8_t carry         = pCpuState->registers.F.C;
+            const uint8_t accumulator   = pCpuState->registers.A;
 
-            pCpuState->registers.A   = (uint8_t)accumulator16BitValue;
-            pCpuState->registers.F.Z = (accumulator16BitValue == 0);
-            pCpuState->registers.F.C = (accumulator16BitValue < 0);
-            pCpuState->registers.F.H = (accumulatorLN < 0);
+            const int16_t newValue = accumulator - value - carry;
+            const int16_t newValueNibble = ( accumulator & 0x0F ) - ( value & 0x0F ) - carry;
+
+            pCpuState->registers.A = ( uint8_t )newValue;
+
+            pCpuState->registers.F.Z = pCpuState->registers.A == 0;
+            pCpuState->registers.F.C = newValue < 0;
+            pCpuState->registers.F.H = newValueNibble < 0;
             pCpuState->registers.F.N = 1;
             break;
         }
@@ -2729,15 +2748,18 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
         //SBC
         case 0x98: case 0x99: case 0x9A: case 0x9B: case 0x9C: case 0x9D: case 0x9E: case 0x9F:
         {
-            const uint8_t operand = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
-            const uint8_t value = pCpuState->registers.F.C + operand;
-            const int16_t accumulator16BitValue = pCpuState->registers.A - value;
-            const int16_t accumulatorLN = ( pCpuState->registers.A & 0x0F ) - pCpuState->registers.F.C - ( operand & 0x0F );
+            const uint8_t value         = getOpcode8BitOperandRHS( pCpuState, pMemoryMapper, opcode );
+            const uint8_t carry         = pCpuState->registers.F.C;
+            const uint8_t accumulator   = pCpuState->registers.A;
 
-            pCpuState->registers.A   = ( uint8_t ) accumulator16BitValue;
-            pCpuState->registers.F.Z = (accumulator16BitValue == 0);
-            pCpuState->registers.F.C = (accumulator16BitValue < 0);
-            pCpuState->registers.F.H = (accumulatorLN < 0);
+            const int16_t newValue = accumulator - value - carry;
+            const int16_t newValueNibble = ( accumulator & 0x0F ) - ( value & 0x0F ) - carry;
+
+            pCpuState->registers.A = ( uint8_t )newValue;
+
+            pCpuState->registers.F.Z = pCpuState->registers.A == 0;
+            pCpuState->registers.F.C = newValue < 0;
+            pCpuState->registers.F.H = newValueNibble < 0;
             pCpuState->registers.F.N = 1;
             break;
         }
@@ -2910,6 +2932,17 @@ bool handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypadState joypadSta
     return 0;
 }
 
+void handleMBC1RamWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper )
+{
+    const uint16_t address  = pMemoryMapper->lastAddressWrittenTo;
+    const uint8_t value     = pMemoryMapper->lastValueWritten;
+
+    if( isInMBC1RamEnableRegisterRange( address ) )
+    {
+        pCartridge->ramEnabled = ( value & 0xF ) == 0xA;
+    }
+}
+
 void handleMBC1RomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper )
 {
     const uint16_t address  = pMemoryMapper->lastAddressWrittenTo;
@@ -2921,6 +2954,19 @@ void handleMBC1RomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper 
         const uint8_t romBankNumber = value == 0 ? 1 : ( value & romBankNumberMask );
         mapCartridgeMemoryBank( pCartridge, pMemoryMapper, romBankNumber );
     }
+}
+
+void handleCartridgeRamWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper )
+{
+    switch( pCartridge->header.cartridgeType )
+    {
+        case ROM_MBC1_RAM:
+        case ROM_MBC1_RAM_BATT:
+            handleMBC1RamWrite( pCartridge, pMemoryMapper );
+            return;
+    }
+
+    return;
 }
 
 void handleCartridgeRomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper )
@@ -3032,6 +3078,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
     if( isInCartridgeRomAddressRange( pMemoryMapper->lastAddressWrittenTo ) )
     {
+        handleCartridgeRamWrite( pEmulatorInstance->pCartridge, pMemoryMapper );
         handleCartridgeRomWrite( pEmulatorInstance->pCartridge, pMemoryMapper );
     }
 
