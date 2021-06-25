@@ -7,6 +7,7 @@
 #define K15_UNUSED_VAR(x) (void)x
 
 #include "k15_gb_opcodes.h"
+#include "k15_bitmap_font_data.cpp"
 
 #define Kbyte(x) ((x)*1024)
 #define Mbyte(x) (Kbyte(x)*1024)
@@ -15,7 +16,7 @@
 #define Mbit(x) (Mbyte(x)/8)
 
 #define FourCC(a, b, c, d) ((uint32_t)((a) << 0) | (uint32_t)((b) << 8) | (uint32_t)((c) << 16) | (uint32_t)((d) << 24))
-
+#define ArrayCount(arr) (sizeof(arr)/sizeof(arr[0]))
 //FK: Compiler specific functions
 #ifdef _MSC_VER
 #   include <intrin.h>
@@ -3057,6 +3058,54 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     pMemoryMapper->dmaActive    = pCpuState->flags.dma;
 
     return cycleCost;
+}
+
+const uint8_t* getGlyphPixel( char glyph )
+{
+    const char glyphIndex = glyph - 32u;
+    const uint8_t rowIndex = glyphIndex / glyphRowCount;
+    const uint8_t columnIndex = glyphIndex % glyphRowCount;
+    const uint8_t y = ( fontPixelDataHeightInPixels - 1 ) - ( rowIndex * glyphHeightInPixels );
+    const uint8_t x = columnIndex * glyphWidthInPixels;
+    return fontPixelData + (x + y * fontPixelDataWidthInPixels) * 3;
+}
+
+void renderGBEmulatorInstanceOverlayToRGBFrameBuffer( const GBEmulatorInstance* pEmulatorInstance, uint8_t* pRGBFrameBuffer )
+{
+#if 1
+    (void)pEmulatorInstance;
+    (void)pRGBFrameBuffer;
+#else
+    const uint8_t scrollOffset = 3;
+    const char test[] = "State saved...";
+    //const char test[] = "?";
+    const size_t pixelWidth = (ArrayCount(test)-1) * glyphWidthInPixels;
+    
+    const size_t startX = ( gbHorizontalResolutionInPixels - pixelWidth ) / 2;
+    const size_t startY = ( gbVerticalResolutionInPixels - scrollOffset );
+    for( size_t charIndex = 0; charIndex < (ArrayCount(test)-1); ++charIndex )
+    {
+        const uint8_t* pGlyphPixels = getGlyphPixel( test[charIndex] );
+        size_t x = startX + charIndex * glyphWidthInPixels;
+        for( size_t y = startY; y < gbVerticalResolutionInPixels; ++y)
+        {
+            const uint8_t* pGlyphPixelsRunning = pGlyphPixels;
+            const size_t endX = x + glyphWidthInPixels;
+            for( ;x < endX; ++x)
+            {
+                const size_t pixelIndex = ( x + y * gbHorizontalResolutionInPixels ) * 3;
+
+                //FK: BGR
+                pRGBFrameBuffer[pixelIndex + 2] = *pGlyphPixelsRunning++;
+                pRGBFrameBuffer[pixelIndex + 1] = *pGlyphPixelsRunning++;
+                pRGBFrameBuffer[pixelIndex + 0] = *pGlyphPixelsRunning++;
+            }
+
+            x = startX + charIndex * glyphWidthInPixels;
+            pGlyphPixels -= ( fontPixelDataWidthInPixels * 3 );
+        }
+    }
+#endif
 }
 
 void convertGBFrameBufferToRGB8Buffer( uint8_t* pRGBFrameBuffer, const uint8_t* pGBFrameBuffer)

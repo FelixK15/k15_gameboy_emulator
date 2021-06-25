@@ -26,7 +26,7 @@
             //"args": [ "Prehistorik Man (USA, Europe).gb"],                        //Hang after Intro
             //"args": [ "Alleyway (World).gb"],                                     //Serial interrupt issue
             //"args": [ "Baseball (World).gb"],                                     //Serial interrupt issue
-            //"args": [ "Super Mario Land (World).gb" ],                            //Works
+            "args": [ "Super Mario Land (World).gb" ],                            //Works
             //"args": [ "Mega Man - Dr. Wily's Revenge (USA).gb" ],                 //Works, Sprite flickering (8x16 sprites)
             //"args": [ "Bomb Jack (Europe).gb" ],                                  //Works
             //"args": [ "Tetris (Japan) (En).gb" ],                                 //Works
@@ -47,6 +47,18 @@
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],
+        },
+        {
+            "name": "Debug convert bitmap to c array",
+            "type": "python",
+            "request":"launch",
+            "program": "convert_bitmap_font_to_c_array.py",
+            "args":["-i", "charmap-cellphone_black.bmp",
+                     "-o", "k15_bitmap_font_data.cpp",
+                     "-gw", "7",
+                     "-gh", "9",
+                     "-gr", "18"],
+            "cwd": "${workspaceFolder}",
         }
     ]
 }

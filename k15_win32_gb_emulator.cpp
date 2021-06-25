@@ -3,6 +3,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <audioclient.h>
+#include <mmdeviceapi.h>
+#include <comdef.h>
+
 #include <stdio.h>
 #include <gl/GL.h>
 #include "k15_gb_emulator.h"
@@ -56,12 +60,28 @@ typedef struct _XINPUT_STATE
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "opengl32.lib")
+#pragma comment(lib, "Ole32.lib")
+
+const IID 	IID_IAudioClient			= _uuidof(IAudioClient);
+const IID 	IID_IAudioRenderClient		= _uuidof(IAudioRenderClient);
+const IID 	IID_IMMDeviceEnumerator 	= _uuidof(IMMDeviceEnumerator);
+const CLSID CLSID_MMDeviceEnumerator 	= _uuidof(MMDeviceEnumerator);
 
 enum InputType
 {
 	Gamepad,
 	Keyboard
 };
+
+#define K15_RETURN_ON_HRESULT_ERROR(comFunction) \
+{	\
+	_com_error comFunctionResult(comFunction); \
+	if( comFunctionResult.Error() != S_OK ) \
+	{ \
+		printf("COM function '%s' failed with '%s'.\n", #comFunction, comFunctionResult.ErrorMessage()); \
+		return; \
+	} \
+}
 
 typedef void (WINAPI *XInputEnableProc)(BOOL);
 typedef DWORD (WINAPI *XInputGetStateProc)(DWORD, XINPUT_STATE*);
@@ -92,6 +112,9 @@ uint8_t buttonInput								= 0x0F;
 GBEmulatorInstance* pEmulatorInstance 			= nullptr;
 GBEmulatorJoypadState joypadState;
 
+LARGE_INTEGER perfCounterFrequency;
+
+
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
 
 uint16_t queryMonitorRefreshRate( HWND hwnd )
@@ -108,7 +131,7 @@ uint16_t queryMonitorRefreshRate( HWND hwnd )
 	DEVMODE displayInfo;
 	if( EnumDisplaySettings( monitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &displayInfo ) == FALSE )
 	{
-		return 60; 
+		return 60; //FK: assume 60hz as default
 	}
 
 	return (uint16_t)displayInfo.dmDisplayFrequency;
@@ -303,13 +326,13 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 
 HWND setupWindow(HINSTANCE pInstance, int width, int height)
 {
-	WNDCLASS wndClass = {0};
-	wndClass.style = CS_HREDRAW | CS_OWNDC | CS_VREDRAW;
-	wndClass.hInstance = pInstance;
-	wndClass.lpszClassName = "K15_Win32Template";
-	wndClass.lpfnWndProc = K15_WNDPROC;
-	wndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
-	RegisterClass(&wndClass);
+	WNDCLASSA wndClass 		= {0};
+	wndClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW;
+	wndClass.hInstance 		= pInstance;
+	wndClass.lpszClassName 	= "K15_Win32Template";
+	wndClass.lpfnWndProc 	= K15_WNDPROC;
+	wndClass.hCursor 		= LoadCursor(NULL, IDC_ARROW);
+	RegisterClassA(&wndClass);
 
 	HWND hwnd = CreateWindowA("K15_Win32Template", "Win32 Template",
 		WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
@@ -317,7 +340,7 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 
 	if (hwnd == INVALID_HANDLE_VALUE)
 	{
-		MessageBox(0, "Error creating Window.\n", "Error!", 0);
+		MessageBoxA(0, "Error creating Window.\n", "Error!", 0);
 		return nullptr;
 	}
 
@@ -400,7 +423,7 @@ const uint8_t* mapRomFile( const char* pRomFileName )
 	strcpy_s( fixedRomFileName, pRomFileName );
 
 	pRomFileName = fixRomFileName( fixedRomFileName );
-	HANDLE pRomHandle = CreateFile( pRomFileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr );
+	HANDLE pRomHandle = CreateFileA( pRomFileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr );
 	if( pRomHandle == INVALID_HANDLE_VALUE )
 	{
 		printf("Could not open '%s'.\n", pRomFileName);
@@ -451,7 +474,7 @@ void queryXInputController()
 	setGBEmulatorInstanceJoypadState( pEmulatorInstance, joypadState );
 }
 
-void loadXInput()
+void initXInput()
 {
 	HMODULE pXInput = LoadLibraryA("xinput1_4.dll");
 	if( pXInput == nullptr )
@@ -487,9 +510,202 @@ void initializeImGui( HWND hwnd )
 #endif
 }
 
+constexpr float pi = 3.14159f;
+constexpr float twoPi = 2.0f*pi;
+float getSineWaveSample(const float t, const float a, const float f)
+{
+	const float ft = f*t;
+	return a * sinf(twoPi*ft);
+}
+
+float getSquareWaveSample(const float t, const float a, const float f )
+{
+	const float s = getSineWaveSample(t, 1.0f, f);
+	return a * (s < 0.0f ? -1.f : 1.f);
+}
+
+float getAnalogSquareWaveSample(const float t, const float a, const float f )
+{	
+	const float ft = f*t;
+	float s = 0.0f;
+	for( uint8_t i = 1; i < 22; ++i )
+	{	
+		const float k = (float)i;
+		s += sinf(twoPi*(2.0f*k-1.0f)*ft)/(2.0f*k-1);
+	}
+
+	return a*s;
+}
+
+float getTriangleWaveSample(const float t, const float a, const float f)
+{
+	return asinf(getSineWaveSample(t, a, f) * 2.0f / pi);
+}
+
+float getNoiseSample(const float t, const float a, const float f)
+{
+	return a * ( 2.0f * ((float)rand() / (float)RAND_MAX) - 1.0f );
+}
+
+void initWasapi()
+{
+#if 1
+	return;
+#else
+	IMMDeviceEnumerator* pEnumerator = nullptr;
+	K15_RETURN_ON_HRESULT_ERROR( CoCreateInstance( CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&pEnumerator) );
+
+	IMMDevice* pDevice = nullptr;
+	K15_RETURN_ON_HRESULT_ERROR( pEnumerator->GetDefaultAudioEndpoint( eRender, eConsole, &pDevice ) );
+
+	IAudioClient* pAudioClient = nullptr;
+	constexpr PROPVARIANT* pActivationParams = nullptr; //FK: Set to NULL to activate an IAudioClient
+	K15_RETURN_ON_HRESULT_ERROR( pDevice->Activate( IID_IAudioClient, CLSCTX_ALL, pActivationParams, (void**)&pAudioClient ) );
+
+	WAVEFORMATEX* pWaveFormat = nullptr;
+	K15_RETURN_ON_HRESULT_ERROR( pAudioClient->GetMixFormat( &pWaveFormat ) );
+
+	constexpr uint32_t nanosecondsToMilliseconds = 1000000;
+	constexpr REFERENCE_TIME bufferDuration = 16 * nanosecondsToMilliseconds / 100; //FK: Each REFERENCE_TIME unit is 100ns ¯\_(ツ)_/¯
+	
+	constexpr DWORD streamFlags = 0; //FK: There are some interesting flags to set 	https://docs.microsoft.com/en-us/windows/win32/coreaudio/audclnt-streamflags-xxx-constants
+							     	 //												https://docs.microsoft.com/en-us/windows/win32/coreaudio/audclnt-sessionflags-xxx-constants
+	
+	constexpr REFERENCE_TIME periodicity = 0; //FK: This parameter can be nonzero only in exclusive mode.
+	constexpr LPCGUID pSessionGuid = nullptr; //FK: Add stream to existing session (what exactly is a session?)
+	K15_RETURN_ON_HRESULT_ERROR( pAudioClient->Initialize( AUDCLNT_SHAREMODE_SHARED, streamFlags, bufferDuration, periodicity, pWaveFormat, pSessionGuid ) );
+
+	// The size in bytes of an audio frame is calculated as the number of channels in the stream multiplied by the sample size per channel
+	UINT32 bufferFrameCount = 0;
+	K15_RETURN_ON_HRESULT_ERROR( pAudioClient->GetBufferSize( &bufferFrameCount ) );
+
+	IAudioRenderClient* pAudioRenderClient = nullptr;
+	K15_RETURN_ON_HRESULT_ERROR( pAudioClient->GetService(IID_IAudioRenderClient, (void**)&pAudioRenderClient) );
+	K15_RETURN_ON_HRESULT_ERROR( pAudioClient->Start() );
+
+	LARGE_INTEGER start = {};
+	LARGE_INTEGER end	= {};
+	const float step = 1.0f/(float)bufferFrameCount;
+	float t = 0.0f;
+	float a = 0.1f;
+	float f = 20.0f;
+	uint8_t type = 0;
+	while( true )
+	{	
+		QueryPerformanceCounter(&start);
+
+		UINT32 padding = 0;
+
+		// A rendering application can use the padding value to determine how much new data it can safely write to the endpoint 
+		// buffer without overwriting previously written data that the audio engine has not yet read from the buffer.
+		K15_RETURN_ON_HRESULT_ERROR( pAudioClient->GetCurrentPadding( &padding ) );
+
+		const UINT32 framesToRender = bufferFrameCount - padding;
+
+		BYTE* pAudioRenderBuffer = nullptr;
+		K15_RETURN_ON_HRESULT_ERROR( pAudioRenderClient->GetBuffer( framesToRender, &pAudioRenderBuffer ) );
+		float* pBuffer = (float*)pAudioRenderBuffer;
+
+		if( GetAsyncKeyState(VK_F1) & 0x8000 )
+		{
+			f = 5000.f;
+		}
+		else if( GetAsyncKeyState(VK_F2) & 0x8000 )
+		{
+			f = 20.0f;
+		}
+		else if( GetAsyncKeyState(VK_F3) & 0x8000 )
+		{
+			f = 10000.0f;
+		}
+		
+		if( GetAsyncKeyState(VK_UP) & 0x8000 )
+		{
+			a += 0.01f;
+		}
+		else if( GetAsyncKeyState(VK_DOWN) & 0x8000 )
+		{
+			a -= 0.01f;
+		}
+
+		if( GetAsyncKeyState('0') & 0x8000 )
+		{
+			type = 0;
+		}
+
+		if( GetAsyncKeyState('1') & 0x8000 )
+		{
+			type = 1;
+		}
+
+		if( GetAsyncKeyState('2') & 0x8000 )
+		{
+			type = 2;
+		}
+
+		if( GetAsyncKeyState('3') & 0x8000 )
+		{
+			type = 3;
+		}
+
+		if( GetAsyncKeyState('4') & 0x8000 )
+		{
+			type = 4;
+		}
+
+		f = max( 1.0f, f );
+		a = max( 0.0f, a );
+
+		for( size_t i = 0; i < framesToRender; ++i )
+		{	
+			//const float sample = getSinusWaveSample(t, a, f);
+			float sample = 0.0f;
+			switch( type )
+			{
+				case 0:
+					sample = getSineWaveSample(t, a, f);
+					break;
+				case 1:
+					sample = getSquareWaveSample(t, a, f);
+					break;
+				case 2:
+					sample = getTriangleWaveSample(t, a, f);
+					break;
+				case 3:
+					sample = getNoiseSample(t, a, f);
+					break;
+				case 4:
+					sample = getAnalogSquareWaveSample(t, a, f);
+					break;
+			}
+
+			for( size_t c = 0; c < pWaveFormat->nChannels; ++c )
+			{
+				*pBuffer++ = sample;
+			}
+
+			t += step;
+		}
+
+		K15_RETURN_ON_HRESULT_ERROR( pAudioRenderClient->ReleaseBuffer( framesToRender, 0 ) );
+
+		QueryPerformanceCounter(&end);
+
+		deltaTimeInMicroseconds = (uint32_t)(((end.QuadPart-start.QuadPart)*1000000)/perfCounterFrequency.QuadPart);
+		if( deltaTimeInMicroseconds < 8000)
+		{
+			Sleep(8-deltaTimeInMicroseconds/1000);
+		}
+	}
+#endif
+}
+
 BOOL setup( HWND hwnd, LPSTR romPath )
 {	
-	loadXInput();
+	QueryPerformanceFrequency(&perfCounterFrequency);
+
+	initXInput();
+	initWasapi();
 	createOpenGLContext( hwnd );
 
 	const uint8_t* pRomData = mapRomFile( romPath );
@@ -600,9 +816,6 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	uint8_t loopRunning = true;
 	MSG msg = {0};
 
-	LARGE_INTEGER freq;
-	QueryPerformanceFrequency(&freq);
-
 	LARGE_INTEGER start;
 	LARGE_INTEGER uiStart;
 	LARGE_INTEGER end;
@@ -639,7 +852,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		{
 			const uint8_t* pFrameBuffer = getGBEmulatorInstanceFrameBuffer( pEmulatorInstance );
 			convertGBFrameBufferToRGB8Buffer( pGameboyVideoBuffer, pFrameBuffer );
-
+			renderGBEmulatorInstanceOverlayToRGBFrameBuffer( pEmulatorInstance, pGameboyVideoBuffer );
 			//FK: GB frame finished, upload gb framebuffer to texture
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
 		}
@@ -665,8 +878,8 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	
 		doFrame(hwnd);
 
-		deltaTimeInMicroseconds 	= (uint32_t)(((uiStart.QuadPart-start.QuadPart)*1000000)/freq.QuadPart);
-		uiDeltaTimeInMicroseconds 	= (uint32_t)(((end.QuadPart-uiStart.QuadPart)*1000000)/freq.QuadPart);
+		deltaTimeInMicroseconds 	= (uint32_t)(((uiStart.QuadPart-start.QuadPart)*1000000)/perfCounterFrequency.QuadPart);
+		uiDeltaTimeInMicroseconds 	= (uint32_t)(((end.QuadPart-uiStart.QuadPart)*1000000)/perfCounterFrequency.QuadPart);
 	}
 
 	DestroyWindow(hwnd);
