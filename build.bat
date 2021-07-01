@@ -25,7 +25,7 @@ if "%BUILD_CONFIG%"=="debug" (
 	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Zi /GS /MTd
 ) else (
 	echo Build config = optimized release
-	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /O2 /Zi /GL /Gw /MT
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /O2 /GL /Gw /MT
 )
 
 set CL_OPTIONS=!COMPILER_OPTIONS! /link !LINKER_OPTIONS!

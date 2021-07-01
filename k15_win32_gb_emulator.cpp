@@ -3,25 +3,36 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+struct _XINPUT_STATE;
+typedef _XINPUT_STATE XINPUT_STATE;
+
+typedef int		(WINAPI *PFNCHOOSEPIXELFORMATPROC)(HDC hdc, CONST PIXELFORMATDESCRIPTOR* ppfd);
+typedef BOOL	(WINAPI *PFNSETPIXELFORMATPROC)(HDC hdc, int pixelFormat, CONST PIXELFORMATDESCRIPTOR* ppfd);
+typedef BOOL	(WINAPI *PFNSWAPBUFFERSPROC)(HDC hdc);
+typedef DWORD 	(WINAPI *PFNXINPUTGETSTATEPROC)(DWORD, XINPUT_STATE*);
+
+PFNXINPUTGETSTATEPROC		w32XInputGetState 		= nullptr;
+PFNCHOOSEPIXELFORMATPROC 	w32ChoosePixelFormat 	= nullptr;
+PFNSETPIXELFORMATPROC 	 	w32SetPixelFormat 		= nullptr;
+PFNSWAPBUFFERSPROC 		 	w32SwapBuffers 			= nullptr;
+
 #include <audioclient.h>
 #include <mmdeviceapi.h>
 #include <comdef.h>
 
 #include <stdio.h>
-#include <gl/GL.h>
 #include "k15_gb_emulator.h"
-
-typedef BOOL(*wglSwapIntervalEXTProc)(int);
-wglSwapIntervalEXTProc wglSwapIntervalEXT = nullptr;
+#include "k15_win32_opengl.h"
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+#	define IMGUI_IMPL_OPENGL_LOADER_CUSTOM "k15_win32_opengl.h"
 #	include "imgui/imgui.cpp"
 #	include "imgui/imgui_demo.cpp"
 #	include "imgui/imgui_draw.cpp"
 #	include "imgui/imgui_tables.cpp"
 #	include "imgui/imgui_widgets.cpp"
 #	include "imgui/imgui_impl_win32.cpp"
-#	include "imgui/imgui_impl_opengl2.cpp"
+#	include "imgui/imgui_impl_opengl3.cpp"
 #	include "k15_gb_emulator_ui.cpp"
 #else
 #	define XINPUT_GAMEPAD_DPAD_UP          0x0001
@@ -57,11 +68,6 @@ typedef struct _XINPUT_STATE
 } XINPUT_STATE, *PXINPUT_STATE;
 #endif
 
-#pragma comment(lib, "user32.lib")
-#pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "opengl32.lib")
-#pragma comment(lib, "Ole32.lib")
-
 const IID 	IID_IAudioClient			= _uuidof(IAudioClient);
 const IID 	IID_IAudioRenderClient		= _uuidof(IAudioRenderClient);
 const IID 	IID_IMMDeviceEnumerator 	= _uuidof(IMMDeviceEnumerator);
@@ -71,6 +77,12 @@ enum InputType
 {
 	Gamepad,
 	Keyboard
+};
+
+struct UserMessage
+{
+	char messageBuffer[256];
+	LARGE_INTEGER startTime;
 };
 
 #define K15_RETURN_ON_HRESULT_ERROR(comFunction) \
@@ -83,39 +95,113 @@ enum InputType
 	} \
 }
 
-typedef void (WINAPI *XInputEnableProc)(BOOL);
-typedef DWORD (WINAPI *XInputGetStateProc)(DWORD, XINPUT_STATE*);
+struct Win32ApplicationContext
+{
+	static constexpr uint32_t gbFrameTimeInMicroseconds 		= 16700;
 
-XInputGetStateProc	w32XInputGetState	= nullptr;
-XInputEnableProc	w32XInputEnable 	= nullptr;
+	HWND					pWindowHandle						= nullptr;
+	HGLRC					pOpenGLContext						= nullptr;
+	uint8_t* 				pGameboyRGBVideoBuffer 				= nullptr;
+	GBEmulatorInstance* 	pEmulatorInstance 					= nullptr;
+	UserMessage 			userMessages[8] 					= {};
+	char 					gameTitle[16] 						= {};
 
-InputType dominantInputType = Gamepad;
+	uint32_t 				screenWidth							= 1920;
+	uint32_t 				screenHeight						= 1080;
+	uint32_t 				emulatorDeltaTimeInMicroseconds 	= 0u;
+	uint32_t 				deltaTimeInMicroseconds 			= 0u;
+	uint32_t 				uiDeltaTimeInMicroseconds 			= 0u;
 
-char gameTitle[16] = {0};
-constexpr uint32_t gbScreenWidth 			 	= 160;
-constexpr uint32_t gbScreenHeight 			 	= 144;
-constexpr uint32_t gbFrameTimeInMicroseconds 	= 16700;
-uint16_t breakpointAddress					 	= 0;
-uint32_t screenWidth 						 	= 1920;
-uint32_t screenHeight 						 	= 1080;
-GLuint gbScreenTexture 						 	= 0;
-bool   showUi								 	= true;
-uint32_t emulatorDeltaTimeInMicroseconds 		= 0u;
-uint32_t deltaTimeInMicroseconds 				= 0u;
-uint32_t uiDeltaTimeInMicroseconds 				= 0u;
+	LARGE_INTEGER 			perfCounterFrequency;
 
-uint8_t* pGameboyVideoBuffer 					= nullptr;
+	GLuint 					gameboyFrameBufferTexture;
+	GLuint 					bitmapFontTexture;
+	GLuint					vertexBuffer;
+	GLuint					vertexArray;
+	
+	GBEmulatorJoypadState 	joypadState;
 
-uint8_t directionInput							= 0x0F;
-uint8_t buttonInput								= 0x0F;
-
-GBEmulatorInstance* pEmulatorInstance 			= nullptr;
-GBEmulatorJoypadState joypadState;
-
-LARGE_INTEGER perfCounterFrequency;
-
+	InputType 				dominantInputType 					= Gamepad;
+	uint8_t 				userMessageCount 					= 0;
+	bool   					showUi								= true;
+};
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+
+HMODULE getLibraryHandle( const char* pLibraryFileName )
+{
+	HMODULE pModuleHandle = GetModuleHandleA( pLibraryFileName );
+	if( pModuleHandle != nullptr )
+	{
+		return pModuleHandle;
+	}
+
+	return LoadLibraryA( pLibraryFileName );
+}
+
+void pushUserMessage( Win32ApplicationContext* pContext, const char* pFormattedMessage, ... )
+{
+	UserMessage* pUserMessage = &pContext->userMessages[ pContext->userMessageCount++ ];
+	if( pContext->userMessageCount == 8 )
+	{
+		//FK: Order is important here
+		pContext->userMessageCount = 7;
+		memmove( pContext->userMessages, pContext->userMessages + 1, sizeof(UserMessage) * pContext->userMessageCount );
+	}
+
+	va_list argList;
+	va_start( argList, pFormattedMessage );
+	vsprintf( pUserMessage->messageBuffer, pFormattedMessage, argList );
+	va_end(argList);
+
+	QueryPerformanceCounter( &pUserMessage->startTime );
+}
+
+void updateVertexBuffer( Win32ApplicationContext* pContext )
+{
+	const float pixelUnitH = 1.0f/(float)pContext->screenWidth;
+	const float pixelUnitV = 1.0f/(float)pContext->screenHeight;
+	const float centerH = pixelUnitH*(0.5f*(float)pContext->screenWidth);
+	const float centerV = pixelUnitV*(0.5f*(float)pContext->screenHeight);
+
+	const float gbSizeH = pixelUnitH*gbHorizontalResolutionInPixels;
+	const float gbSizeV = pixelUnitV*gbVerticalResolutionInPixels;
+
+	//FK: division using integer to keep integer scaling (minus 2 to not fill out the whole screen just yet)
+	const float scale 		= (float)(pContext->screenHeight / gbVerticalResolutionInPixels) - 2;
+
+	const float l = (float)( pContext->screenWidth - gbHorizontalResolutionInPixels * scale ) * 0.5f;
+	const float r = (float)( pContext->screenWidth + gbHorizontalResolutionInPixels * scale ) * 0.5f;	
+	const float t = (float)( pContext->screenHeight + gbVerticalResolutionInPixels * scale ) * 0.5f;	
+	const float b = (float)( pContext->screenHeight - gbVerticalResolutionInPixels * scale ) * 0.5f;	
+
+	const float left  		= (((2.0f * l) - (2.0f * 0)) / pContext->screenWidth) - 1.0f;
+	const float right 		= (((2.0f * r) - (2.0f * 0)) / pContext->screenWidth) - 1.0f;
+	const float top	  		= (((2.0f * t) - (2.0f * 0)) / pContext->screenHeight) - 1.0f;
+	const float bottom	    = (((2.0f * b) - (2.0f * 0)) / pContext->screenHeight) - 1.0f;
+
+	const float vertexBufferData[] = {
+		left, bottom,
+		0.0f, 1.0f,
+
+		right, bottom,
+		1.0f,  1.0f,
+
+		right, top,
+		1.0f,  0.0f,
+
+		right, top,
+		1.0f,  0.0f,
+
+		left, top,
+		0.0f, 0.0f,
+
+		left, bottom,
+		0.0f, 1.0f
+	};
+
+	glBufferData( GL_ARRAY_BUFFER, sizeof(vertexBufferData), vertexBufferData, GL_STATIC_DRAW );
+}
 
 uint16_t queryMonitorRefreshRate( HWND hwnd )
 {
@@ -144,19 +230,9 @@ void allocateDebugConsole()
 	freopen("CONOUT$", "w", stdout);
 }
 
-void K15_WindowCreated(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+void K15_KeyInput(Win32ApplicationContext* pContext, UINT message, WPARAM wparam, LPARAM lparam)
 {
-
-}
-
-void K15_WindowClosed(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
-{
-
-}
-
-void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
-{
-	dominantInputType = InputType::Keyboard;
+	pContext->dominantInputType = InputType::Keyboard;
 
 	if( message == WM_KEYDOWN )
 	{
@@ -164,34 +240,38 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		{
 			switch(wparam)
 			{
+				case VK_F2:
+					pushUserMessage(pContext, "State saved successfully...");
+					break;
+					
 				case VK_DOWN:
-					joypadState.down = 1;
+					pContext->joypadState.down = 1;
 					break;
 				case VK_UP:
-					joypadState.up = 1;
+					pContext->joypadState.up = 1;
 					break;
 				case VK_LEFT:
-					joypadState.left = 1;
+					pContext->joypadState.left = 1;
 					break;
 				case VK_RIGHT:
-					joypadState.right = 1;
+					pContext->joypadState.right = 1;
 					break;
 
 				case VK_CONTROL:
-					joypadState.start = 1;
+					pContext->joypadState.start = 1;
 					break;
 				case VK_MENU:
-					joypadState.select = 1;
+					pContext->joypadState.select = 1;
 					break;
 				case 'A':
-					joypadState.a = 1;
+					pContext->joypadState.a = 1;
 					break;
 				case 'S':
-					joypadState.b = 1;
+					pContext->joypadState.b = 1;
 					break;
 
 				case VK_F1:
-					showUi = !showUi;
+					pContext->showUi = !pContext->showUi;
 					break;
 			}
 		}
@@ -201,66 +281,55 @@ void K15_KeyInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 		switch(wparam)
 		{
 			case VK_DOWN:
-				joypadState.down = 0;
+				pContext->joypadState.down = 0;
 				break;
 			case VK_UP:
-				joypadState.up = 0;
+				pContext->joypadState.up = 0;
 				break;
 			case VK_LEFT:
-				joypadState.left = 0;
+				pContext->joypadState.left = 0;
 				break;
 			case VK_RIGHT:
-				joypadState.right = 0;
+				pContext->joypadState.right = 0;
 				break;
 
 			case VK_CONTROL:
-				joypadState.start = 0;
+				pContext->joypadState.start = 0;
 				break;
 			case VK_MENU:
-				joypadState.select = 0;
+				pContext->joypadState.select = 0;
 				break;
 			case 'A':
-				joypadState.a = 0;
+				pContext->joypadState.a = 0;
 				break;
 			case 'S':
-				joypadState.b = 0;
+				pContext->joypadState.b = 0;
 				break;
 		}
 	}
 
-	setGBEmulatorInstanceJoypadState( pEmulatorInstance, joypadState );
+	setGBEmulatorInstanceJoypadState( pContext->pEmulatorInstance, pContext->joypadState );
 }
 
-void K15_MouseButtonInput(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
-{
-
-}
-
-void K15_MouseMove(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
-{
-
-}
-
-void K15_MouseWheel(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
-{
-
-}
-
-void K15_WindowResized(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+void K15_WindowResized(Win32ApplicationContext* pContext, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	RECT clientRect = {0};
-	GetClientRect(hwnd, &clientRect);
+	GetClientRect(pContext->pWindowHandle, &clientRect);
 
-	screenWidth  = clientRect.right - clientRect.left;
-	screenHeight = clientRect.bottom - clientRect.top;
+	pContext->screenWidth  = clientRect.right - clientRect.left;
+	pContext->screenHeight = clientRect.bottom - clientRect.top;
 
-	glViewport(0, 0, screenWidth, screenHeight);
+	if( pContext->pOpenGLContext != nullptr )
+	{
+		updateVertexBuffer( pContext );
+		glViewport(0, 0, pContext->screenWidth, pContext->screenHeight);
+	}
 
 	//FK: Requery monitor refresh rate in case the monitor changed
-	const uint16_t monitorRefresRate = queryMonitorRefreshRate(hwnd);
-	if( pEmulatorInstance != nullptr )
+	const uint16_t monitorRefreshRate = queryMonitorRefreshRate(pContext->pWindowHandle);
+	if( pContext->pEmulatorInstance != nullptr )
 	{
-		setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, monitorRefresRate );
+		setGBEmulatorInstanceMonitorRefreshRate( pContext->pEmulatorInstance, monitorRefreshRate );
 	}
 }
 
@@ -273,14 +342,10 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         return true;
 #endif
 
+	Win32ApplicationContext* pContext = (Win32ApplicationContext*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
 	switch (message)
 	{
-	case WM_CREATE:
-		K15_WindowCreated(hwnd, message, wparam, lparam);
-		break;
-
 	case WM_CLOSE:
-		K15_WindowClosed(hwnd, message, wparam, lparam);
 		PostQuitMessage(0);
 		messageHandled = true;
 		break;
@@ -289,30 +354,11 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 	case WM_KEYUP:
 	case WM_SYSKEYDOWN:
 	case WM_SYSKEYUP:
-		K15_KeyInput(hwnd, message, wparam, lparam);
+		K15_KeyInput(pContext, message, wparam, lparam);
 		break;
 
 	case WM_SIZE:
-		K15_WindowResized(hwnd, message, wparam, lparam);
-		break;
-
-	case WM_LBUTTONUP:
-	case WM_MBUTTONUP:
-	case WM_RBUTTONUP:
-	case WM_XBUTTONUP:
-	case WM_LBUTTONDOWN:
-	case WM_RBUTTONDOWN:
-	case WM_MBUTTONDOWN:
-	case WM_XBUTTONDOWN:
-		K15_MouseButtonInput(hwnd, message, wparam, lparam);
-		break;
-
-	case WM_MOUSEMOVE:
-		K15_MouseMove(hwnd, message, wparam, lparam);
-		break;
-
-	case WM_MOUSEWHEEL:
-		K15_MouseWheel(hwnd, message, wparam, lparam);
+		K15_WindowResized(pContext, message, wparam, lparam);
 		break;
 	}
 
@@ -324,7 +370,7 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 	return false;
 }
 
-HWND setupWindow(HINSTANCE pInstance, int width, int height)
+bool setupWindow( HINSTANCE pInstance, Win32ApplicationContext* pContext )
 {
 	WNDCLASSA wndClass 		= {0};
 	wndClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW;
@@ -334,67 +380,109 @@ HWND setupWindow(HINSTANCE pInstance, int width, int height)
 	wndClass.hCursor 		= LoadCursor(NULL, IDC_ARROW);
 	RegisterClassA(&wndClass);
 
-	HWND hwnd = CreateWindowA("K15_Win32Template", "Win32 Template",
+	pContext->pWindowHandle = CreateWindowA("K15_Win32Template", "Win32 Template",
 		WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-		width, height, 0, 0, pInstance, 0);
+		pContext->screenWidth, pContext->screenHeight, 
+		0, 0, pInstance, 0);
 
-	if (hwnd == INVALID_HANDLE_VALUE)
+	if (pContext->pWindowHandle == INVALID_HANDLE_VALUE)
 	{
 		MessageBoxA(0, "Error creating Window.\n", "Error!", 0);
-		return nullptr;
+		return false;
 	}
 
-	ShowWindow(hwnd, SW_SHOW);
-	return hwnd;
+	SetWindowLongPtrA( pContext->pWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
+	ShowWindow(pContext->pWindowHandle, SW_SHOW);
+	return true;
 }
 
-void createOpenGLContext(HWND hwnd)
+void generateOpenGLShaders()
 {
-	PIXELFORMATDESCRIPTOR pfd =
-	{
-		sizeof(PIXELFORMATDESCRIPTOR),
-		1,
-		PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,    //Flags
-		PFD_TYPE_RGBA,            //The kind of framebuffer. RGBA or palette.
-		32,                        //Colordepth of the framebuffer.
-		0, 0, 0, 0, 0, 0,
-		0,
-		0,
-		0,
-		0, 0, 0, 0,
-		24,                        //Number of bits for the depthbuffer
-		8,                        //Number of bits for the stencilbuffer
-		0,                        //Number of Aux buffers in the framebuffer.
-		PFD_MAIN_PLANE,
-		0,
-		0, 0, 0
-	};
+	constexpr char vertexShaderSource[] = R"(
+		#version 410
+		layout(location=0) in vec2 vs_pos;
+		layout(location=1) in vec2 vs_uv;
 
-	HDC mainDC = GetDC(hwnd);
+		out vec2 ps_uv;
 
-	int pixelFormat = ChoosePixelFormat(mainDC, &pfd); 
-	SetPixelFormat(mainDC,pixelFormat, &pfd);
+		void main()
+		{
+			gl_Position = vec4(vs_pos.x, vs_pos.y, 0, 1);
+			ps_uv = vs_uv;
+		}
+	)";
 
-	HGLRC glContext = wglCreateContext(mainDC);
+	constexpr char pixelShaderSource[] = R"(
+		#version 410
+		in vec2 ps_uv;
+		out vec4 color;
 
-	wglMakeCurrent(mainDC, glContext);
-	
-	wglSwapIntervalEXT = ( wglSwapIntervalEXTProc )wglGetProcAddress( "wglSwapIntervalEXT" );
-	K15_RUNTIME_ASSERT( wglSwapIntervalEXT != nullptr );
+		uniform sampler2D gameboyFramebuffer;
 
-	wglSwapIntervalEXT(1);
+		void main()
+		{
+			color = texture( gameboyFramebuffer, ps_uv );
+		}
+	)";
 
-	//set default gl state
-	glShadeModel(GL_SMOOTH);
+	const GLuint vertexShader 	= glCreateShader( GL_VERTEX_SHADER );
+	const GLuint fragmentShader = glCreateShader( GL_FRAGMENT_SHADER );
+	const GLuint gpuProgram		= glCreateProgram();
 
-	glMatrixMode(GL_MODELVIEW);
-	glLoadIdentity();
+	compileOpenGLShader( vertexShader, vertexShaderSource, sizeof( vertexShaderSource ) );
+	compileOpenGLShader( fragmentShader, pixelShaderSource, sizeof( pixelShaderSource ) );
 
-	glMatrixMode(GL_PROJECTION);
-	glLoadIdentity();
+	glAttachShader( gpuProgram, vertexShader );
+	glAttachShader( gpuProgram, fragmentShader );
+	glLinkProgram( gpuProgram );
+	glUseProgram( gpuProgram );
 }
 
-const char* fixRomFileName( char* pRomFileName )
+void openGLDebugMessageCallback( GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* pMessage, const GLvoid* pUserParam )
+{
+	printf(pMessage);
+}
+
+void createOpenGLContext( Win32ApplicationContext* pContext )
+{
+	const HMODULE pOpenGL32Module = getLibraryHandle("opengl32.dll");
+
+	loadWin32OpenGLFunctionPointers( pOpenGL32Module );
+	createOpenGLDummyContext( pContext->pWindowHandle );
+	loadWGLOpenGLFunctionPointers();
+	createOpenGL4Context( pContext->pWindowHandle );
+	loadOpenGL4FunctionPointers();
+
+	//glDebugMessageCallbackARB( openGLDebugMessageCallback, nullptr );
+
+	glGenVertexArrays( 1, &pContext->vertexArray );
+	glBindVertexArray( pContext->vertexArray );
+
+	generateOpenGLShaders();
+
+	//FK: Enable v-sync
+	w32glSwapIntervalEXT(1);
+}
+
+void generateOpenGLTextures(Win32ApplicationContext* pContext)
+{
+	glGenTextures(1, &pContext->gameboyFrameBufferTexture);
+	glGenTextures(1, &pContext->bitmapFontTexture);
+
+	glBindTexture(GL_TEXTURE_2D, pContext->gameboyFrameBufferTexture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+	glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGB8, gbHorizontalResolutionInPixels, gbVerticalResolutionInPixels);
+	
+	glBindTexture(GL_TEXTURE_2D, pContext->bitmapFontTexture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8, fontPixelDataWidthInPixels, fontPixelDataHeightInPixels);
+}
+
+char* fixRomFileName( char* pRomFileName )
 {
 	//FK: This needs to be done purely because visual studio code wraps the argument in double quotes for whatever reason...
 	while( *pRomFileName == '\"' )
@@ -402,7 +490,7 @@ const char* fixRomFileName( char* pRomFileName )
 		++pRomFileName;
 	}
 
-	const char* pFixedRomFileName = pRomFileName;
+	char* pFixedRomFileName = pRomFileName;
 
 	while( *pRomFileName != '\"' && *pRomFileName != 0 )
 	{
@@ -417,12 +505,30 @@ const char* fixRomFileName( char* pRomFileName )
 	return pFixedRomFileName;
 }
 
+uint8_t* mapCartridgeRamFile( const char* pRamFileName, const size_t fileSizeInBytes )
+{
+	HANDLE pRomHandle = CreateFileA( pRamFileName, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, 0u, nullptr );
+	if( pRomHandle == INVALID_HANDLE_VALUE )
+	{
+		const DWORD createFileError = GetLastError();
+		printf("Could not open '%s'.\n", pRamFileName);
+		return nullptr;
+	}
+
+	const DWORD fileSizeLow  = fileSizeInBytes & 0xFFFFFFFF;
+	HANDLE pRomMapping = CreateFileMappingA( pRomHandle, nullptr, PAGE_READWRITE, 0u, fileSizeLow, nullptr );
+	if( pRomMapping == nullptr )
+	{
+		const DWORD lastError = GetLastError();
+		printf("Could not map '%s' with PAGE_WRITECOPY. Win32 ErrorCode=%x.\n", pRamFileName, lastError );
+		return nullptr;
+	}
+
+	return (uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_WRITE, 0u, 0u, 0u );
+}
+
 const uint8_t* mapRomFile( const char* pRomFileName )
 {
-	char fixedRomFileName[MAX_PATH] = {0};
-	strcpy_s( fixedRomFileName, pRomFileName );
-
-	pRomFileName = fixRomFileName( fixedRomFileName );
 	HANDLE pRomHandle = CreateFileA( pRomFileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr );
 	if( pRomHandle == INVALID_HANDLE_VALUE )
 	{
@@ -440,13 +546,8 @@ const uint8_t* mapRomFile( const char* pRomFileName )
 	return (const uint8_t*)MapViewOfFile( pRomMapping, FILE_MAP_READ, 0u, 0u, 0u );
 }
 
-void queryXInputController()
+void queryXInputController( Win32ApplicationContext* pContext )
 {
-	if( w32XInputGetState == nullptr )
-	{
-		return;
-	}
-
 	XINPUT_STATE state;
 	const DWORD result = w32XInputGetState(0, &state);
 	if( result != ERROR_SUCCESS )
@@ -456,44 +557,39 @@ void queryXInputController()
 
 	const WORD gamepadButtons = state.Gamepad.wButtons;
 
-	if( dominantInputType != InputType::Gamepad && gamepadButtons == 0)
+	if( pContext->dominantInputType != InputType::Gamepad && gamepadButtons == 0)
 	{
 		return;
 	}
 
-	dominantInputType = InputType::Gamepad;
-	joypadState.a 		= ( gamepadButtons & XINPUT_GAMEPAD_A ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_B ) > 0;
-	joypadState.b 		= ( gamepadButtons & XINPUT_GAMEPAD_X ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_Y ) > 0;
-	joypadState.start 	= ( gamepadButtons & XINPUT_GAMEPAD_START ) > 0;
-	joypadState.select 	= ( gamepadButtons & XINPUT_GAMEPAD_BACK ) > 0;
-	joypadState.left 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_LEFT ) > 0;
-	joypadState.right 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_RIGHT ) > 0;
-	joypadState.down 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_DOWN ) > 0;
-	joypadState.up 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_UP ) > 0;
+	pContext->dominantInputType = InputType::Gamepad;
+	pContext->joypadState.a 		= ( gamepadButtons & XINPUT_GAMEPAD_A ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_B ) > 0;
+	pContext->joypadState.b 		= ( gamepadButtons & XINPUT_GAMEPAD_X ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_Y ) > 0;
+	pContext->joypadState.start 	= ( gamepadButtons & XINPUT_GAMEPAD_START ) > 0;
+	pContext->joypadState.select 	= ( gamepadButtons & XINPUT_GAMEPAD_BACK ) > 0;
+	pContext->joypadState.left 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_LEFT ) > 0;
+	pContext->joypadState.right 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_RIGHT ) > 0;
+	pContext->joypadState.down 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_DOWN ) > 0;
+	pContext->joypadState.up 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_UP ) > 0;
 
-	setGBEmulatorInstanceJoypadState( pEmulatorInstance, joypadState );
+	setGBEmulatorInstanceJoypadState( pContext->pEmulatorInstance, pContext->joypadState );
 }
 
 void initXInput()
 {
-	HMODULE pXInput = LoadLibraryA("xinput1_4.dll");
-	if( pXInput == nullptr )
+	HMODULE pXinputModule = getLibraryHandle("xinput1_4.dll");
+	if( pXinputModule == nullptr )
 	{
-		pXInput = LoadLibraryA("xinput1_3.dll");
+		pXinputModule = getLibraryHandle("xinput1_3.dll");
 	}
 
-	if( pXInput == nullptr )
+	if( pXinputModule == nullptr )
 	{
 		return;
 	}
 
-	w32XInputGetState = (XInputGetStateProc)GetProcAddress( pXInput, "XInputGetState");
-	w32XInputEnable = (XInputEnableProc)GetProcAddress( pXInput, "XInputEnable");
-
+	w32XInputGetState = (PFNXINPUTGETSTATEPROC)GetProcAddress( pXinputModule, "XInputGetState");
 	K15_RUNTIME_ASSERT(w32XInputGetState != nullptr);
-	K15_RUNTIME_ASSERT(w32XInputEnable != nullptr);
-
-	w32XInputEnable(TRUE);
 }
 
 void initializeImGui( HWND hwnd )
@@ -505,11 +601,12 @@ void initializeImGui( HWND hwnd )
 
 	ImGui::StyleColorsDark();
 
-	ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplOpenGL2_Init();
+	ImGui_ImplWin32_Init( hwnd );
+    ImGui_ImplOpenGL3_Init( "#version 410" );
 #endif
 }
 
+#include <math.h>
 constexpr float pi = 3.14159f;
 constexpr float twoPi = 2.0f*pi;
 float getSineWaveSample(const float t, const float a, const float f)
@@ -700,118 +797,239 @@ void initWasapi()
 #endif
 }
 
-BOOL setup( HWND hwnd, LPSTR romPath )
+void generateRamFileName( char* pRamFileNameBuffer, size_t ramFileNameLength, char* pRomPath )
+{
+	const char ramFileExtension[] = ".k15_ram_state";
+	char* pRomFileExtension = strrchr( pRomPath, '.' );
+	*pRomFileExtension = 0;
+	strcat_s( pRamFileNameBuffer, ramFileNameLength, pRomPath );
+	strcat_s( pRamFileNameBuffer, ramFileNameLength, ramFileExtension );
+	*pRomFileExtension = '.';
+}
+
+void loadWin32FunctionPointers()
+{
+	const HMODULE pGDIModule = getLibraryHandle("gdi32.dll");
+	K15_RUNTIME_ASSERT( pGDIModule != nullptr );
+
+	w32ChoosePixelFormat = (PFNCHOOSEPIXELFORMATPROC)GetProcAddress( pGDIModule, "ChoosePixelFormat" );
+	w32SetPixelFormat	 = (PFNSETPIXELFORMATPROC)GetProcAddress( pGDIModule, "SetPixelFormat" );
+	w32SwapBuffers		 = (PFNSWAPBUFFERSPROC)GetProcAddress( pGDIModule, "SwapBuffers");
+
+	//FK: TODO Turn into user friendly error messages
+	K15_RUNTIME_ASSERT( w32ChoosePixelFormat != nullptr );
+	K15_RUNTIME_ASSERT( w32SetPixelFormat != nullptr );
+	K15_RUNTIME_ASSERT( w32SwapBuffers != nullptr );
+}
+
+BOOL setup( Win32ApplicationContext* pContext, LPSTR romPath )
 {	
-	QueryPerformanceFrequency(&perfCounterFrequency);
+	QueryPerformanceFrequency(&pContext->perfCounterFrequency);
 
-	initXInput();
+	loadWin32FunctionPointers();
 	initWasapi();
-	createOpenGLContext( hwnd );
+	initXInput();
+	createOpenGLContext( pContext );
 
-	const uint8_t* pRomData = mapRomFile( romPath );
+	glGenBuffers( 1, &pContext->vertexBuffer );
+	glBindBuffer( GL_ARRAY_BUFFER, pContext->vertexBuffer );
+
+	updateVertexBuffer( pContext );
+
+	const size_t posOffset = 0;
+	const size_t uvOffset = 2*sizeof(float);
+	const size_t strideInBytes = 4*sizeof(float);
+
+	glVertexAttribPointer(0, 2, GL_FLOAT, 0, strideInBytes, (const GLvoid*)posOffset );
+	glEnableVertexAttribArray(0);
+
+	glVertexAttribPointer(1, 2, GL_FLOAT, 0, strideInBytes, (const GLvoid*)uvOffset );
+	glEnableVertexAttribArray(1);
+
+	char* pRomPath = fixRomFileName( romPath );
+	const uint8_t* pRomData = mapRomFile( pRomPath );
 	if( pRomData == nullptr )
 	{
 		return FALSE;
 	}
 
-	const uint16_t monitorRefreshRate = queryMonitorRefreshRate( hwnd );
+	const uint16_t monitorRefreshRate = queryMonitorRefreshRate( pContext->pWindowHandle );
 	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorInstanceMemoryRequirementsInBytes();
 
 	//FK: at address 0x100000000 for better debugging of memory errors (eg: access violation > 0x100000000 indicated emulator instance memory is at fault)
 	uint8_t* pEmulatorInstanceMemory = (uint8_t*)VirtualAlloc( ( LPVOID )0x100000000, emulatorMemorySizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
-	pEmulatorInstance = createGBEmulatorInstance(pEmulatorInstanceMemory);
+	pContext->pEmulatorInstance = createGBEmulatorInstance(pEmulatorInstanceMemory);
 
-	setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, monitorRefreshRate );
-	loadGBEmulatorInstanceRom( pEmulatorInstance, pRomData );
+	setGBEmulatorInstanceMonitorRefreshRate( pContext->pEmulatorInstance, monitorRefreshRate );
+	loadGBEmulatorInstanceRom( pContext->pEmulatorInstance, pRomData );
 
 	//FK: at address 0x200000000 for better debugging of memory errors (eg: access violation > 0x200000000 indicated emulator instance memory is at fault)
-	pGameboyVideoBuffer = (uint8_t*)VirtualAlloc( ( LPVOID )0x200000000, (gbScreenHeight*gbScreenWidth*3), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
+	pContext->pGameboyRGBVideoBuffer = (uint8_t*)VirtualAlloc( ( LPVOID )0x200000000, (gbVerticalResolutionInPixels*gbHorizontalResolutionInPixels*3), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
 
 	const GBCartridgeHeader header = getGBCartridgeHeader(pRomData);
-	memcpy(gameTitle, header.gameTitle, sizeof(header.gameTitle) );
+	memcpy(pContext->gameTitle, header.gameTitle, sizeof(header.gameTitle) );
 
-	glGenTextures(1, &gbScreenTexture);
+	generateOpenGLTextures( pContext );
+	initializeImGui( pContext->pWindowHandle );
 
-	glBindTexture(GL_TEXTURE_2D, gbScreenTexture);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
+	const size_t ramSizeInBytes = mapRamSizeToByteSize(header.ramSize);
+	if( ramSizeInBytes > 0 )
+	{
+		char ramFileName[MAX_PATH] = {0};
+		generateRamFileName( ramFileName, sizeof( ramFileName ), pRomPath );
 
-	initializeImGui( hwnd );
+		uint8_t* pRamData = mapCartridgeRamFile( ramFileName, ramSizeInBytes );
+		setGBEmulatorRamData( pContext->pEmulatorInstance, pRamData );
+	}
 
 	return TRUE;
 }
 
-void doFrame(HWND hwnd)
+void drawGBFrameBuffer( Win32ApplicationContext* pContext )
 {
-	char windowTitle[128];
-	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms - ui: %.3f ms - %d hz monitor refresh rate", gameTitle, (float)deltaTimeInMicroseconds/1000.f, (float)uiDeltaTimeInMicroseconds/1000.f, pEmulatorInstance->monitorRefreshRate );
-	SetWindowText(hwnd, (LPCSTR)windowTitle);
+	glBindTexture(GL_TEXTURE_2D, pContext->gameboyFrameBufferTexture);
+	glBindBuffer( GL_ARRAY_BUFFER, pContext->vertexBuffer );
+	glBindVertexArray( pContext->vertexArray );
 
-	const float pixelUnitH = 1.0f/(float)screenWidth;
-	const float pixelUnitV = 1.0f/(float)screenHeight;
-	const float centerH = pixelUnitH*(0.5f*(float)screenWidth);
-	const float centerV = pixelUnitV*(0.5f*(float)screenHeight);
+	glDrawArrays( GL_TRIANGLES, 0, 6 );
+}
 
-	const float gbSizeH = pixelUnitH*gbScreenWidth;
-	const float gbSizeV = pixelUnitV*gbScreenHeight;
+void drawUserMessage( Win32ApplicationContext* pContext, const char* pText, float x, float y)
+{
+	#if 0
+	const float pixelUnitH = 1.0f/(float)pContext->screenWidth;
+	const float pixelUnitV = 1.0f/(float)pContext->screenHeight;
 
-	//FK: division using integer to keep integer scaling (minus 2 to not fill out the whole screen just yet)
-	const float scale 		= (float)(screenHeight / gbVerticalResolutionInPixels) - 2;
+	const size_t textLength = strlen(pText);
+	if( textLength == 0 )
+	{
+		return;
+	}
 
-	const float left  		= -gbSizeH * scale;
-	const float right 		= +gbSizeH * scale;
-	const float top	  		= +gbSizeV * scale;
-	const float bottom	    = -gbSizeV * scale;
+	const float xStep = pixelUnitH * glyphWidthInPixels * 4;
+	const float yStep = pixelUnitV * glyphHeightInPixels * 4;
 
 	glEnable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, gbScreenTexture);
+	glBindTexture(GL_TEXTURE_2D, pContext->bitmapFontTexture);
 
 	glBegin(GL_TRIANGLES);
-		glTexCoord2f(0.0f, 1.0f);
-		glVertex2f(left, bottom);
+		for( size_t textIndex = 0; textIndex < textLength; ++textIndex )
+		{
+			const char textCharacter = pText[ textIndex ];
+			const char fontCharacterIndex = textCharacter - 32;
+			if( fontCharacterIndex < 0 || fontCharacterIndex > 95 )
+			{
+				//FK: non renderable glyphs
+				continue;
+			}
 
-		glTexCoord2f(1.0f, 1.0f);
-		glVertex2f(right, bottom);
+			const uint8_t rowIndex 		= ( fontCharacterIndex / glyphRowCount );
+			const uint8_t columnIndex 	= ( fontCharacterIndex % glyphRowCount );
 
-		glTexCoord2f(1.0f, 0.0f);
-		glVertex2f(right, top);
+			const uint16_t glyphX = columnIndex * glyphWidthInPixels;
+			const uint16_t glyphY = rowIndex * glyphHeightInPixels;
 
-		glTexCoord2f(1.0f, 0.0f);
-		glVertex2f(right, top);
+			const float glyphU = ( (float)glyphX / (float)fontPixelDataWidthInPixels );
+			const float glyphV = ( (float)glyphY / (float)fontPixelDataHeightInPixels );
 
-		glTexCoord2f(0.0f, 0.0f);
-		glVertex2f(left, top);
+			const float glyphUStep = (1.0f / fontPixelDataWidthInPixels) * (float)glyphWidthInPixels;
+			const float glyphVStep = (1.0f / fontPixelDataHeightInPixels) * (float)glyphHeightInPixels;
 
-		glTexCoord2f(0.0f, 1.0f);
-		glVertex2f(left, bottom);
+			glColor3f(1.0f, 1.0f, 1.0f);
+			glTexCoord2d(glyphU, glyphV);
+			glVertex2f(x, y + yStep);
+
+			glColor3f(1.0f, 1.0f, 1.0f);
+			glTexCoord2d(glyphU + glyphUStep, glyphV);
+			glVertex2f(x + xStep, y + yStep);
+
+			glColor3f(1.0f, 1.0f, 1.0f);
+			glTexCoord2d(glyphU + glyphUStep, glyphV + glyphVStep);
+			glVertex2f(x + xStep, y);
+
+			glColor3f(1.0f, 1.0f, 1.0f);
+			glTexCoord2d(glyphU + glyphUStep, glyphV + glyphVStep);
+			glVertex2f(x + xStep, y);
+
+			glColor3f(1.0f, 1.0f, 1.0f);
+			glTexCoord2d(glyphU, glyphV + glyphVStep);
+			glVertex2f(x, y);
+
+			glColor3f(1.0f, 1.0f, 1.0f);
+			glTexCoord2d(glyphU, glyphV);
+			glVertex2f(x, y + yStep);
+
+			x += xStep;
+		}
 	glEnd();
+	#endif
+}
 
+void drawUserMessages( Win32ApplicationContext* pContext )
+{
+	const float pixelUnitH = 1.0f/(float)pContext->screenWidth;
+	const float pixelUnitV = 1.0f/(float)pContext->screenHeight;
+
+	for( uint8_t userMessageIndex = 0; userMessageIndex < pContext->userMessageCount; ++userMessageIndex )
+	{
+		const UserMessage* pUserMessage = pContext->userMessages + userMessageIndex;
+		const float x = 1.0f - ( pixelUnitH * 4 * glyphWidthInPixels * strlen( pUserMessage->messageBuffer ) );
+		const float y = ( pixelUnitV * ( ( 1 + userMessageIndex ) * glyphHeightInPixels * 4 ) ) - 1.0f;
+		drawUserMessage( pContext, pUserMessage->messageBuffer, x, y);
+	}
+}
+
+void drawUserInterface()
+{
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 	ImGui::Render();
-	ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
+	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 #endif
+}
 
-	HDC deviceContext = GetDC(hwnd);
-	SwapBuffers(deviceContext);
+void doFrame( Win32ApplicationContext* pContext )
+{
+	char windowTitle[128];
+	sprintf_s(windowTitle, sizeof(windowTitle), "%s - emulator: %.3f ms - ui: %.3f ms - %d hz monitor refresh rate", pContext->gameTitle, (float)pContext->deltaTimeInMicroseconds/1000.f, (float)pContext->uiDeltaTimeInMicroseconds/1000.f, pContext->pEmulatorInstance->monitorRefreshRate );
+	SetWindowTextA(pContext->pWindowHandle, (LPCSTR)windowTitle);
+
+	drawGBFrameBuffer(pContext);
+	drawUserMessages(pContext);
+	drawUserInterface();
+	
+	HDC deviceContext = GetDC(pContext->pWindowHandle);
+	w32SwapBuffers(deviceContext);
 
 	glClear(GL_COLOR_BUFFER_BIT);
+}
+
+void updateUserMessages( Win32ApplicationContext* pContext )
+{
+	LARGE_INTEGER time;
+	QueryPerformanceCounter(&time);
+
+	for( size_t userMessageIndex = 0; userMessageIndex < pContext->userMessageCount; ++userMessageIndex )
+	{
+		const UserMessage* pUserMessage = pContext->userMessages + userMessageIndex;
+		const uint32_t deltaInMilliseconds = (uint32_t)(((time.QuadPart-pUserMessage->startTime.QuadPart)*1000)/pContext->perfCounterFrequency.QuadPart);
+		if( deltaInMilliseconds > 5000 )
+		{
+			pContext->userMessages[userMessageIndex] = pContext->userMessages[userMessageIndex+1];
+			--pContext->userMessageCount;
+		}
+	}
 }
 
 int CALLBACK WinMain(HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine, int nShowCmd)
 {
+	Win32ApplicationContext appContext;
 	allocateDebugConsole();
 
-	HWND hwnd = setupWindow(hInstance, screenWidth, screenHeight);
+	setupWindow(hInstance, &appContext);
 
-	if (hwnd == INVALID_HANDLE_VALUE)
-	{
-		return -1;
-	}
-
-	setup( hwnd, lpCmdLine );
+	setup( &appContext, lpCmdLine );
 
 	uint8_t loopRunning = true;
 	MSG msg = {0};
@@ -843,32 +1061,45 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 			break;
 		}
 
-		queryXInputController();
+		queryXInputController(&appContext);
 
 		QueryPerformanceCounter(&start);
-		runGBEmulatorInstance( pEmulatorInstance );
+		const GBEmulatorInstanceEventMask emulatorEventMask = runGBEmulatorInstance( appContext.pEmulatorInstance );
 
-		if( hasGBEmulatorInstanceHitVBlank( pEmulatorInstance ) )
+		if( emulatorEventMask & K15_GB_VBLANK_EVENT_FLAG )
 		{
-			const uint8_t* pFrameBuffer = getGBEmulatorInstanceFrameBuffer( pEmulatorInstance );
-			convertGBFrameBufferToRGB8Buffer( pGameboyVideoBuffer, pFrameBuffer );
-			renderGBEmulatorInstanceOverlayToRGBFrameBuffer( pEmulatorInstance, pGameboyVideoBuffer );
+			const uint8_t* pFrameBuffer = getGBEmulatorInstanceFrameBuffer( appContext.pEmulatorInstance );
+			convertGBFrameBufferToRGB8Buffer( appContext.pGameboyRGBVideoBuffer, pFrameBuffer );
+			
 			//FK: GB frame finished, upload gb framebuffer to texture
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, gbScreenWidth, gbScreenHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, pGameboyVideoBuffer);
+			glBindTexture(GL_TEXTURE_2D, appContext.gameboyFrameBufferTexture);
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, gbHorizontalResolutionInPixels, gbVerticalResolutionInPixels,
+				GL_RGB, GL_UNSIGNED_BYTE, appContext.pGameboyRGBVideoBuffer);
 		}
 
+		if( emulatorEventMask & K15_GB_STATE_SAVED_EVENT_FLAG )
+		{
+			pushUserMessage(&appContext, "State saved successfully...");
+		}
+
+		if( emulatorEventMask & K15_GB_STATE_LOADED_EVENT_FLAG )
+		{
+			pushUserMessage(&appContext, "State loaded successfully...");
+		}
+
+		updateUserMessages(&appContext);
 		QueryPerformanceCounter(&uiStart);
 
 		//FK: UI
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 		{
-			ImGui_ImplOpenGL2_NewFrame();
+			ImGui_ImplOpenGL3_NewFrame();
 			ImGui_ImplWin32_NewFrame();
 
 		    ImGui::NewFrame();
-			if( showUi )
+			if( appContext.showUi )
 			{
-				doUiFrame( pEmulatorInstance );
+				doUiFrame( appContext.pEmulatorInstance );
 			}
 			ImGui::EndFrame();
 		}
@@ -876,13 +1107,13 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 
 		QueryPerformanceCounter(&end);
 	
-		doFrame(hwnd);
+		doFrame(&appContext);
 
-		deltaTimeInMicroseconds 	= (uint32_t)(((uiStart.QuadPart-start.QuadPart)*1000000)/perfCounterFrequency.QuadPart);
-		uiDeltaTimeInMicroseconds 	= (uint32_t)(((end.QuadPart-uiStart.QuadPart)*1000000)/perfCounterFrequency.QuadPart);
+		appContext.deltaTimeInMicroseconds 	= (uint32_t)(((uiStart.QuadPart-start.QuadPart)*1000000)/appContext.perfCounterFrequency.QuadPart);
+		appContext.uiDeltaTimeInMicroseconds 	= (uint32_t)(((end.QuadPart-uiStart.QuadPart)*1000000)/appContext.perfCounterFrequency.QuadPart);
 	}
 
-	DestroyWindow(hwnd);
+	DestroyWindow(appContext.pWindowHandle);
 
 	return 0;
 }

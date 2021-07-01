@@ -26,8 +26,8 @@
             //"args": [ "Prehistorik Man (USA, Europe).gb"],                        //Hang after Intro
             //"args": [ "Alleyway (World).gb"],                                     //Serial interrupt issue
             //"args": [ "Baseball (World).gb"],                                     //Serial interrupt issue
-            "args": [ "Super Mario Land (World).gb" ],                            //Works
-            //"args": [ "Mega Man - Dr. Wily's Revenge (USA).gb" ],                 //Works, Sprite flickering (8x16 sprites)
+            //"args": [ "Super Mario Land (World).gb" ],                            //Works
+            "args": [ "Mega Man - Dr. Wily's Revenge (USA).gb" ],                 //Works, Sprite flickering (8x16 sprites)
             //"args": [ "Bomb Jack (Europe).gb" ],                                  //Works
             //"args": [ "Tetris (Japan) (En).gb" ],                                 //Works
             //"args": [ "BattleCity (Japan).gb" ],                                  //Works

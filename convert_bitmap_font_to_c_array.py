@@ -78,12 +78,23 @@ def writeArrayBitmapFile(arrayFileHandle, glyphWidth, glyphHeight, glyphRowCount
 
     pixelCount = 0
     totalPixelCount = bitmapInformations.height * bitmapInformations.width
-    while pixelCount < totalPixelCount:
-        pixelValues = (bitmapFileHandle.read(1), bitmapFileHandle.read(1), bitmapFileHandle.read(1))
-        arrayFileHandle.write("0x" + pixelValues[0].hex() + ", ")
-        arrayFileHandle.write("0x" + pixelValues[1].hex() + ", ")
-        arrayFileHandle.write("0x" + pixelValues[2].hex())
+    x = 0
+    y = 0 
+    while pixelCount < totalPixelCount: 
+        pixelIndex = x + ((bitmapInformations.height - 1) - y) * bitmapInformations.width
+        bitmapFileHandle.seek(bitmapInformations.pixelDataOffsetInBytes + pixelIndex * 3, os.SEEK_SET)
+
+        #FK: Only read one pixel eventhough we check for rgb bmp...Yeah, I know ¯\_(ツ)_/¯
+        pixelValue = bitmapFileHandle.read(1)
+        #arrayFileHandle.write("0x" + pixelValue.hex() + ", ")
+        #arrayFileHandle.write("0x" + pixelValue.hex() + ", ")
+        arrayFileHandle.write("0x" + pixelValue.hex())
         pixelCount += 1
+        x += 1
+
+        if x == bitmapInformations.width:
+            x = 0
+            y += 1
 
         if pixelCount != totalPixelCount:
             if pixelCount % 10 == 0:

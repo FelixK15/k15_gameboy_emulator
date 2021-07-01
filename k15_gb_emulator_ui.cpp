@@ -330,6 +330,7 @@ void doMemoryStateView( GBEmulatorInstance* pEmulatorInstance )
     if( !ImGui::Begin( "Memory View" ) )
     {
         ImGui::End();
+        return;
     }
 
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;

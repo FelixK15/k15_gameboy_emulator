@@ -54,6 +54,16 @@ static constexpr size_t     gbFrameBufferSizeInBytes                = gbFrameBuf
 static constexpr size_t     gbMappedMemorySizeInBytes               = 0x10000;
 static constexpr size_t     gbCompressionTokenSizeInBytes           = 1;
 
+typedef uint32_t GBEmulatorInstanceEventMask;
+
+enum
+{
+    K15_GB_NO_EVENT_FLAG            = 0x00,
+    K15_GB_VBLANK_EVENT_FLAG        = 0x01,
+    K15_GB_STATE_SAVED_EVENT_FLAG   = 0x02,
+    K15_GB_STATE_LOADED_EVENT_FLAG  = 0x04,
+};
+
 struct GBEmulatorJoypadState
 {
     union 
@@ -401,6 +411,7 @@ struct GBTimerState
 struct GBCartridge
 {
     const uint8_t*      pRomBaseAddress;
+    uint8_t*            pRamBaseAddress;
 
     GBCartridgeHeader   header;
     uint8_t             romBankCount;
@@ -467,6 +478,11 @@ uint8_t isInMBC1RomBankNumberRegisterRange( const uint16_t address )
 uint8_t isInMBC1RamEnableRegisterRange( const uint16_t address )
 {
     return address >= 0x0000 && address <= 0x2000;
+}
+
+uint8_t isInExternalRamRange( const uint16_t address )
+{
+    return address >= 0x8000 && address < 0xA000;
 }
 
 uint8_t isInHRAMAddressRange( const uint16_t address )
@@ -540,6 +556,27 @@ size_t mapRomSizeToByteSize(uint8_t romSize)
     return 0;
 }
 
+size_t mapRamSizeToByteSize(uint8_t ramSize)
+{
+    switch( ramSize )
+    {
+        case 0x00:
+            return 0;
+        case 0x02:
+            return Kbit(8);
+        case 0x03:
+            return Kbit(32);
+        case 0x04:
+            return Kbit(128);
+        case 0x05:
+            return Kbit(64);
+    }
+
+    //FK: Unsupported ramSize identifier
+    illegalCodePath();
+    return 0;
+}
+
 void mapCartridgeMemoryBank( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper, uint8_t romBankNumber )
 {
     if( pCartridge->mappedRomBankNumber == romBankNumber )
@@ -564,6 +601,11 @@ GBCartridgeHeader getGBEmulatorInstanceCurrentCartridgeHeader( const GBEmulatorI
 {
     K15_RUNTIME_ASSERT( pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr );
     return getGBCartridgeHeader( pEmulatorInstance->pCartridge->pRomBaseAddress );
+}
+
+void setGBEmulatorRamData( GBEmulatorInstance* pEmulatorInstance, uint8_t* pRamData )
+{
+    pEmulatorInstance->pCartridge->pRamBaseAddress = pRamData;
 }
 
 void setGBEmulatorInstanceMonitorRefreshRate( GBEmulatorInstance* pEmulatorInstance, uint16_t monitorRefreshRate )
@@ -935,6 +977,7 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
     pCartridge->ramEnabled      = 0;
     pCartridge->header          = header;
     pCartridge->pRomBaseAddress = pRomMemory;
+    pCartridge->pRamBaseAddress = nullptr;
     pCartridge->romBankCount    = ( uint8_t )( romSizeInBytes / Kbyte( 16 ) );
 
     //FK: Map first rom bank to 0x0000-0x4000
@@ -945,6 +988,8 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
     {
         case ROM_ONLY:
         case ROM_MBC1:
+        case ROM_MBC1_RAM:
+        case ROM_MBC1_RAM_BATT:
         {
             mapCartridgeMemoryBank( pCartridge, pMemoryMapper, 1 );
             break;
@@ -1231,10 +1276,10 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         uint16_t tilePixelMask = 0;
 
         uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
-        const uint8_t spritePos = pSprite->x < 8 ? 0 : pSprite->x - 8;
-
-        uint8_t scanlineByteIndex = spritePos/4;
-        uint8_t scanlinePixelDataShift = 6 - (spritePos%4) * 2;
+        const uint8_t spriteOffset = 8u;                    //FK: sprites are offset by 8 pixels according to pandocs
+        const uint8_t spriteByteOffset = spriteOffset / 4;  //FK: 4 pixel per byte
+        uint8_t scanlineByteIndex = (pSprite->x/4) - spriteByteOffset;
+        uint8_t scanlinePixelDataShift = 6 - (pSprite->x%4) * 2;
         for( uint8_t pixelIndex = 0u; pixelIndex < gbTileResolutionInPixels; ++pixelIndex )
         {
             const uint8_t scanlinePixelShift             = 14 - pixelIndex * 2;
@@ -2908,6 +2953,12 @@ void handleMBC1RamWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper 
     {
         pCartridge->ramEnabled = ( value & 0xF ) == 0xA;
     }
+    else if( isInExternalRamRange( address ) && pCartridge->ramEnabled )
+    {
+        //FK: mirror writes to ram area to emulator ram memory
+        const uint16_t baseAddressOffset = (address - 0xA000);
+        pCartridge->pRamBaseAddress[ baseAddressOffset ] = value;
+    }
 }
 
 void handleMBC1RomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper )
@@ -3031,7 +3082,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     if( pMemoryMapper->lastAddressWrittenTo == 0xFF48 || pMemoryMapper->lastAddressWrittenTo == 0xFF49 )
     {
         const uint8_t paletteOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xFF48 ) * 4;
-        extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
+        //extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
     }
 
     //FK: Serial - only used for printf right now
@@ -3068,44 +3119,6 @@ const uint8_t* getGlyphPixel( char glyph )
     const uint8_t y = ( fontPixelDataHeightInPixels - 1 ) - ( rowIndex * glyphHeightInPixels );
     const uint8_t x = columnIndex * glyphWidthInPixels;
     return fontPixelData + (x + y * fontPixelDataWidthInPixels) * 3;
-}
-
-void renderGBEmulatorInstanceOverlayToRGBFrameBuffer( const GBEmulatorInstance* pEmulatorInstance, uint8_t* pRGBFrameBuffer )
-{
-#if 1
-    (void)pEmulatorInstance;
-    (void)pRGBFrameBuffer;
-#else
-    const uint8_t scrollOffset = 3;
-    const char test[] = "State saved...";
-    //const char test[] = "?";
-    const size_t pixelWidth = (ArrayCount(test)-1) * glyphWidthInPixels;
-    
-    const size_t startX = ( gbHorizontalResolutionInPixels - pixelWidth ) / 2;
-    const size_t startY = ( gbVerticalResolutionInPixels - scrollOffset );
-    for( size_t charIndex = 0; charIndex < (ArrayCount(test)-1); ++charIndex )
-    {
-        const uint8_t* pGlyphPixels = getGlyphPixel( test[charIndex] );
-        size_t x = startX + charIndex * glyphWidthInPixels;
-        for( size_t y = startY; y < gbVerticalResolutionInPixels; ++y)
-        {
-            const uint8_t* pGlyphPixelsRunning = pGlyphPixels;
-            const size_t endX = x + glyphWidthInPixels;
-            for( ;x < endX; ++x)
-            {
-                const size_t pixelIndex = ( x + y * gbHorizontalResolutionInPixels ) * 3;
-
-                //FK: BGR
-                pRGBFrameBuffer[pixelIndex + 2] = *pGlyphPixelsRunning++;
-                pRGBFrameBuffer[pixelIndex + 1] = *pGlyphPixelsRunning++;
-                pRGBFrameBuffer[pixelIndex + 0] = *pGlyphPixelsRunning++;
-            }
-
-            x = startX + charIndex * glyphWidthInPixels;
-            pGlyphPixels -= ( fontPixelDataWidthInPixels * 3 );
-        }
-    }
-#endif
 }
 
 void convertGBFrameBufferToRGB8Buffer( uint8_t* pRGBFrameBuffer, const uint8_t* pGBFrameBuffer)
@@ -3158,12 +3171,7 @@ const uint8_t* getGBEmulatorInstanceFrameBuffer( GBEmulatorInstance* pInstance )
     return pInstance->pPpuState->pGBFrameBuffer;
 }
 
-bool hasGBEmulatorInstanceHitVBlank( GBEmulatorInstance* pInstance )
-{
-    return pInstance->flags.vblank;
-}
-
-void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
+GBEmulatorInstanceEventMask runGBEmulatorInstance( GBEmulatorInstance* pInstance )
 {
     GBCpuState* pCpuState = pInstance->pCpuState;
     GBPpuState* pPpuState = pInstance->pPpuState;
@@ -3199,7 +3207,7 @@ void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
 
     if( !runFrame )
     {
-        return;
+        return K15_GB_NO_EVENT_FLAG;
     }
 #endif
 
@@ -3212,7 +3220,7 @@ void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
         if( pInstance->debug.pauseAtBreakpoint && pInstance->debug.breakpointAddress == pInstance->pCpuState->registers.PC )
         {
             pInstance->debug.pauseExecution = 1;
-            return;
+            return K15_GB_NO_EVENT_FLAG;
         }
 #endif
     }
@@ -3224,4 +3232,6 @@ void runGBEmulatorInstance( GBEmulatorInstance* pInstance )
     }
 
     pCpuState->cycleCounter -= pCpuState->targetCycleCountPerUpdate;
+
+    return pInstance->flags.vblank == 1 ? K15_GB_VBLANK_EVENT_FLAG : K15_GB_NO_EVENT_FLAG;
 }
