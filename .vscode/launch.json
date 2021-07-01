@@ -11,28 +11,28 @@
             "program": "k15_win32_gb_emulator_debug.exe",
             
             //#### TESTS
-            //"args": ["testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],           //FAIL
-            //"args": ["testroms/acceptance/div_timing.gb"],                        //PASS
-            //"args": ["testroms/acceptance/call_cc_timing.gb"],                    //PASS
-            //"args": [ "cpu_instrs.gb"],                                           //PASS
-            //"args": [ "halt_bug.gb"],                                             //MISSING RAM SUPPORT
-            //"args": [ "gejmboj.gb"],                                              //FAIL
-            //"args": [ "pocket.gb"],                                               //FAIL
-            //"args": [ "Dawn_fixed.gb"],                                           //PASS
-            //"args": [ "interrupt_time.gb"],                                       //MISSING RAM SUPPORT
-            //"args": [ "instr_timing.gb"],                                         //PASS
+            //"args": [ "-r", "testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],           //FAIL
+            //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                        //PASS
+            //"args": [ "-r", "testroms/acceptance/call_cc_timing.gb"],                    //PASS
+            //"args": [ "-r", "cpu_instrs.gb"],                                           //PASS
+            //"args": [ "-r", "halt_bug.gb"],                                             //MISSING RAM SUPPORT
+            //"args": [ "-r", "gejmboj.gb"],                                              //FAIL
+            //"args": [ "-r", "pocket.gb"],                                               //FAIL
+            //"args": [ "-r", "Dawn_fixed.gb"],                                           //PASS
+            //"args": [ "-r", "interrupt_time.gb"],                                       //MISSING RAM SUPPORT
+            //"args": [ "-r", "instr_timing.gb"],                                         //PASS
 
             //####  GAMES
-            //"args": [ "Prehistorik Man (USA, Europe).gb"],                        //Hang after Intro
-            //"args": [ "Alleyway (World).gb"],                                     //Serial interrupt issue
-            //"args": [ "Baseball (World).gb"],                                     //Serial interrupt issue
-            //"args": [ "Super Mario Land (World).gb" ],                            //Works
-            "args": [ "Mega Man - Dr. Wily's Revenge (USA).gb" ],                 //Works, Sprite flickering (8x16 sprites)
-            //"args": [ "Bomb Jack (Europe).gb" ],                                  //Works
-            //"args": [ "Tetris (Japan) (En).gb" ],                                 //Works
-            //"args": [ "BattleCity (Japan).gb" ],                                  //Works
-            //"args": [ "Alfred Chicken (Europe).gb" ],                             //Works
-            //"args": [ "Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb" ],   //Missing Ram support
+            //"args": [ "-r", "Prehistorik Man (USA, Europe).gb"],                        //Hang after Intro
+            //"args": [ "-r", "Alleyway (World).gb"],                                     //Serial interrupt issue
+            //"args": [ "-r", "Baseball (World).gb"],                                     //Serial interrupt issue
+            //"args": [ "-r", "Super Mario Land (World).gb" ],                            //Works
+            //"args": [ "-r", "Mega Man - Dr. Wily's Revenge (USA).gb" ],                 //Works, Sprite flickering (8x16 sprites)
+            //"args": [ "-r", "Bomb Jack (Europe).gb" ],                                  //Works
+            //"args": [ "-r", "Tetris (Japan) (En).gb" ],                                 //Works
+            //"args": [ "-r", "BattleCity (Japan).gb" ],                                  //Works
+            //"args": [ "-r", "Alfred Chicken (Europe).gb" ],                             //Works
+            //"args": [ "-r", "Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb" ],   //Missing Ram support
             
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

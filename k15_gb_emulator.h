@@ -31,6 +31,9 @@
 
 #define K15_RUNTIME_ASSERT(x) if(!(x)) debugBreak()
 
+static constexpr uint8_t    gbNintendoLogo[]                        = { 0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E };
+static constexpr char       gbRamFileExtension[]                    = ".k15_gb_ram";
+static constexpr char       gbStateFileExtension[]                  = ".k15_gb_state";
 static constexpr uint32_t   gbStateFourCC                           = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
 static constexpr uint32_t   gbCpuFrequency                          = 4194304u;
 static constexpr uint32_t   gbPPUCyclesPerFrame                     = 70224u;
@@ -531,6 +534,19 @@ void patchIOPpuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBPpuState* p
     pPpuState->lcdRegisters.pWx     = pMemoryMapper->pBaseAddress + 0xFF4B;
 }
 
+GBCartridgeHeader getGBCartridgeHeader(const uint8_t* pRomData)
+{
+    GBCartridgeHeader header;
+    memcpy(&header, pRomData + 0x0100, sizeof(GBCartridgeHeader));
+    return header;
+}
+
+uint8_t isValidGBRomData( const uint8_t* pRomData )
+{
+    const GBCartridgeHeader header = getGBCartridgeHeader( pRomData );
+    return memcmp( header.nintendoLogo, gbNintendoLogo, sizeof( gbNintendoLogo ) ) == 0;
+}
+
 size_t mapRomSizeToByteSize(uint8_t romSize)
 {
     switch(romSize)
@@ -590,11 +606,9 @@ void mapCartridgeMemoryBank( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMap
     memcpy( pMemoryMapper->pRomBankSwitch, pRomBank, Kbyte( 16 ) );
 }
 
-GBCartridgeHeader getGBCartridgeHeader(const uint8_t* pRomMemory)
+uint8_t isGBEmulatorRomMapped( const GBEmulatorInstance* pEmulatorInstance )
 {
-    GBCartridgeHeader header;
-    memcpy(&header, pRomMemory + 0x0100, sizeof(GBCartridgeHeader));
-    return header;
+    return pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr;
 }
 
 GBCartridgeHeader getGBEmulatorInstanceCurrentCartridgeHeader( const GBEmulatorInstance* pEmulatorInstance )
@@ -610,6 +624,8 @@ void setGBEmulatorRamData( GBEmulatorInstance* pEmulatorInstance, uint8_t* pRamD
 
 void setGBEmulatorInstanceMonitorRefreshRate( GBEmulatorInstance* pEmulatorInstance, uint16_t monitorRefreshRate )
 {
+    K15_RUNTIME_ASSERT( monitorRefreshRate > 0 );
+
     pEmulatorInstance->monitorRefreshRate                   = monitorRefreshRate;
     pEmulatorInstance->pCpuState->targetCycleCountPerUpdate = gbCpuFrequency / monitorRefreshRate;
 }
@@ -1221,13 +1237,17 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     memset( pEmulatorInstance->pCartridge, 0, sizeof( GBCartridge ) );
 
     resetGBEmulatorInstance( pEmulatorInstance );
-    setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, 60 );//FK: Assume 60hz output as default
+
+    //FK: Assume 60hz output as default
+    setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, 60 );
 
     return pEmulatorInstance;
 }
 
 void loadGBEmulatorInstanceRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
 {
+    pEmulator->pCartridge->pRomBaseAddress = nullptr;
+
     resetGBEmulatorInstance( pEmulator );
     mapCartridgeMemory( pEmulator->pCartridge, pEmulator->pMemoryMapper, pRomMemory );
 }

@@ -7,6 +7,7 @@
 #define WGL_CONTEXT_PROFILE_MASK_ARB            0x9126
 #define WGL_CONTEXT_CORE_PROFILE_BIT_ARB       	0x1
 #define WGL_CONTEXT_DEBUG_BIT_ARB               0x1
+#define GL_MAP_WRITE_BIT                  		0x2
 #define WGL_DRAW_TO_WINDOW_ARB                  0x2001
 #define WGL_SUPPORT_OPENGL_ARB                  0x2010
 #define WGL_DOUBLE_BUFFER_ARB                   0x2011
@@ -49,6 +50,7 @@
 #define GL_RGB8                           		0x8051
 #define GL_R8                           		0x8229
 #define GL_RGBA                                 0x1908
+#define GL_RED                            		0x1903
 #define GL_UNSIGNED_BYTE                  		0x1401
 #define GL_FLOAT                          		0x1406
 #define GL_COLOR_BUFFER_BIT               		0x4000
@@ -75,6 +77,7 @@
 #define GL_CLAMP_TO_EDGE                        0x812F
 #define GL_TEXTURE_WRAP_S                       0x2802
 #define GL_TEXTURE_WRAP_T                       0x2803
+#define GL_WRITE_ONLY                     		0x88B9
 
 typedef unsigned int 	GLenum;
 typedef unsigned char 	GLboolean;
@@ -126,7 +129,6 @@ typedef GLvoid          (APIENTRY *PFNGLUNIFORMMATRIX4FVPROC) (GLint location, G
 typedef GLvoid          (APIENTRY *PFNGLACTIVETEXTUREPROC) (GLenum texture);
 typedef GLvoid          (APIENTRY *PFNGLGENBUFFERSPROC) (GLsizei n, GLuint *buffers);
 typedef GLvoid          (APIENTRY *PFNGLBINDBUFFERPROC) (GLenum target, GLuint buffer);
-typedef GLvoid          (APIENTRY *PFNGLBUFFERDATAPROC) (GLenum target, GLsizeiptr size, const void *data, GLenum usage);
 typedef GLvoid          (APIENTRY *PFNGLDRAWARRAYSPROC) (GLenum mode, GLint first, GLsizei count);
 typedef GLvoid          (APIENTRY *PFNGLDRAWELEMENTSPROC) (GLenum mode, GLsizei count, GLenum type, const void *indices);
 typedef GLvoid          (APIENTRY *PFNGLVERTEXATTRIBPOINTERPROC) (GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
@@ -158,71 +160,73 @@ typedef GLvoid          (APIENTRY *PFNGLDELETEPROGRAMPROC) (GLuint program);
 typedef GLvoid          (APIENTRY *PFNGLBLENDEQUATIONSEPARATEPROC) (GLenum modeRGB, GLenum modeAlpha);
 typedef GLvoid          (APIENTRY *PFNGLBLENDFUNCSEPARATEPROC) (GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha);
 typedef GLenum          (APIENTRY *PFNGLGETERRORPROC) (void);
-typedef void (APIENTRY *GLDEBUGPROCARB)(GLenum source,GLenum type,GLuint id,GLenum severity,GLsizei length,const GLchar *message,const void *userParam);
-typedef void (APIENTRY *PFNGLDEBUGMESSAGECALLBACKARBPROC) (GLDEBUGPROCARB callback, const void *userParam);
+typedef GLvoid 			(APIENTRY *PFNGLBUFFERSTORAGEPROC) (GLenum target, GLsizeiptr size, const void *data, GLbitfield flags);
+typedef GLvoid*			(APIENTRY *PFNGLMAPBUFFERPROC) (GLenum target, GLenum access);
+typedef GLboolean 		(APIENTRY *PFNGLUNMAPBUFFERPROC) (GLenum target);
 
 PFNWGLSWAPINTERVALEXTPROC 			w32glSwapIntervalEXT 			= nullptr;
 PFNWGLCHOOSEPIXELFORMATARBPROC		w32glChoosePixelFormatARB		= nullptr;
 PFNWGLCREATECONTEXTATTRIBSARBPROC	w32glCreateContextAttribsARB 	= nullptr;
-PFNWGLCREATECONTEXTPROC              w32glCreateContext              = nullptr;
-PFNWGLDELETECONTEXTPROC              w32glDeleteContext              = nullptr;
-PFNWGLGETCURRENTCONTEXTPROC          w32glGetCurrentContext          = nullptr;
-PFNWGLGETPROCADDRESSPROC             w32glGetProcAddress             = nullptr;
-PFNWGLMAKECURRENTPROC                w32glMakeCurrent                = nullptr;
+PFNWGLCREATECONTEXTPROC             w32glCreateContext              = nullptr;
+PFNWGLDELETECONTEXTPROC             w32glDeleteContext              = nullptr;
+PFNWGLGETCURRENTCONTEXTPROC         w32glGetCurrentContext          = nullptr;
+PFNWGLGETPROCADDRESSPROC            w32glGetProcAddress             = nullptr;
+PFNWGLMAKECURRENTPROC               w32glMakeCurrent                = nullptr;
 
-PFNGLGENTEXTURESPROC				    glGenTextures				= nullptr;
-PFNGLBINDTEXTUREPROC				    glBindTexture				= nullptr;
-PFNGLTEXPARAMETERIPROC				glTexParameteri				= nullptr;
-PFNGLVIEWPORTPROC					glViewport					= nullptr;
-PFNGLCLEARPROC 						glClear						= nullptr;
-PFNGLGETERRORPROC					glGetError					= nullptr;
-PFNGLTEXSTORAGE2DPROC				glTexStorage2D				= nullptr;
-PFNGLTEXSUBIMAGE2DPROC				glTexSubImage2D				= nullptr;
-PFNGLGENBUFFERSPROC					glGenBuffers				= nullptr;
-PFNGLBINDBUFFERPROC					glBindBuffer				= nullptr;
-PFNGLBUFFERDATAPROC					glBufferData				= nullptr;
-PFNGLDRAWARRAYSPROC					glDrawArrays				= nullptr;
-PFNGLVERTEXATTRIBPOINTERPROC		    glVertexAttribPointer		= nullptr;
-PFNGLENABLEVERTEXATTRIBARRAYPROC	    glEnableVertexAttribArray	= nullptr;
-PFNGLCREATESHADERPROC				glCreateShader				= nullptr;
-PFNGLSHADERSOURCEPROC				glShaderSource				= nullptr;
-PFNGLCOMPILESHADERPROC				glCompileShader				= nullptr;
-PFNGLCREATEPROGRAMPROC				glCreateProgram				= nullptr;
-PFNGLATTACHSHADERPROC				glAttachShader				= nullptr;
-PFNGLBINDATTRIBLOCATIONPROC			glBindAttribLocation		= nullptr;
-PFNGLLINKPROGRAMPROC				    glLinkProgram				= nullptr;
-PFNGLUSEPROGRAMPROC					glUseProgram				= nullptr;
-PFNGLGETSHADERIVPROC				    glGetShaderiv				= nullptr;
-PFNGLGETSHADERINFOLOGPROC			glGetShaderInfoLog			= nullptr;
-PFNGLGETPROGRAMIVPROC				glGetProgramiv				= nullptr;
-PFNGLGETPROGRAMINFOLOGPROC			glGetProgramInfoLog			= nullptr;
-PFNGLGETATTRIBLOCATIONPROC			glGetAttribLocation			= nullptr;
-PFNGLGENVERTEXARRAYSPROC			    glGenVertexArrays			= nullptr;
-PFNGLBINDVERTEXARRAYPROC			    glBindVertexArray			= nullptr;
-PFNGLDEBUGMESSAGECALLBACKARBPROC	    glDebugMessageCallbackARB	= nullptr;
+PFNGLGENTEXTURESPROC				glGenTextures					= nullptr;
+PFNGLBINDTEXTUREPROC				glBindTexture					= nullptr;
+PFNGLTEXPARAMETERIPROC				glTexParameteri					= nullptr;
+PFNGLVIEWPORTPROC					glViewport						= nullptr;
+PFNGLCLEARPROC 						glClear							= nullptr;
+PFNGLGETERRORPROC					glGetError						= nullptr;
+PFNGLTEXSTORAGE2DPROC				glTexStorage2D					= nullptr;
+PFNGLTEXSUBIMAGE2DPROC				glTexSubImage2D					= nullptr;
+PFNGLGENBUFFERSPROC					glGenBuffers					= nullptr;
+PFNGLBINDBUFFERPROC					glBindBuffer					= nullptr;
+PFNGLBUFFERSTORAGEPROC				glBufferStorage					= nullptr;
+PFNGLMAPBUFFERPROC					glMapBuffer						= nullptr;
+PFNGLUNMAPBUFFERPROC				glUnmapBuffer					= nullptr;
+PFNGLDRAWARRAYSPROC					glDrawArrays					= nullptr;
+PFNGLVERTEXATTRIBPOINTERPROC		glVertexAttribPointer			= nullptr;
+PFNGLENABLEVERTEXATTRIBARRAYPROC	glEnableVertexAttribArray		= nullptr;
+PFNGLCREATESHADERPROC				glCreateShader					= nullptr;
+PFNGLSHADERSOURCEPROC				glShaderSource					= nullptr;
+PFNGLCOMPILESHADERPROC				glCompileShader					= nullptr;
+PFNGLCREATEPROGRAMPROC				glCreateProgram					= nullptr;
+PFNGLATTACHSHADERPROC				glAttachShader					= nullptr;
+PFNGLBINDATTRIBLOCATIONPROC			glBindAttribLocation			= nullptr;
+PFNGLLINKPROGRAMPROC				glLinkProgram					= nullptr;
+PFNGLUSEPROGRAMPROC					glUseProgram					= nullptr;
+PFNGLGETSHADERIVPROC				glGetShaderiv					= nullptr;
+PFNGLGETSHADERINFOLOGPROC			glGetShaderInfoLog				= nullptr;
+PFNGLGETPROGRAMIVPROC				glGetProgramiv					= nullptr;
+PFNGLGETPROGRAMINFOLOGPROC			glGetProgramInfoLog				= nullptr;
+PFNGLGETATTRIBLOCATIONPROC			glGetAttribLocation				= nullptr;
+PFNGLGENVERTEXARRAYSPROC			glGenVertexArrays				= nullptr;
+PFNGLBINDVERTEXARRAYPROC			glBindVertexArray				= nullptr;
 
 //imgui opengl subset
-PFNGLGETINTEGERVPROC  	            glGetIntegerv	            = nullptr;
-PFNGLGETSTRINGPROC                   glGetString                 = nullptr;
-PFNGLENABLEPROC                      glEnable                    = nullptr;
-PFNGLDISABLEPROC                     glDisable                   = nullptr;
-PFNGLBLENDEQUATIONPROC               glBlendEquation             = nullptr;
-PFNGLUNIFORM1IPROC                   glUniform1i                 = nullptr;
-PFNGLUNIFORMMATRIX4FVPROC            glUniformMatrix4fv          = nullptr;
-PFNGLACTIVETEXTUREPROC               glActiveTexture             = nullptr;
-PFNGLISENABLEDPROC                   glIsEnabled                 = nullptr;
-PFNGLSCISSORPROC                     glScissor                   = nullptr;
-PFNGLDRAWELEMENTSPROC                glDrawElements              = nullptr;
-PFNGLDELETEVERTEXARRAYSPROC          glDeleteVertexArrays        = nullptr;
-PFNGLTEXIMAGE2DPROC                  glTexImage2D                = nullptr;
-PFNGLDELETETEXTURESPROC              glDeleteTextures            = nullptr;
-PFNGLGETUNIFORMLOCATIONPROC          glGetUniformLocation        = nullptr;
-PFNGLDELETEBUFFERSPROC               glDeleteBuffers             = nullptr;
-PFNGLDETACHSHADERPROC                glDetachShader              = nullptr;
-PFNGLDELETESHADERPROC                glDeleteShader              = nullptr;
-PFNGLDELETEPROGRAMPROC               glDeleteProgram             = nullptr;
-PFNGLBLENDEQUATIONSEPARATEPROC       glBlendEquationSeparate     = nullptr;
-PFNGLBLENDFUNCSEPARATEPROC           glBlendFuncSeparate         = nullptr;
+PFNGLGETINTEGERVPROC  	           	 glGetIntegerv	            	= nullptr;
+PFNGLGETSTRINGPROC                   glGetString                	= nullptr;
+PFNGLENABLEPROC                      glEnable                   	= nullptr;
+PFNGLDISABLEPROC                     glDisable                  	= nullptr;
+PFNGLBLENDEQUATIONPROC               glBlendEquation            	= nullptr;
+PFNGLUNIFORM1IPROC                   glUniform1i                	= nullptr;
+PFNGLUNIFORMMATRIX4FVPROC            glUniformMatrix4fv         	= nullptr;
+PFNGLACTIVETEXTUREPROC               glActiveTexture            	= nullptr;
+PFNGLISENABLEDPROC                   glIsEnabled                	= nullptr;
+PFNGLSCISSORPROC                     glScissor                  	= nullptr;
+PFNGLDRAWELEMENTSPROC                glDrawElements             	= nullptr;
+PFNGLDELETEVERTEXARRAYSPROC          glDeleteVertexArrays       	= nullptr;
+PFNGLTEXIMAGE2DPROC                  glTexImage2D               	= nullptr;
+PFNGLDELETETEXTURESPROC              glDeleteTextures           	= nullptr;
+PFNGLGETUNIFORMLOCATIONPROC          glGetUniformLocation       	= nullptr;
+PFNGLDELETEBUFFERSPROC               glDeleteBuffers            	= nullptr;
+PFNGLDETACHSHADERPROC                glDetachShader             	= nullptr;
+PFNGLDELETESHADERPROC                glDeleteShader             	= nullptr;
+PFNGLDELETEPROGRAMPROC               glDeleteProgram            	= nullptr;
+PFNGLBLENDEQUATIONSEPARATEPROC       glBlendEquationSeparate    	= nullptr;
+PFNGLBLENDFUNCSEPARATEPROC           glBlendFuncSeparate        	= nullptr;
 
 void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
 {
@@ -286,7 +290,9 @@ void loadOpenGL4FunctionPointers()
 	glTexSubImage2D 			= (PFNGLTEXSUBIMAGE2DPROC)w32glGetProcAddress("glTexSubImage2D");
 	glGenBuffers				= (PFNGLGENBUFFERSPROC)w32glGetProcAddress("glGenBuffers");
 	glBindBuffer				= (PFNGLBINDBUFFERPROC)w32glGetProcAddress("glBindBuffer");
-	glBufferData				= (PFNGLBUFFERDATAPROC)w32glGetProcAddress("glBufferData");
+	glBufferStorage				= (PFNGLBUFFERSTORAGEPROC)w32glGetProcAddress("glBufferStorage");
+	glMapBuffer					= (PFNGLMAPBUFFERPROC)w32glGetProcAddress("glMapBuffer");
+	glUnmapBuffer				= (PFNGLUNMAPBUFFERPROC)w32glGetProcAddress("glUnmapBuffer");
 	glDrawArrays				= (PFNGLDRAWARRAYSPROC)w32glGetProcAddress("glDrawArrays");
 	glVertexAttribPointer		= (PFNGLVERTEXATTRIBPOINTERPROC)w32glGetProcAddress("glVertexAttribPointer");
 	glEnableVertexAttribArray	= (PFNGLENABLEVERTEXATTRIBARRAYPROC)w32glGetProcAddress("glEnableVertexAttribArray");
@@ -305,7 +311,6 @@ void loadOpenGL4FunctionPointers()
 	glGetAttribLocation			= (PFNGLGETATTRIBLOCATIONPROC)w32glGetProcAddress("glGetAttribLocation");
 	glGenVertexArrays			= (PFNGLGENVERTEXARRAYSPROC)w32glGetProcAddress("glGenVertexArrays");
 	glBindVertexArray			= (PFNGLBINDVERTEXARRAYPROC)w32glGetProcAddress("glBindVertexArray");
-	glDebugMessageCallbackARB	= (PFNGLDEBUGMESSAGECALLBACKARBPROC)w32glGetProcAddress("glDebugMessageCallbackARB");       
 	glBlendEquation             = (PFNGLBLENDEQUATIONPROC)w32glGetProcAddress("glBlendEquation");               
 	glUniform1i                 = (PFNGLUNIFORM1IPROC)w32glGetProcAddress("glUniform1i");                   
 	glUniformMatrix4fv          = (PFNGLUNIFORMMATRIX4FVPROC)w32glGetProcAddress("glUniformMatrix4fv");            
@@ -325,7 +330,9 @@ void loadOpenGL4FunctionPointers()
 	K15_RUNTIME_ASSERT(glTexSubImage2D != nullptr);
 	K15_RUNTIME_ASSERT(glGenBuffers != nullptr);
 	K15_RUNTIME_ASSERT(glBindBuffer	!= nullptr);
-	K15_RUNTIME_ASSERT(glBufferData != nullptr);
+	K15_RUNTIME_ASSERT(glBufferStorage != nullptr);
+	K15_RUNTIME_ASSERT(glMapBuffer != nullptr);
+	K15_RUNTIME_ASSERT(glUnmapBuffer != nullptr);
 	K15_RUNTIME_ASSERT(glDrawArrays != nullptr);
 	K15_RUNTIME_ASSERT(glVertexAttribPointer != nullptr);
 	K15_RUNTIME_ASSERT(glEnableVertexAttribArray != nullptr);
@@ -344,7 +351,6 @@ void loadOpenGL4FunctionPointers()
 	K15_RUNTIME_ASSERT(glGetAttribLocation != nullptr);
 	K15_RUNTIME_ASSERT(glGenVertexArrays != nullptr);
 	K15_RUNTIME_ASSERT(glBindVertexArray != nullptr);
-	K15_RUNTIME_ASSERT(glDebugMessageCallbackARB != nullptr);
 	K15_RUNTIME_ASSERT(glBlendEquation != nullptr);
 	K15_RUNTIME_ASSERT(glUniform1i != nullptr);
 	K15_RUNTIME_ASSERT(glUniformMatrix4fv != nullptr);
