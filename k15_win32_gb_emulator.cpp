@@ -179,12 +179,8 @@ struct Win32ApplicationContext
 
 	GLuint 					gameboyFrameBufferTexture;
 	GLuint					gameboyFrameBufferShader;
-	GLuint					userMessageShader;
-	GLuint 					bitmapFontTexture;
 	GLuint					gameboyFrameVertexBuffer;
-	GLuint					textVertexBuffer;
 	GLuint					gameboyVertexArray;
-	GLuint					textVertexArray;
 	
 	GBEmulatorJoypadState 	joypadState;
 
@@ -283,108 +279,6 @@ HMODULE getLibraryHandle( const char* pLibraryFileName )
 	return LoadLibraryA( pLibraryFileName );
 }
 
-void updateTextVertexBuffer( Win32ApplicationContext* pContext )
-{
-	const float pixelUnitH = 1.0f/(float)pContext->windowWidth;
-	const float pixelUnitV = 1.0f/(float)pContext->windowHeight;
-
-	size_t glyphsToRender = 0;
-
-	for( uint8_t userMessageIndex = 0; userMessageIndex < pContext->userMessageCount; ++userMessageIndex )
-	{
-		const UserMessage* pUserMessage = pContext->userMessages + userMessageIndex;
-		glyphsToRender += pUserMessage->messageBufferLength;
-	}
-
-	const size_t glyphVertexCount = glyphsToRender * 6;
-	const size_t glyphVertexDataSizeInBytes = glyphVertexCount * sizeof(float);
-	
-	glBindBuffer( GL_ARRAY_BUFFER, pContext->textVertexBuffer );
-	float* pVertexData = (float*)glMapBuffer( GL_ARRAY_BUFFER, GL_WRITE_ONLY );
-
-	if( pVertexData == nullptr )
-	{
-		GLenum err = glGetError();
-		err = err;
-	}
-
-	for( uint8_t userMessageIndex = 0; userMessageIndex < pContext->userMessageCount; ++userMessageIndex )
-	{
-		const UserMessage* pUserMessage = pContext->userMessages + userMessageIndex;
-		const char* pText = pUserMessage->messageBuffer;
-		if( pUserMessage->messageBufferLength == 0 )
-		{
-			continue;
-		}
-
-		const float xStep = pixelUnitH * glyphWidthInPixels * 4;
-		const float yStep = pixelUnitV * glyphHeightInPixels * 4;
-
-		float x = 1.0f - ( pixelUnitH * 4 * glyphWidthInPixels * pUserMessage->messageBufferLength );
-		const float y = ( pixelUnitV * ( ( 1 + userMessageIndex ) * glyphHeightInPixels * 4 ) ) - 1.0f;
-
-		for( size_t textIndex = 0; textIndex < pUserMessage->messageBufferLength; ++textIndex )
-		{
-			const char textCharacter = pText[ textIndex ];
-			const char fontCharacterIndex = textCharacter - 32;
-			if( fontCharacterIndex < 0 || fontCharacterIndex > 95 )
-			{
-				//FK: non renderable glyphs
-				continue;
-			}
-
-			const uint8_t rowIndex 		= ( fontCharacterIndex / glyphRowCount );
-			const uint8_t columnIndex 	= ( fontCharacterIndex % glyphRowCount );
-
-			const uint16_t glyphX = columnIndex * glyphWidthInPixels;
-			const uint16_t glyphY = rowIndex * glyphHeightInPixels;
-
-			const float glyphU = ( (float)glyphX / (float)fontPixelDataWidthInPixels );
-			const float glyphV = ( (float)glyphY / (float)fontPixelDataHeightInPixels );
-
-			const float glyphUStep = (1.0f / fontPixelDataWidthInPixels) * (float)glyphWidthInPixels;
-			const float glyphVStep = (1.0f / fontPixelDataHeightInPixels) * (float)glyphHeightInPixels;
-
-			*pVertexData++ = x;
-			*pVertexData++ = y + yStep;
-			*pVertexData++ = glyphU;
-			*pVertexData++ = glyphV;
-
-			*pVertexData++ = x + xStep;
-			*pVertexData++ = y + yStep;
-			*pVertexData++ = glyphU + glyphUStep;
-			*pVertexData++ = glyphV;
-
-			*pVertexData++ = x + xStep;
-			*pVertexData++ = y;
-			*pVertexData++ = glyphU + glyphUStep;
-			*pVertexData++ = glyphV + glyphVStep;
-
-			*pVertexData++ = x + xStep;
-			*pVertexData++ = y;
-			*pVertexData++ = glyphU + glyphUStep;
-			*pVertexData++ = glyphV + glyphVStep;
-
-			*pVertexData++ = x;
-			*pVertexData++ = y;
-			*pVertexData++ = glyphU;
-			*pVertexData++ = glyphV + glyphVStep;
-
-			*pVertexData++ = x;
-			*pVertexData++ = y + yStep;
-			*pVertexData++ = glyphU;
-			*pVertexData++ = glyphV;
-
-			x += xStep;
-		}
-	}
-
-	glUnmapBuffer( GL_ARRAY_BUFFER );
-
-	pContext->textVertexCount = ( uint16_t )glyphVertexCount;
-}
-
-
 void updateGameboyFrameVertexBuffer( Win32ApplicationContext* pContext )
 {
 	const float l = (float)( pContext->windowWidth - gbHorizontalResolutionInPixels * pContext->frameBufferScale ) * 0.5f;
@@ -437,8 +331,6 @@ void pushUserMessage( Win32ApplicationContext* pContext, const char* pFormattedM
 	va_end(argList);
 
 	QueryPerformanceCounter( &pUserMessage->startTime );
-
-	updateTextVertexBuffer( pContext );
 }
 
 void allocateDebugConsole()
@@ -741,10 +633,7 @@ void openRomFile( Win32ApplicationContext* pContext )
 void enableFullscreen( Win32ApplicationContext* pContext )
 {
 	pContext->fullscreen 		= 1;
-	pContext->frameBufferScale 	= pContext->monitorHeight / gbVerticalResolutionInPixels;
-
-	//pContext->windowStyle 	= GetWindowLongA( pContext->pWindowHandle, GWL_STYLE );
-	//pContext->windowStyleEx = GetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE );
+	pContext->frameBufferScale 	= pContext->maxScale;
 
 	const LONG fullscreenWindowStyle 	=  pContext->windowStyle & ~( WS_CAPTION | WS_THICKFRAME );
 	const LONG fullscreenWindowStyleEx 	=  pContext->windowStyleEx & ~( WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE ) ;
@@ -755,6 +644,7 @@ void enableFullscreen( Win32ApplicationContext* pContext )
 	//FK: Hide menu
 	SetMenu( pContext->pWindowHandle, nullptr );
 	SetWindowPos( pContext->pWindowHandle, HWND_TOP, 0u, 0u, pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED );
+	updateGameboyFrameVertexBuffer( pContext );
 }
 
 void disableFullscreen( Win32ApplicationContext* pContext )
@@ -793,7 +683,7 @@ void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 {
 	K15_RUNTIME_ASSERT( scale <= pContext->maxScale );
 
-	for( uint8_t scaleIndex = 1; scaleIndex < pContext->maxScale; ++scaleIndex )
+	for( uint8_t scaleIndex = 1; scaleIndex <= pContext->maxScale; ++scaleIndex )
 	{
 		CheckMenuItem( pContext->pScaleMenuItems, gbMenuScale0 + scaleIndex, scale == scaleIndex ? MF_CHECKED : MF_UNCHECKED );
 	}
@@ -865,8 +755,10 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 			{
 				pContext->menuScale = (uint8_t)wparam - gbMenuScale0;
 				setFrameBufferScale( pContext, pContext->menuScale );
+				break;
 			}
-			printf("Unknown window command '%lld'\n", wparam);
+			
+			printf("Unknown window command '%d'\n", (int32_t)wparam);
 			break;
 	}
 }
@@ -1297,7 +1189,7 @@ void generateOpenGLShaders( Win32ApplicationContext* pContext  )
 		}
 	)";
 
-	constexpr char gameboyPixelShaderSource[] = R"(
+	constexpr char pixelShaderSource[] = R"(
 		#version 410
 		in vec2 ps_uv;
 		out vec4 color;
@@ -1309,47 +1201,22 @@ void generateOpenGLShaders( Win32ApplicationContext* pContext  )
 			color = texture( gameboyFramebuffer, ps_uv );
 		}
 	)";
-	
-	constexpr char fontPixelShaderSource[] = R"(
-		#version 410
-		in vec2 ps_uv;
-		out vec4 color;
 
-		uniform sampler2D fontGlyphAtlas;
-
-		void main()
-		{
-			float fontSample = texture( fontGlyphAtlas, ps_uv ).r;
-			color = vec4( fontSample, fontSample, fontSample, 1.0 );
-		}
-	)";
-
-	const GLuint vertexShader 		= glCreateShader( GL_VERTEX_SHADER );
-	const GLuint gameboyPixelShader = glCreateShader( GL_FRAGMENT_SHADER );
-	const GLuint fontPixelShader 	= glCreateShader( GL_FRAGMENT_SHADER );
+	const GLuint vertexShader 	= glCreateShader( GL_VERTEX_SHADER );
+	const GLuint pixelShader 	= glCreateShader( GL_FRAGMENT_SHADER );
 
 	pContext->gameboyFrameBufferShader 	= glCreateProgram();
-	pContext->userMessageShader 		= glCreateProgram();
 
 	compileOpenGLShader( vertexShader, vertexShaderSource, sizeof( vertexShaderSource ) );
-	compileOpenGLShader( gameboyPixelShader, gameboyPixelShaderSource, sizeof( gameboyPixelShaderSource ) );
-	compileOpenGLShader( fontPixelShader, fontPixelShaderSource, sizeof( fontPixelShaderSource ) );
+	compileOpenGLShader( pixelShader, pixelShaderSource, sizeof( pixelShaderSource ) );
 
 	glAttachShader( pContext->gameboyFrameBufferShader, vertexShader );
-	glAttachShader( pContext->gameboyFrameBufferShader, gameboyPixelShader );
+	glAttachShader( pContext->gameboyFrameBufferShader, pixelShader );
 	glLinkProgram( pContext->gameboyFrameBufferShader );
 	glDetachShader( pContext->gameboyFrameBufferShader, vertexShader );
-	glDetachShader( pContext->gameboyFrameBufferShader, gameboyPixelShader );
-
-	glAttachShader( pContext->userMessageShader, vertexShader );
-	glAttachShader( pContext->userMessageShader, fontPixelShader );
-	glLinkProgram( pContext->userMessageShader );
-	glDetachShader( pContext->gameboyFrameBufferShader, vertexShader );
-	glDetachShader( pContext->gameboyFrameBufferShader, fontPixelShader );
-
+	glDetachShader( pContext->gameboyFrameBufferShader, pixelShader );
 	glDeleteShader( vertexShader );
-	glDeleteShader( gameboyPixelShader );
-	glDeleteShader( fontPixelShader );
+	glDeleteShader( pixelShader );
 }
 
 void openGLDebugMessageCallback( GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* pMessage, const GLvoid* pUserParam )
@@ -1377,7 +1244,6 @@ void createOpenGLContext( Win32ApplicationContext* pContext )
 void generateOpenGLTextures(Win32ApplicationContext* pContext)
 {
 	glGenTextures(1, &pContext->gameboyFrameBufferTexture);
-	glGenTextures(1, &pContext->bitmapFontTexture);
 
 	glBindTexture(GL_TEXTURE_2D, pContext->gameboyFrameBufferTexture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -1385,14 +1251,6 @@ void generateOpenGLTextures(Win32ApplicationContext* pContext)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
 	glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGB8, gbHorizontalResolutionInPixels, gbVerticalResolutionInPixels);
-	
-	glBindTexture(GL_TEXTURE_2D, pContext->bitmapFontTexture);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-	glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8, fontPixelDataWidthInPixels, fontPixelDataHeightInPixels);
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fontPixelDataWidthInPixels, fontPixelDataHeightInPixels, GL_RED, GL_UNSIGNED_BYTE, fontPixelData );
 }
 
 void queryXInputController( Win32ApplicationContext* pContext )
@@ -1674,7 +1532,6 @@ BOOL setup( Win32ApplicationContext* pContext, LPSTR romPath )
 	constexpr size_t gameboyFrameVertexBufferSizeInBytes = sizeof(float) * 4 * 6;
 
 	glGenBuffers( 1, &pContext->gameboyFrameVertexBuffer );
-	glGenBuffers( 1, &pContext->textVertexBuffer );
 	glBindBuffer( GL_ARRAY_BUFFER, pContext->gameboyFrameVertexBuffer );
 	glBufferStorage( GL_ARRAY_BUFFER, gameboyFrameVertexBufferSizeInBytes, nullptr, GL_MAP_WRITE_BIT );
 
@@ -1692,20 +1549,6 @@ BOOL setup( Win32ApplicationContext* pContext, LPSTR romPath )
 	glEnableVertexAttribArray(1);
 
 	updateGameboyFrameVertexBuffer( pContext );
-
-	constexpr size_t textVertexBufferSizeInBytes = 1024 * sizeof(float) * 4;
-	glBindBuffer( GL_ARRAY_BUFFER, pContext->textVertexBuffer );
-	glBufferStorage( GL_ARRAY_BUFFER, textVertexBufferSizeInBytes, nullptr, GL_MAP_WRITE_BIT );
-
-	glGenVertexArrays( 1, &pContext->textVertexArray );
-	glBindVertexArray( pContext->textVertexArray );
-	
-	glVertexAttribPointer(0, 2, GL_FLOAT, 0, strideInBytes, (const GLvoid*)posOffset );
-	glEnableVertexAttribArray(0);
-
-	glVertexAttribPointer(1, 2, GL_FLOAT, 0, strideInBytes, (const GLvoid*)uvOffset );
-	glEnableVertexAttribArray(1);
-
 
 	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorInstanceMemoryRequirementsInBytes();
 
@@ -1734,11 +1577,7 @@ void drawGBFrameBuffer( Win32ApplicationContext* pContext )
 
 void drawUserMessages( Win32ApplicationContext* pContext )
 {
-	glBindTexture( GL_TEXTURE_2D, pContext->bitmapFontTexture );
-	glBindBuffer( GL_ARRAY_BUFFER, pContext->textVertexBuffer );
-	glBindVertexArray( pContext->textVertexArray );
-	glUseProgram( pContext->userMessageShader );
-	glDrawArrays( GL_TRIANGLES, 0, ( GLsizei )pContext->textVertexCount );
+	
 }
 
 void doFrame( Win32ApplicationContext* pContext )
@@ -1771,11 +1610,6 @@ void updateUserMessages( Win32ApplicationContext* pContext )
 			pContext->userMessages[userMessageIndex] = pContext->userMessages[userMessageIndex+1];
 			--pContext->userMessageCount;
 		}
-	}
-
-	if( oldUserMessageCount != pContext->userMessageCount )
-	{
-		updateTextVertexBuffer( pContext );
 	}
 }
 

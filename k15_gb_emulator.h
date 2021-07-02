@@ -7,7 +7,6 @@
 #define K15_UNUSED_VAR(x) (void)x
 
 #include "k15_gb_opcodes.h"
-#include "k15_bitmap_font_data.cpp"
 
 #define Kbyte(x) ((x)*1024)
 #define Mbyte(x) (Kbyte(x)*1024)
@@ -3105,15 +3104,6 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
     }
 
-    //FK: Serial - only used for printf right now
-    if( ( pMemoryMapper->pBaseAddress[0xFF02] & (7<<1) ) > 0 )
-    {
-        const char c = (const char)pMemoryMapper->pBaseAddress[0xFF01];
-        printf("%c", c);
-        pMemoryMapper->pBaseAddress[0xFF02] &= ~(7<<1);
-        triggerInterrupt( pCpuState, SerialInterrupt );
-    }
-
     if( isInCartridgeRomAddressRange( pMemoryMapper->lastAddressWrittenTo ) )
     {
         handleCartridgeRamWrite( pEmulatorInstance->pCartridge, pMemoryMapper );
@@ -3129,16 +3119,6 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     pMemoryMapper->dmaActive    = pCpuState->flags.dma;
 
     return cycleCost;
-}
-
-const uint8_t* getGlyphPixel( char glyph )
-{
-    const char glyphIndex = glyph - 32u;
-    const uint8_t rowIndex = glyphIndex / glyphRowCount;
-    const uint8_t columnIndex = glyphIndex % glyphRowCount;
-    const uint8_t y = ( fontPixelDataHeightInPixels - 1 ) - ( rowIndex * glyphHeightInPixels );
-    const uint8_t x = columnIndex * glyphWidthInPixels;
-    return fontPixelData + (x + y * fontPixelDataWidthInPixels) * 3;
 }
 
 void convertGBFrameBufferToRGB8Buffer( uint8_t* pRGBFrameBuffer, const uint8_t* pGBFrameBuffer)
