@@ -1,0 +1,95 @@
+VRAM_START  EQU $8000
+VRAM_END    EQU $A000
+LCDC        EQU $FF40
+LCDCSTAT    EQU $FF41
+INTENABLE   EQU $FFFF
+INTFLAG     EQU $FF0F
+SCY         EQU $FF42
+SCX         EQU $FF43
+LY          EQU $FF44
+LYC         EQU $FF45
+BGP         EQU $FF47
+OBP0        EQU $FF48
+OBP1        EQU $FF49
+TMA         EQU $FF06
+TAC         EQU $FF07
+
+
+DEFAULT_PALETTE EQU %11100100
+
+INCLUDE "background_tiles.z80"
+INCLUDE "bootrom_tilemap.z80"
+
+SECTION "Header", ROM0[$100]
+
+entryPoint:
+    nop
+    jp main
+
+SECTION "VBlankInterrupt", ROM0[$40]
+    reti 
+
+SECTION "TimerInterrupt", ROM0[$50]
+    reti
+
+SECTION "Code", ROM0
+
+uploadTileMapToVram:
+    xor a, a
+    ld de, tilemap
+    ret
+    
+uploadBgTiles:
+    ret
+
+clearOAM:
+    ret
+
+setLcdState:
+    xor a
+    ld [SCY], a
+    ld [SCX], a
+
+    ld a, DEFAULT_PALETTE
+    ld [OBP0], a
+    ld [OBP1], a
+    ld [BGP],  a
+
+    ; Enable lcd, obj and background rendering
+    ld a, %10000011         
+    ld [LCDC], a
+
+    ret
+
+setTimerState:
+    xor a
+    ld [TMA], a
+
+    ; Enable timer and set to 1024 resolution
+    ld a, %100 
+    ld [TAC], a
+
+    ret
+
+main:
+    ; Disable lcd so that we can savely upload to vram
+    di
+    xor a                   
+    ld [LCDC], a            
+    
+    call uploadTileMapToVram
+    call uploadBgTiles
+    call clearOAM
+
+    call setLcdState
+    call setTimerState
+
+    ; Enable vblank and timer interrupts
+    ld a, %101
+    ld [INTENABLE], a
+    ei
+
+mainloop:
+    halt 
+    nop 
+    jp mainloop
