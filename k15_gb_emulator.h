@@ -1,6 +1,6 @@
 #include "stdint.h"
 
-#define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
+#define K15_ENABLE_EMULATOR_DEBUG_FEATURES      0
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
 #define K15_BREAK_ON_ILLEGAL_INSTRUCTION        1
 
@@ -14,28 +14,29 @@
 #define Kbit(x) (Kbyte(x)/8)
 #define Mbit(x) (Mbyte(x)/8)
 
-#define FourCC(a, b, c, d) ((uint32_t)((a) << 0) | (uint32_t)((b) << 8) | (uint32_t)((c) << 16) | (uint32_t)((d) << 24))
-#define ArrayCount(arr) (sizeof(arr)/sizeof(arr[0]))
+#define FourCC(a, b, c, d)  ((uint32_t)((a) << 0) | (uint32_t)((b) << 8) | (uint32_t)((c) << 16) | (uint32_t)((d) << 24))
+#define ArrayCount(arr)     (sizeof(arr)/sizeof(arr[0]))
+
 //FK: Compiler specific functions
 #ifdef _MSC_VER
 #   include <intrin.h>
-#   define breakPointHook() __nop()
-#   define debugBreak __debugbreak
+#   define BreakPointHook() __nop()
+#   define DebugBreak       __debugbreak
 #else
-#   define breakPointHook()
-#   define debugBreak
+#   define BreakPointHook()
+#   define DebugBreak
 #endif
 
-#define illegalCodePath() debugBreak()
-
-#define K15_RUNTIME_ASSERT(x) if(!(x)) debugBreak()
+#define IllegalCodePath()       DebugBreak()
+#define RuntimeAssert(x)        if(!(x)) DebugBreak()
+#define CompiletimeAssert(x)    typedef char compile_time_assertion_##_LINE_[(x)?1:-1]
 
 static constexpr uint8_t    gbNintendoLogo[]                        = { 0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E };
 static constexpr char       gbRamFileExtension[]                    = ".k15_gb_ram";
 static constexpr char       gbStateFileExtension[]                  = ".k15_gb_state";
 static constexpr uint32_t   gbStateFourCC                           = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
-static constexpr uint32_t   gbCpuFrequency                          = 4194304u;
-static constexpr uint32_t   gbPPUCyclesPerFrame                     = 70224u;
+static constexpr uint32_t   gbCyclesPerFrame                        = 70224u;
+static constexpr uint32_t   gbEmulatorFrameRate                     = 60u;
 static constexpr uint8_t    gbStateVersion                          = 2;
 static constexpr uint8_t    gbOAMSizeInBytes                        = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                         = 160u;
@@ -53,6 +54,7 @@ static constexpr uint8_t    gbObjectAttributeCapacity               = 40u;
 static constexpr uint8_t    gbSpritesPerScanline                    = 10u; //FK: the hardware allowed no more than 10 sprites per scanline
 static constexpr uint8_t    gbFrameBufferScanlineSizeInBytes        = gbHorizontalResolutionInPixels / 4;
 static constexpr size_t     gbFrameBufferSizeInBytes                = gbFrameBufferScanlineSizeInBytes * gbVerticalResolutionInPixels;
+static constexpr uint8_t    gbFrameBufferCount                      = 2;
 static constexpr size_t     gbMappedMemorySizeInBytes               = 0x10000;
 static constexpr size_t     gbCompressionTokenSizeInBytes           = 1;
 
@@ -80,7 +82,6 @@ struct GBEmulatorJoypadState
                     uint8_t b           : 1;
                     uint8_t select      : 1;
                     uint8_t start       : 1;
-                    uint8_t _padding    : 4;
                 };
 
                 uint8_t actionButtonMask;
@@ -94,7 +95,6 @@ struct GBEmulatorJoypadState
                     uint8_t left        : 1;
                     uint8_t up          : 1;
                     uint8_t down        : 1;
-                    uint8_t _padding    : 4;
                 };
 
                 uint8_t dpadButtonMask;
@@ -189,7 +189,6 @@ struct GBCpuState
     GBCpuRegisters  registers;
 
     uint32_t        cycleCounter;
-    uint32_t        targetCycleCountPerUpdate;
     uint16_t        dmaAddress;
     uint8_t         dmaCycleCounter;
     GBCpuStateFlags flags;          //FK: not to be confused with GBCpuRegisters::F
@@ -308,10 +307,11 @@ struct GBPpuState
     GBPalette*          pPalettes;
     uint8_t*            pBackgroundOrWindowTileIds[ 2 ];
     uint8_t*            pTileBlocks[ 3 ];
-    uint8_t*            pGBFrameBuffer;
+    uint8_t*            pGBFrameBuffers[ gbFrameBufferCount ];
 
     GBObjectAttributes  scanlineSprites[ gbSpritesPerScanline ];
     uint8_t             scanlineSpriteCounter;
+    uint8_t             activeFrameBufferIndex;
     uint8_t             objectMonochromePlatte[ 8 ];
     uint32_t            dotCounter;
     uint32_t            cycleCounter;
@@ -432,7 +432,6 @@ struct GBEmulatorInstance
     GBEmulatorJoypadState   joypadState;
     GBEmulatorInstanceFlags flags;
 
-    uint16_t                monitorRefreshRate;
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
     GBEmulatorDebug         debug;
 #endif
@@ -567,7 +566,7 @@ size_t mapRomSizeToByteSize(uint8_t romSize)
     }
 
     //FK: Unsupported romSize identifier
-    illegalCodePath();
+    IllegalCodePath();
     return 0;
 }
 
@@ -588,7 +587,7 @@ size_t mapRamSizeToByteSize(uint8_t ramSize)
     }
 
     //FK: Unsupported ramSize identifier
-    illegalCodePath();
+    IllegalCodePath();
     return 0;
 }
 
@@ -610,23 +609,15 @@ uint8_t isGBEmulatorRomMapped( const GBEmulatorInstance* pEmulatorInstance )
     return pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr;
 }
 
-GBCartridgeHeader getGBEmulatorInstanceCurrentCartridgeHeader( const GBEmulatorInstance* pEmulatorInstance )
+GBCartridgeHeader getGBEmulatorCurrentCartridgeHeader( const GBEmulatorInstance* pEmulatorInstance )
 {
-    K15_RUNTIME_ASSERT( pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr );
+    RuntimeAssert( pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr );
     return getGBCartridgeHeader( pEmulatorInstance->pCartridge->pRomBaseAddress );
 }
 
 void setGBEmulatorRamData( GBEmulatorInstance* pEmulatorInstance, uint8_t* pRamData )
 {
     pEmulatorInstance->pCartridge->pRamBaseAddress = pRamData;
-}
-
-void setGBEmulatorInstanceMonitorRefreshRate( GBEmulatorInstance* pEmulatorInstance, uint16_t monitorRefreshRate )
-{
-    K15_RUNTIME_ASSERT( monitorRefreshRate > 0 );
-
-    pEmulatorInstance->monitorRefreshRate                   = monitorRefreshRate;
-    pEmulatorInstance->pCpuState->targetCycleCountPerUpdate = gbCpuFrequency / monitorRefreshRate;
 }
 
 size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySizeInBytes )
@@ -703,7 +694,7 @@ size_t compressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource, si
     return compressedMemorySizeInBytes;
 }
 
-void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, uint8_t* pStateMemory, size_t stateMemorySizeInBytes )
+void storeGBEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t* pStateMemory, size_t stateMemorySizeInBytes )
 {
     const GBCpuState* pCpuState         = pEmulatorInstance->pCpuState;
     const GBPpuState* pPpuState         = pEmulatorInstance->pPpuState;
@@ -711,7 +702,7 @@ void storeGBEmulatorInstanceState( const GBEmulatorInstance* pEmulatorInstance, 
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
     const GBCartridge* pCartridge       = pEmulatorInstance->pCartridge;
 
-    const GBCartridgeHeader header = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
+    const GBCartridgeHeader header = getGBEmulatorCurrentCartridgeHeader( pEmulatorInstance );
     const uint16_t cartridgeChecksum = header.checksumHigher << 8 | header.checksumLower;
 
     GBEmulatorState state;
@@ -761,7 +752,7 @@ size_t uncompressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource )
     return compressedMemorySizeInBytes;
 }
 
-bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pStateMemory )
+bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pStateMemory )
 {
     uint32_t fourCC;
     memcpy( &fourCC, pStateMemory, sizeof( gbStateFourCC ) );
@@ -775,7 +766,7 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     const uint16_t stateCartridgeChecksum = *(uint16_t*)pStateMemory;
     pStateMemory += sizeof( stateCartridgeChecksum );
 
-    const GBCartridgeHeader cartridgeHeader = getGBEmulatorInstanceCurrentCartridgeHeader( pEmulatorInstance );
+    const GBCartridgeHeader cartridgeHeader = getGBEmulatorCurrentCartridgeHeader( pEmulatorInstance );
 
     const uint16_t cartridgeChecksum = cartridgeHeader.checksumHigher << 8 | cartridgeHeader.checksumLower;
     if( cartridgeChecksum != stateCartridgeChecksum )
@@ -792,7 +783,11 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     }
 
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
-    uint8_t* pGBFrameBuffer = pEmulatorInstance->pPpuState->pGBFrameBuffer;
+
+    uint8_t* pGBFrameBuffers[ gbFrameBufferCount ] = { 
+        pEmulatorInstance->pPpuState->pGBFrameBuffers[ 0 ],
+        pEmulatorInstance->pPpuState->pGBFrameBuffers[ 1 ]
+    };
 
     GBEmulatorState state;
     memcpy( &state, pStateMemory, sizeof( GBEmulatorState ) );
@@ -819,13 +814,12 @@ bool loadGBEmulatorInstanceState( GBEmulatorInstance* pEmulatorInstance, const u
     patchIOPpuMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pPpuState );
     patchIOCpuMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pCpuState );
 
-    pEmulatorInstance->pPpuState->pGBFrameBuffer = pGBFrameBuffer;
+    pEmulatorInstance->pPpuState->pGBFrameBuffers[ 0 ] = pGBFrameBuffers[ 0 ];
+    pEmulatorInstance->pPpuState->pGBFrameBuffers[ 1 ] = pGBFrameBuffers[ 1 ];
 
     pMemoryMapper->lcdStatus  = *pEmulatorInstance->pPpuState->lcdRegisters.pStatus;
     pMemoryMapper->dmaActive  = pEmulatorInstance->pCpuState->flags.dma;
     pMemoryMapper->lcdEnabled = pEmulatorInstance->pPpuState->pLcdControl->enable;
-
-    setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, pEmulatorInstance->monitorRefreshRate );
 
     const uint8_t* pCompressedMemory = pStateMemory;
     uncompressMemoryBlockRLE( pMemoryMapper->pBaseAddress + 0x8000, pCompressedMemory );
@@ -1012,7 +1006,7 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
         default:
         {
             //FK: Cartridge type not supported
-            debugBreak();
+            DebugBreak();
         }
     }
 }
@@ -1102,10 +1096,12 @@ void extractMonochromePaletteFrom8BitValue( uint8_t* pMonochromePalette, uint8_t
     pMonochromePalette[3] = ( value >> 6 ) & 0x3;
 }
 
-void initPpuFrameBuffer( GBPpuState* pPpuState, uint8_t* pMemory )
+void initPpuFrameBuffers( GBPpuState* pPpuState, uint8_t* pMemory )
 {
-    pPpuState->pGBFrameBuffer = pMemory;
-    clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
+    pPpuState->pGBFrameBuffers[ 0 ] = pMemory + 0;
+    pPpuState->pGBFrameBuffers[ 1 ] = pMemory + gbFrameBufferSizeInBytes;
+    clearGBFrameBuffer( pPpuState->pGBFrameBuffers[ 0 ] );
+    clearGBFrameBuffer( pPpuState->pGBFrameBuffers[ 1 ] );
 }
 
 void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
@@ -1137,19 +1133,21 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     pPpuState->flags.drawWindow     = 1;
     pPpuState->flags.drawObjects    = 1;
 
-    clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
+    pPpuState->activeFrameBufferIndex = 0;
+
+    clearGBFrameBuffer( pPpuState->pGBFrameBuffers[ pPpuState->activeFrameBufferIndex ] );
 }
 
-size_t calculateGBEmulatorInstanceMemoryRequirementsInBytes()
+size_t calculateGBEmulatorMemoryRequirementsInBytes()
 {
     const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + 
         sizeof(GBMemoryMapper) + sizeof(GBPpuState) + sizeof(GBTimerState) + sizeof(GBCartridge) + 
-        gbMappedMemorySizeInBytes + gbFrameBufferSizeInBytes;
+        gbMappedMemorySizeInBytes + ( gbFrameBufferSizeInBytes * gbFrameBufferCount );
 
     return memoryRequirementsInBytes;
 }
 
-void resetGBEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
+void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
     GBCartridge* pCartridge = pEmulatorInstance->pCartridge;
@@ -1179,28 +1177,28 @@ void resetGBEmulatorInstance( GBEmulatorInstance* pEmulatorInstance )
 }
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-void setGBEmulatorInstanceBreakpoint( GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress )
+void setGBEmulatorBreakpoint( GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress )
 {
     pEmulatorInstance->debug.pauseAtBreakpoint = pauseAtBreakpoint;
     pEmulatorInstance->debug.breakpointAddress = breakpointAddress;
 }
 
-void continueGBEmulatorInstanceExecution( GBEmulatorInstance* pEmulatorInstance )
+void continueGBEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->debug.continueExecution = 1;
 }
 
-void pauseGBEmulatorInstanceExecution( GBEmulatorInstance* pEmulatorInstance )
+void pauseGBEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->debug.pauseExecution = 1;
 }
 
-void runGBEmulatorInstanceForOneInstruction( GBEmulatorInstance* pEmulatorInstance )
+void runGBEmulatorForOneInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->debug.runForOneInstruction = 1;
 }
 
-void runGBEmulatorInstanceForOneFrame( GBEmulatorInstance* pEmulatorInstance )
+void runGBEmulatorForOneFrame( GBEmulatorInstance* pEmulatorInstance )
 {
     pEmulatorInstance->debug.runSingleFrame = 1;
 }
@@ -1219,7 +1217,7 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     initMemoryMapper( pEmulatorInstance->pMemoryMapper, pGBMemory );
 
     uint8_t* pFramebufferMemory = (uint8_t*)(pGBMemory + gbMappedMemorySizeInBytes);
-    initPpuFrameBuffer( pEmulatorInstance->pPpuState, pFramebufferMemory );
+    initPpuFrameBuffers( pEmulatorInstance->pPpuState, pFramebufferMemory );
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
     pEmulatorInstance->debug.breakpointAddress    = 0x0000;
@@ -1235,19 +1233,16 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     //FK: no cartridge loaded yet
     memset( pEmulatorInstance->pCartridge, 0, sizeof( GBCartridge ) );
 
-    resetGBEmulatorInstance( pEmulatorInstance );
-
-    //FK: Assume 60hz output as default
-    setGBEmulatorInstanceMonitorRefreshRate( pEmulatorInstance, 60 );
-
+    resetGBEmulator( pEmulatorInstance );
     return pEmulatorInstance;
 }
 
-void loadGBEmulatorInstanceRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
+void loadGBEmulatorRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
 {
     pEmulator->pCartridge->pRomBaseAddress = nullptr;
+    pEmulator->pCartridge->mappedRomBankNumber = 0u;
 
-    resetGBEmulatorInstance( pEmulator );
+    resetGBEmulator( pEmulator );
     mapCartridgeMemory( pEmulator->pCartridge, pEmulator->pMemoryMapper, pRomMemory );
 }
 
@@ -1258,6 +1253,11 @@ uint8_t reverseBitsInByte( uint8_t value )
             (value * 0x8020LU & 0x88440LU)) * 0x10101LU >> 16);
 }
 
+uint8_t* getActiveFrameBuffer( GBPpuState* pPpuState )
+{
+    return pPpuState->pGBFrameBuffers[ pPpuState->activeFrameBufferIndex ];
+}
+
 void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     if( pPpuState->scanlineSpriteCounter == 0 )
@@ -1265,7 +1265,8 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         return;
     }
 
-    uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+    uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
+    uint8_t* pFrameBufferPixelData = pActiveFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
     for( size_t spriteIndex = 0; spriteIndex < pPpuState->scanlineSpriteCounter; ++spriteIndex )
     {
         const GBObjectAttributes* pSprite = pPpuState->scanlineSprites + spriteIndex;
@@ -1294,7 +1295,7 @@ void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordin
         uint16_t interleavedTilePixelData = 0;
         uint16_t tilePixelMask = 0;
 
-        uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+        uint8_t* pFrameBufferPixelData = pActiveFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
         const uint8_t spriteOffset = 8u;                    //FK: sprites are offset by 8 pixels according to pandocs
         const uint8_t spriteByteOffset = spriteOffset / 4;  //FK: 4 pixel per byte
         uint8_t scanlineByteIndex = (pSprite->x/4) - spriteByteOffset;
@@ -1402,7 +1403,8 @@ void pushWindowPixelsToScanline( GBPpuState* pPpuState, const uint8_t* pTileData
     uint8_t scanlinePixelDataShift = 6 - (wxpos%4) * 2;
     uint8_t scanlinePixelDataIndex = wxpos/4;
 
-    uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+    uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
+    uint8_t* pFrameBufferPixelData = pActiveFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
     for( uint8_t scanlineByteIndex = scanlinePixelDataIndex; scanlineByteIndex < gbFrameBufferScanlineSizeInBytes; ++scanlineByteIndex )
     {
         uint8_t frameBufferByte = 0; //FK: 1 framebuffer byte = 4 pixels with 2bpp
@@ -1498,7 +1500,8 @@ void pushBackgroundPixelsToScanline( GBPpuState* pPpuState, const uint8_t* pTile
     uint8_t scanlinePixelDataShift = 6 - (sx%4) * 2;
     uint8_t scanlinePixelDataIndex = sx/4;
 
-    uint8_t* pFrameBufferPixelData = pPpuState->pGBFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
+    uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
+    uint8_t* pFrameBufferPixelData = pActiveFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * scanlineYCoordinate );
     for( uint8_t scanlineByteIndex = 0; scanlineByteIndex < gbFrameBufferScanlineSizeInBytes; ++scanlineByteIndex )
     {
         uint8_t frameBufferByte = 0; //FK: 1 framebuffer byte = 4 pixels with 2bpp
@@ -1564,7 +1567,8 @@ void collectScanlineSprites( GBPpuState* pPpuState, uint8_t scanlineYCoordinate 
 
 void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
-    clearGBFrameBufferScanline( pPpuState->pGBFrameBuffer, scanlineYCoordinate );
+    uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
+    clearGBFrameBufferScanline( pActiveFrameBuffer, scanlineYCoordinate );
 
     if( pPpuState->pLcdControl->bgEnable && pPpuState->flags.drawBackground )
     {
@@ -1619,7 +1623,7 @@ void updatePPULcdControl( GBPpuState* pPpuState, GBLcdControl lcdControlValue )
     {
         if( !lcdControlValue.enable )
         {
-            clearGBFrameBuffer( pPpuState->pGBFrameBuffer );
+            clearGBFrameBuffer( pPpuState->pGBFrameBuffers[ pPpuState->activeFrameBufferIndex ] );
             *pPpuState->lcdRegisters.pLy = 0;
             pPpuState->lcdRegisters.pStatus->mode = 0;
             pPpuState->dotCounter = 0;
@@ -1644,7 +1648,7 @@ uint16_t readTimerControlFrequency( const uint8_t timerControlValue )
             return 256u;
     }
 
-    illegalCodePath();
+    IllegalCodePath();
     return 0;
 }
 
@@ -1755,6 +1759,9 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
             lcdMode = 1;
             triggerLCDStatInterrupt = pLcdStatus->enableMode1VBlankInterrupt;
             triggerInterrupt( pCpuState, VBlankInterrupt );
+
+            //FK: change between index 0 and 1
+            pPpuState->activeFrameBufferIndex = !pPpuState->activeFrameBufferIndex;
         }
         else
         {
@@ -1869,7 +1876,7 @@ uint8_t getOpcode8BitOperandRHS( GBCpuState* pCpuState, GBMemoryMapper* pMemoryM
             return pCpuState->registers.A;
     }
 
-    illegalCodePath();
+    IllegalCodePath();
     return 0;
 }
 
@@ -1893,7 +1900,7 @@ uint8_t* getOpcode8BitOperandLHS( GBCpuState* pCpuState, GBMemoryMapper* pMemory
             break;
     }
 
-    illegalCodePath();
+    IllegalCodePath();
     return nullptr;
 }
 
@@ -1929,7 +1936,7 @@ uint16_t* getOpcode16BitOperand( GBCpuState* pCpuState, uint8_t opcode )
             return &pCpuState->registers.AF;
     }
 
-    illegalCodePath();
+    IllegalCodePath();
     return nullptr;
 }
 
@@ -1948,7 +1955,7 @@ uint8_t getOpcodeCondition( GBCpuState* pCpuState, uint8_t opcode )
         return pCpuState->registers.F.C == conditionValue;
     }
 
-    illegalCodePath();
+    IllegalCodePath();
     return 0;
 }
 
@@ -2867,14 +2874,14 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
         {
             //FK: illegal opcode
 #if K15_BREAK_ON_ILLEGAL_INSTRUCTION == 1
-            debugBreak();
+            DebugBreak();
 #endif
             break;
         }
         default:
             //FK: opcode not implemented
 #if K15_BREAK_ON_UNKNOWN_INSTRUCTION == 1
-            debugBreak();
+            DebugBreak();
 #endif
     }
 
@@ -3018,7 +3025,7 @@ void handleCartridgeRomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMa
     return;
 }
 
-void setGBEmulatorInstanceJoypadState( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypadState joypadState )
+void setGBEmulatorJoypadState( GBEmulatorInstance* pEmulatorInstance, GBEmulatorJoypadState joypadState )
 {
     pEmulatorInstance->joypadState.value = joypadState.value;
 }
@@ -3076,6 +3083,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     updateTimerRegisters( pMemoryMapper, pTimerState );
     
     checkDMAState( pCpuState, pMemoryMapper, cycleCost ); 
+
     updatePPU( pCpuState, pPpuState, cycleCost );
     updateTimer( pCpuState, pTimerState, cycleCost );
     if( handleInput( pMemoryMapper, pEmulatorInstance->joypadState ) )
@@ -3166,12 +3174,18 @@ void convertGBFrameBufferToRGB8Buffer( uint8_t* pRGBFrameBuffer, const uint8_t* 
 	}
 }
 
-const uint8_t* getGBEmulatorInstanceFrameBuffer( GBEmulatorInstance* pInstance )
+const uint8_t* getGBEmulatorFrameBuffer( GBEmulatorInstance* pInstance )
 {
-    return pInstance->pPpuState->pGBFrameBuffer;
+    const uint8_t backBufferIndex = !pInstance->pPpuState->activeFrameBufferIndex;
+    return pInstance->pPpuState->pGBFrameBuffers[ backBufferIndex ];
 }
 
-GBEmulatorInstanceEventMask runGBEmulatorInstance( GBEmulatorInstance* pInstance )
+constexpr size_t calculateGBEmulatorFrameBuffersSizeInBytes()
+{
+    return gbVerticalResolutionInTiles * gbHorizontalResolutionInTiles * gbTileSizeInBytes * gbFrameBufferCount;
+}
+
+GBEmulatorInstanceEventMask runGBEmulatorForCycles( GBEmulatorInstance* pInstance, uint32_t cycleCountToRunFor )
 {
     GBCpuState* pCpuState = pInstance->pCpuState;
     GBPpuState* pPpuState = pInstance->pPpuState;
@@ -3191,10 +3205,10 @@ GBEmulatorInstanceEventMask runGBEmulatorInstance( GBEmulatorInstance* pInstance
 	{
         const uint8_t cycleCount = runSingleInstruction( pInstance );
         
-        if( pPpuState->cycleCounter >= gbPPUCyclesPerFrame )
+        if( pPpuState->cycleCounter >= gbCyclesPerFrame )
         {
             pInstance->flags.vblank = 1;
-            pPpuState->cycleCounter -= gbPPUCyclesPerFrame;
+            pPpuState->cycleCounter -= gbCyclesPerFrame;
         }
 
         pInstance->debug.runForOneInstruction = 0;
@@ -3211,10 +3225,11 @@ GBEmulatorInstanceEventMask runGBEmulatorInstance( GBEmulatorInstance* pInstance
     }
 #endif
 
-    while( pCpuState->cycleCounter < pCpuState->targetCycleCountPerUpdate )
+    uint32_t localCycleCounter = 0u;
+    while( localCycleCounter < cycleCountToRunFor )
     {
         const uint8_t cycleCount = runSingleInstruction( pInstance );
-        pCpuState->cycleCounter += cycleCount;
+        localCycleCounter += cycleCount;
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
         if( pInstance->debug.pauseAtBreakpoint && pInstance->debug.breakpointAddress == pInstance->pCpuState->registers.PC )
@@ -3225,13 +3240,17 @@ GBEmulatorInstanceEventMask runGBEmulatorInstance( GBEmulatorInstance* pInstance
 #endif
     }
 
-    if( pPpuState->cycleCounter >= gbPPUCyclesPerFrame )
+    pCpuState->cycleCounter += localCycleCounter;
+    if( pPpuState->cycleCounter >= gbCyclesPerFrame )
     {
         pInstance->flags.vblank = 1;
-        pPpuState->cycleCounter -= gbPPUCyclesPerFrame;
+        pPpuState->cycleCounter -= gbCyclesPerFrame;
+        pCpuState->cycleCounter -= gbCyclesPerFrame;
     }
-
-    pCpuState->cycleCounter -= pCpuState->targetCycleCountPerUpdate;
+    else
+    {
+        BreakPointHook();
+    }
 
     return pInstance->flags.vblank == 1 ? K15_GB_VBLANK_EVENT_FLAG : K15_GB_NO_EVENT_FLAG;
 }

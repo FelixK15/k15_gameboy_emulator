@@ -49,15 +49,10 @@
             "environment": [],
         },
         {
-            "name": "Debug convert bitmap to c array",
+            "name": "convert bitmap to c array",
             "type": "python",
             "request":"launch",
-            "program": "convert_bitmap_font_to_c_array.py",
-            "args":["-i", "charmap-cellphone_black.bmp",
-                     "-o", "k15_bitmap_font_data.cpp",
-                     "-gw", "7",
-                     "-gh", "9",
-                     "-gr", "18"],
+            "program": "convert_title_screen.py",
             "cwd": "${workspaceFolder}",
         }
     ]

@@ -104,6 +104,7 @@ typedef BOOL	(WINAPI *PFNWGLMAKECURRENTPROC)(HDC, HGLRC);
 typedef HGLRC	(WINAPI *PFNWGLGETCURRENTCONTEXTPROC)(void);
 typedef HDC		(WINAPI *PFNWGLGETCURRENTDCPROC)(void);
 typedef BOOL 	(WINAPI *PFNWGLSWAPINTERVALEXTPROC)(int);
+typedef int 	(WINAPI *PFNWGLGETSWAPINTERVALEXTPROC)(void);
 typedef BOOL 	(WINAPI *PFNWGLCHOOSEPIXELFORMATARBPROC)(HDC, const int*, const FLOAT*, UINT, int*, UINT*);
 typedef HGLRC   (WINAPI *PFNWGLCREATECONTEXTATTRIBSARBPROC)(HDC, HGLRC, const int*);
 
@@ -165,6 +166,7 @@ typedef GLvoid*			(APIENTRY *PFNGLMAPBUFFERPROC) (GLenum target, GLenum access);
 typedef GLboolean 		(APIENTRY *PFNGLUNMAPBUFFERPROC) (GLenum target);
 
 PFNWGLSWAPINTERVALEXTPROC 			w32glSwapIntervalEXT 			= nullptr;
+PFNWGLGETSWAPINTERVALEXTPROC		w32glGetSwapIntervalEXT			= nullptr;
 PFNWGLCHOOSEPIXELFORMATARBPROC		w32glChoosePixelFormatARB		= nullptr;
 PFNWGLCREATECONTEXTATTRIBSARBPROC	w32glCreateContextAttribsARB 	= nullptr;
 PFNWGLCREATECONTEXTPROC             w32glCreateContext              = nullptr;
@@ -233,7 +235,7 @@ void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
 	//FK: wgl functions
 	w32glGetProcAddress 	= (PFNWGLGETPROCADDRESSPROC)GetProcAddress(pOpenGL32Module, "wglGetProcAddress");
 	w32glCreateContext      = (PFNWGLCREATECONTEXTPROC)GetProcAddress(pOpenGL32Module, "wglCreateContext");
-	w32glDeleteContext   	= (PFNWGLDELETECONTEXTPROC)GetProcAddress(pOpenGL32Module, "wglDeleteContext");           
+	w32glDeleteContext   	= (PFNWGLDELETECONTEXTPROC)GetProcAddress(pOpenGL32Module, "wglDeleteContext");
 	w32glGetCurrentContext  = (PFNWGLGETCURRENTCONTEXTPROC)GetProcAddress(pOpenGL32Module, "wglGetCurrentContext");
 	w32glMakeCurrent        = (PFNWGLMAKECURRENTPROC)GetProcAddress(pOpenGL32Module, "wglMakeCurrent");
 
@@ -245,32 +247,32 @@ void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
 	glClear					= (PFNGLCLEARPROC)GetProcAddress(pOpenGL32Module, "glClear");
 	glGetError				= (PFNGLGETERRORPROC)GetProcAddress(pOpenGL32Module, "glGetError");
 	glGetIntegerv			= (PFNGLGETINTEGERVPROC)GetProcAddress(pOpenGL32Module, "glGetIntegerv");
-	glGetString             = (PFNGLGETSTRINGPROC)GetProcAddress(pOpenGL32Module, "glGetString");                   
-	glEnable                = (PFNGLENABLEPROC)GetProcAddress(pOpenGL32Module, "glEnable");                      
-	glDisable               = (PFNGLDISABLEPROC)GetProcAddress(pOpenGL32Module, "glDisable");          
-	glIsEnabled             = (PFNGLISENABLEDPROC)GetProcAddress(pOpenGL32Module, "glIsEnabled");                   
-	glScissor               = (PFNGLSCISSORPROC)GetProcAddress(pOpenGL32Module, "glScissor");        
-	glTexImage2D            = (PFNGLTEXIMAGE2DPROC)GetProcAddress(pOpenGL32Module, "glTexImage2D");  
+	glGetString             = (PFNGLGETSTRINGPROC)GetProcAddress(pOpenGL32Module, "glGetString");
+	glEnable                = (PFNGLENABLEPROC)GetProcAddress(pOpenGL32Module, "glEnable");
+	glDisable               = (PFNGLDISABLEPROC)GetProcAddress(pOpenGL32Module, "glDisable");
+	glIsEnabled             = (PFNGLISENABLEDPROC)GetProcAddress(pOpenGL32Module, "glIsEnabled");
+	glScissor               = (PFNGLSCISSORPROC)GetProcAddress(pOpenGL32Module, "glScissor");
+	glTexImage2D            = (PFNGLTEXIMAGE2DPROC)GetProcAddress(pOpenGL32Module, "glTexImage2D");
 
-	K15_RUNTIME_ASSERT(glGenTextures != nullptr);
-	K15_RUNTIME_ASSERT(glBindTexture != nullptr);
-	K15_RUNTIME_ASSERT(glTexParameteri != nullptr);
-	K15_RUNTIME_ASSERT(glViewport != nullptr);
-	K15_RUNTIME_ASSERT(glClear != nullptr);
-	K15_RUNTIME_ASSERT(glGetError != nullptr);
-	K15_RUNTIME_ASSERT(glGetIntegerv != nullptr);
-	K15_RUNTIME_ASSERT(glGetString != nullptr);
-	K15_RUNTIME_ASSERT(glEnable != nullptr);
-	K15_RUNTIME_ASSERT(glDisable != nullptr);
-	K15_RUNTIME_ASSERT(glIsEnabled != nullptr);
-	K15_RUNTIME_ASSERT(glScissor != nullptr);
-	K15_RUNTIME_ASSERT(glTexImage2D != nullptr);
+	RuntimeAssert(glGenTextures != nullptr);
+	RuntimeAssert(glBindTexture != nullptr);
+	RuntimeAssert(glTexParameteri != nullptr);
+	RuntimeAssert(glViewport != nullptr);
+	RuntimeAssert(glClear != nullptr);
+	RuntimeAssert(glGetError != nullptr);
+	RuntimeAssert(glGetIntegerv != nullptr);
+	RuntimeAssert(glGetString != nullptr);
+	RuntimeAssert(glEnable != nullptr);
+	RuntimeAssert(glDisable != nullptr);
+	RuntimeAssert(glIsEnabled != nullptr);
+	RuntimeAssert(glScissor != nullptr);
+	RuntimeAssert(glTexImage2D != nullptr);
 
-	K15_RUNTIME_ASSERT(w32glGetProcAddress != nullptr );
-	K15_RUNTIME_ASSERT(w32glCreateContext != nullptr );
-	K15_RUNTIME_ASSERT(w32glDeleteContext != nullptr );
-	K15_RUNTIME_ASSERT(w32glGetCurrentContext != nullptr );
-	K15_RUNTIME_ASSERT(w32glMakeCurrent != nullptr );
+	RuntimeAssert(w32glGetProcAddress != nullptr );
+	RuntimeAssert(w32glCreateContext != nullptr );
+	RuntimeAssert(w32glDeleteContext != nullptr );
+	RuntimeAssert(w32glGetCurrentContext != nullptr );
+	RuntimeAssert(w32glMakeCurrent != nullptr );
 }
 
 void loadWGLOpenGLFunctionPointers()
@@ -278,10 +280,12 @@ void loadWGLOpenGLFunctionPointers()
 	w32glChoosePixelFormatARB 		= (PFNWGLCHOOSEPIXELFORMATARBPROC)w32glGetProcAddress("wglChoosePixelFormatARB");
 	w32glCreateContextAttribsARB 	= (PFNWGLCREATECONTEXTATTRIBSARBPROC)w32glGetProcAddress("wglCreateContextAttribsARB");
 	w32glSwapIntervalEXT			= (PFNWGLSWAPINTERVALEXTPROC)w32glGetProcAddress("wglSwapIntervalEXT");
+	w32glGetSwapIntervalEXT			= (PFNWGLGETSWAPINTERVALEXTPROC)w32glGetProcAddress("wglGetSwapIntervalEXT");
 
-	K15_RUNTIME_ASSERT(w32glChoosePixelFormatARB != nullptr);
-	K15_RUNTIME_ASSERT(w32glCreateContextAttribsARB != nullptr);
-	K15_RUNTIME_ASSERT(w32glSwapIntervalEXT != nullptr);
+	RuntimeAssert(w32glChoosePixelFormatARB != nullptr);
+	RuntimeAssert(w32glCreateContextAttribsARB != nullptr);
+	RuntimeAssert(w32glSwapIntervalEXT != nullptr);
+	RuntimeAssert(w32glGetSwapIntervalEXT != nullptr);
 }
 
 void loadOpenGL4FunctionPointers()
@@ -326,48 +330,48 @@ void loadOpenGL4FunctionPointers()
 	glBlendEquationSeparate     = (PFNGLBLENDEQUATIONSEPARATEPROC)w32glGetProcAddress("glBlendEquationSeparate");       
 	glBlendFuncSeparate         = (PFNGLBLENDFUNCSEPARATEPROC)w32glGetProcAddress("glBlendFuncSeparate");           
 
-	K15_RUNTIME_ASSERT(glTexStorage2D != nullptr);
-	K15_RUNTIME_ASSERT(glTexSubImage2D != nullptr);
-	K15_RUNTIME_ASSERT(glGenBuffers != nullptr);
-	K15_RUNTIME_ASSERT(glBindBuffer	!= nullptr);
-	K15_RUNTIME_ASSERT(glBufferStorage != nullptr);
-	K15_RUNTIME_ASSERT(glMapBuffer != nullptr);
-	K15_RUNTIME_ASSERT(glUnmapBuffer != nullptr);
-	K15_RUNTIME_ASSERT(glDrawArrays != nullptr);
-	K15_RUNTIME_ASSERT(glVertexAttribPointer != nullptr);
-	K15_RUNTIME_ASSERT(glEnableVertexAttribArray != nullptr);
-	K15_RUNTIME_ASSERT(glCreateShader != nullptr);
-	K15_RUNTIME_ASSERT(glShaderSource != nullptr);
-	K15_RUNTIME_ASSERT(glCompileShader != nullptr);
-	K15_RUNTIME_ASSERT(glCreateProgram != nullptr);
-	K15_RUNTIME_ASSERT(glAttachShader != nullptr);
-	K15_RUNTIME_ASSERT(glBindAttribLocation != nullptr);
-	K15_RUNTIME_ASSERT(glLinkProgram != nullptr);
-	K15_RUNTIME_ASSERT(glUseProgram != nullptr);
-	K15_RUNTIME_ASSERT(glGetShaderiv != nullptr);
-	K15_RUNTIME_ASSERT(glGetShaderInfoLog != nullptr);
-	K15_RUNTIME_ASSERT(glGetProgramiv != nullptr);
-	K15_RUNTIME_ASSERT(glGetProgramInfoLog != nullptr);
-	K15_RUNTIME_ASSERT(glGetAttribLocation != nullptr);
-	K15_RUNTIME_ASSERT(glGenVertexArrays != nullptr);
-	K15_RUNTIME_ASSERT(glBindVertexArray != nullptr);
-	K15_RUNTIME_ASSERT(glBlendEquation != nullptr);
-	K15_RUNTIME_ASSERT(glUniform1i != nullptr);
-	K15_RUNTIME_ASSERT(glUniformMatrix4fv != nullptr);
-	K15_RUNTIME_ASSERT(glActiveTexture != nullptr);
-	K15_RUNTIME_ASSERT(glDrawElements != nullptr);
-	K15_RUNTIME_ASSERT(glDeleteVertexArrays != nullptr);
-	K15_RUNTIME_ASSERT(glDeleteTextures != nullptr);
-	K15_RUNTIME_ASSERT(glGetUniformLocation != nullptr);
-	K15_RUNTIME_ASSERT(glDeleteBuffers != nullptr);
-	K15_RUNTIME_ASSERT(glDetachShader != nullptr);
-	K15_RUNTIME_ASSERT(glDeleteShader != nullptr);
-	K15_RUNTIME_ASSERT(glDeleteProgram != nullptr);
-	K15_RUNTIME_ASSERT(glBlendEquationSeparate != nullptr);
-	K15_RUNTIME_ASSERT(glBlendFuncSeparate != nullptr);
+	RuntimeAssert(glTexStorage2D != nullptr);
+	RuntimeAssert(glTexSubImage2D != nullptr);
+	RuntimeAssert(glGenBuffers != nullptr);
+	RuntimeAssert(glBindBuffer	!= nullptr);
+	RuntimeAssert(glBufferStorage != nullptr);
+	RuntimeAssert(glMapBuffer != nullptr);
+	RuntimeAssert(glUnmapBuffer != nullptr);
+	RuntimeAssert(glDrawArrays != nullptr);
+	RuntimeAssert(glVertexAttribPointer != nullptr);
+	RuntimeAssert(glEnableVertexAttribArray != nullptr);
+	RuntimeAssert(glCreateShader != nullptr);
+	RuntimeAssert(glShaderSource != nullptr);
+	RuntimeAssert(glCompileShader != nullptr);
+	RuntimeAssert(glCreateProgram != nullptr);
+	RuntimeAssert(glAttachShader != nullptr);
+	RuntimeAssert(glBindAttribLocation != nullptr);
+	RuntimeAssert(glLinkProgram != nullptr);
+	RuntimeAssert(glUseProgram != nullptr);
+	RuntimeAssert(glGetShaderiv != nullptr);
+	RuntimeAssert(glGetShaderInfoLog != nullptr);
+	RuntimeAssert(glGetProgramiv != nullptr);
+	RuntimeAssert(glGetProgramInfoLog != nullptr);
+	RuntimeAssert(glGetAttribLocation != nullptr);
+	RuntimeAssert(glGenVertexArrays != nullptr);
+	RuntimeAssert(glBindVertexArray != nullptr);
+	RuntimeAssert(glBlendEquation != nullptr);
+	RuntimeAssert(glUniform1i != nullptr);
+	RuntimeAssert(glUniformMatrix4fv != nullptr);
+	RuntimeAssert(glActiveTexture != nullptr);
+	RuntimeAssert(glDrawElements != nullptr);
+	RuntimeAssert(glDeleteVertexArrays != nullptr);
+	RuntimeAssert(glDeleteTextures != nullptr);
+	RuntimeAssert(glGetUniformLocation != nullptr);
+	RuntimeAssert(glDeleteBuffers != nullptr);
+	RuntimeAssert(glDetachShader != nullptr);
+	RuntimeAssert(glDeleteShader != nullptr);
+	RuntimeAssert(glDeleteProgram != nullptr);
+	RuntimeAssert(glBlendEquationSeparate != nullptr);
+	RuntimeAssert(glBlendFuncSeparate != nullptr);
 }
 
-HGLRC createOpenGLDummyContext( HWND hwnd )
+HGLRC createOpenGLDummyContext( HWND hwnd, HDC hdc )
 {
 	PIXELFORMATDESCRIPTOR pfd =
 	{
@@ -389,20 +393,17 @@ HGLRC createOpenGLDummyContext( HWND hwnd )
 		0, 0, 0
 	};
 
-	HDC mainDC = GetDC(hwnd);
+	int pixelFormat = w32ChoosePixelFormat(hdc, &pfd); 
+	w32SetPixelFormat(hdc, pixelFormat, &pfd);
 
-	int pixelFormat = w32ChoosePixelFormat(mainDC, &pfd); 
-	w32SetPixelFormat(mainDC, pixelFormat, &pfd);
-
-	const HGLRC pOpenGLContext = w32glCreateContext(mainDC);
-	w32glMakeCurrent(mainDC, pOpenGLContext);
+	const HGLRC pOpenGLContext = w32glCreateContext(hdc);
+	w32glMakeCurrent(hdc, pOpenGLContext);
 
 	return pOpenGLContext;
 }
 
-HGLRC createOpenGL4Context( HWND hwnd )
+HGLRC createOpenGL4Context( HWND hwnd, HDC hdc )
 {
-	const HDC hdc = GetDC( hwnd );
 	const HGLRC pOldOpenGLContext = w32glGetCurrentContext();
 
 	const int pixelFormatAttributeList[] = {
