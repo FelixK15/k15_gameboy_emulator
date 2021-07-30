@@ -17,7 +17,7 @@ set PROJECT_NAME=k15_win32_gb_emulator_%BUILD_CONFIG%
 set C_FILE_NAME=k15_win32_gb_emulator.cpp
 
 ::FK: Add /Bt to get a compile performance profile
-set COMPILER_OPTIONS=/nologo /TP /W3 /Fe!PROJECT_NAME!.exe
+set COMPILER_OPTIONS=/nologo /FC /TP /W3 /Fe!PROJECT_NAME!.exe
 set LINKER_OPTIONS=/PDB:!PROJECT_NAME!.pdb
 
 if "%BUILD_CONFIG%"=="debug" (
