@@ -1047,12 +1047,10 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 
 	case WM_SETFOCUS:
 		pContext->hasFocus = 1;
-		printf("has focus\n");
 		break;
 
 	case WM_KILLFOCUS:
 		pContext->hasFocus = 0;
-		printf("lost focus\n");
 		break;
 
 	case WM_LBUTTONDOWN:
@@ -1579,7 +1577,6 @@ void queryWin32SystemKeys( Win32ApplicationContext* pContext )
 
 void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32EmulatorContext* pEmulatorContext )
 {
-	printf("queryGBEmulatorJoypadState\n");
 	if( queryControllerInput( pJoypadState, pEmulatorContext->dominantInputType ) )
 	{
 		pEmulatorContext->dominantInputType = InputType::Gamepad;
