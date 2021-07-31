@@ -695,15 +695,12 @@ void enableFullscreen( Win32ApplicationContext* pContext )
 
 	//FK: Hide menu
 	SetMenu( pContext->pWindowHandle, nullptr );
-	SetWindowPos( pContext->pWindowHandle, HWND_TOP, 0u, 0u, pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED );
+	SetWindowPos( pContext->pWindowHandle, HWND_TOP, 0u, 0u, pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING );
 	updateGameboyFrameVertexBuffer( pContext );
 }
 
 void disableFullscreen( Win32ApplicationContext* pContext )
 {
-	pContext->fullscreen 		= 0;
-	pContext->frameBufferScale 	= pContext->menuScale;
-
 	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   pContext->windowStyle );
 	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, pContext->windowStyleEx );
 
@@ -716,7 +713,10 @@ void disableFullscreen( Win32ApplicationContext* pContext )
 
 	const int32_t windowWidth 	= windowRect.right - windowRect.left;
 	const int32_t windowHeight 	= windowRect.bottom - windowRect.top;
-	SetWindowPos( pContext->pWindowHandle, nullptr, 0, 0, windowWidth, windowHeight, 0u );
+	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
+
+	pContext->frameBufferScale 	= pContext->menuScale;
+	pContext->fullscreen 		= 0;
 }
 
 void toggleFullscreen( Win32ApplicationContext* pContext )
@@ -947,6 +947,11 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 
 void handleWindowPosChanged( Win32ApplicationContext* pContext, LPARAM lparam )
 {
+	if( pContext->fullscreen )
+	{
+		return;
+	}
+
 	WINDOWPOS* pWindowPos = (WINDOWPOS*)lparam;
 	pContext->windowPosX = pWindowPos->x;
 	pContext->windowPosY = pWindowPos->y;
@@ -1534,45 +1539,76 @@ void updateUserMessages( Win32ApplicationContext* pContext )
 
 void queryWin32SystemKeys( Win32ApplicationContext* pContext )
 {
+	struct Win32SystemKeyStates
+	{
+		uint8_t slot1_state 			: 1;
+		uint8_t slot2_state 			: 1;
+		uint8_t slot3_state 			: 1;
+		uint8_t quicksave_state 		: 1;
+		uint8_t quickload_state 		: 1;
+		uint8_t toggle_fullscreen_state : 1;
+		uint8_t exit_fullscreen_state 	: 1;
+	};
+
+	static Win32SystemKeyStates prevKeyStates = {};
+	Win32SystemKeyStates currentKeyStates = {};
+
 	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
 
-	if( GetAsyncKeyState( VK_F2 ) & 0x8000 )
+	currentKeyStates.slot1_state  				= ( GetAsyncKeyState( VK_F2  	) & 0x8000 ) > 0;
+	currentKeyStates.slot2_state  				= ( GetAsyncKeyState( VK_F3  	) & 0x8000 ) > 0;
+	currentKeyStates.slot3_state  				= ( GetAsyncKeyState( VK_F4  	) & 0x8000 ) > 0;
+	currentKeyStates.quicksave_state  			= ( GetAsyncKeyState( VK_F6  	) & 0x8000 ) > 0;
+	currentKeyStates.quickload_state  			= ( GetAsyncKeyState( VK_F9  	) & 0x8000 ) > 0;
+	currentKeyStates.toggle_fullscreen_state 	= ( GetAsyncKeyState( VK_F11 	) & 0x8000 ) > 0;
+	currentKeyStates.exit_fullscreen_state 		= ( GetAsyncKeyState( VK_ESCAPE ) & 0x8000 ) > 0;
+
+	if( currentKeyStates.slot1_state != prevKeyStates.slot1_state &&
+		currentKeyStates.slot1_state )
 	{
 		changeStateSlot( pContext, 1 );
 	}
 
-	if( GetAsyncKeyState( VK_F3 ) & 0x8000 )
+	if( currentKeyStates.slot2_state != prevKeyStates.slot2_state &&
+		currentKeyStates.slot2_state )
 	{
 		changeStateSlot( pContext, 1 );
 	}
 
-	if( GetAsyncKeyState( VK_F4 ) & 0x8000 )
+	if( currentKeyStates.slot3_state != prevKeyStates.slot3_state &&
+		currentKeyStates.slot3_state )
 	{
 		changeStateSlot( pContext, 1 );
 	}
 
 	//FK: QuickSave
-	if( GetAsyncKeyState( VK_F6 ) & 0x8000 )
+	if( currentKeyStates.quicksave_state != prevKeyStates.quicksave_state &&
+		currentKeyStates.quicksave_state )
 	{
 		saveEmulatorState( pEmulatorContext );
 	}
 
 	//FK: QuickLoad
-	if( GetAsyncKeyState( VK_F9 ) & 0x8000 )
+	if( currentKeyStates.quickload_state != prevKeyStates.quickload_state &&
+		currentKeyStates.quickload_state )
 	{
 		loadEmulatorState( pEmulatorContext );
 	}
 	
 	//FK: Fullscreen
-	if( GetAsyncKeyState( VK_F11 ) & 0x8000 )
+	if( currentKeyStates.toggle_fullscreen_state != prevKeyStates.toggle_fullscreen_state &&
+		currentKeyStates.toggle_fullscreen_state )
 	{
 		toggleFullscreen( pContext );
 	}
 
-	if( ( GetAsyncKeyState( VK_ESCAPE ) & 0x8000 ) && pContext->fullscreen == 1 )
+	if( currentKeyStates.exit_fullscreen_state != prevKeyStates.exit_fullscreen_state &&
+		currentKeyStates.exit_fullscreen_state == 1 && pContext->fullscreen == 1 )
 	{
 		disableFullscreen( pContext );
 	}
+
+	prevKeyStates = currentKeyStates;
 }
 
 void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32EmulatorContext* pEmulatorContext )
