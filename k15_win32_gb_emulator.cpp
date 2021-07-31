@@ -231,6 +231,7 @@ struct Win32ApplicationContext
 	uint8_t   					leftMouseDown						= 0;
 	uint8_t						fullscreen							= 0;
 	uint8_t						vsyncEnabled						= 0;
+	uint8_t						hasFocus							= 1;
 };
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
@@ -895,56 +896,6 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 	}
 }
 
-void handleKeyInput( Win32ApplicationContext* pContext, UINT message, WPARAM wparam, LPARAM lparam )
-{
-	if( message == WM_KEYDOWN )
-	{
-		if((lparam & (1 >> 30)) == 0)
-		{
-			switch(wparam)
-			{
-				case VK_ESCAPE:
-					if( pContext->fullscreen == 1 )
-					{
-						disableFullscreen( pContext );
-						break;
-					}
-				case VK_F6:
-				#if 0
-					if( isGBEmulatorRomMapped( pContext->pEmulatorInstance ) )
-					{
-						saveStateInSlot( pContext );
-					}
-				#endif
-					break;
-				case VK_F9:
-				#if 0
-					if( isGBEmulatorRomMapped( pContext->pEmulatorInstance ) )
-					{
-						loadStateInSlot( pContext );
-					}
-				#endif
-					break;
-				case VK_F7:
-					pushUserMessage( pContext, "!" );
-					break;
-				case VK_F11:
-					toggleFullscreen(pContext);
-					break;
-				case VK_F2:
-					changeStateSlot( pContext, 1 );
-					break;
-				case VK_F3:
-					changeStateSlot( pContext, 2 );
-					break;
-				case VK_F4:
-					changeStateSlot( pContext, 3 );
-					break;
-			}
-		}
-	}
-}
-
 void handleWindowResize( Win32ApplicationContext* pContext, WPARAM wparam )
 {
 	RECT clientRect = {0};
@@ -1094,11 +1045,14 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 		break;
 	}
 
-	case WM_KEYDOWN:
-	case WM_KEYUP:
-	case WM_SYSKEYDOWN:
-	case WM_SYSKEYUP:
-		handleKeyInput( pContext, message, wparam, lparam );
+	case WM_SETFOCUS:
+		pContext->hasFocus = 1;
+		printf("has focus\n");
+		break;
+
+	case WM_KILLFOCUS:
+		pContext->hasFocus = 0;
+		printf("lost focus\n");
 		break;
 
 	case WM_LBUTTONDOWN:
@@ -1167,7 +1121,7 @@ uint8_t setupWindow( Win32ApplicationContext* pContext )
 	RegisterClassA(&wndClass);
 
 	pContext->pWindowHandle = CreateWindowExA( WS_EX_ACCEPTFILES,
-		"K15_Win32Template", "Win32 Template", 
+		"K15_Win32Template", "K15 GB Emulator", 
 		windowStyle, CW_USEDEFAULT, CW_USEDEFAULT,
 		pContext->windowWidth, pContext->windowHeight, 
 		0, 0, pContext->pInstanceHandle, 0);
@@ -1580,12 +1534,23 @@ void updateUserMessages( Win32ApplicationContext* pContext )
 }
 #endif
 
-void queryWin32SystemKeys( Win32EmulatorContext* pEmulatorContext )
+void queryWin32SystemKeys( Win32ApplicationContext* pContext )
 {
-	//FK: QuickLoad
-	if( GetAsyncKeyState( VK_F9 ) & 0x8000 )
+	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
+
+	if( GetAsyncKeyState( VK_F2 ) & 0x8000 )
 	{
-		loadEmulatorState( pEmulatorContext );
+		changeStateSlot( pContext, 1 );
+	}
+
+	if( GetAsyncKeyState( VK_F3 ) & 0x8000 )
+	{
+		changeStateSlot( pContext, 1 );
+	}
+
+	if( GetAsyncKeyState( VK_F4 ) & 0x8000 )
+	{
+		changeStateSlot( pContext, 1 );
 	}
 
 	//FK: QuickSave
@@ -1593,23 +1558,37 @@ void queryWin32SystemKeys( Win32EmulatorContext* pEmulatorContext )
 	{
 		saveEmulatorState( pEmulatorContext );
 	}
+
+	//FK: QuickLoad
+	if( GetAsyncKeyState( VK_F9 ) & 0x8000 )
+	{
+		loadEmulatorState( pEmulatorContext );
+	}
+	
+	//FK: Fullscreen
+	if( GetAsyncKeyState( VK_F11 ) & 0x8000 )
+	{
+		toggleFullscreen( pContext );
+	}
+
+	if( ( GetAsyncKeyState( VK_ESCAPE ) & 0x8000 ) && pContext->fullscreen == 1 )
+	{
+		disableFullscreen( pContext );
+	}
 }
 
-uint8_t queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32EmulatorContext* pEmulatorContext )
+void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32EmulatorContext* pEmulatorContext )
 {
+	printf("queryGBEmulatorJoypadState\n");
 	if( queryControllerInput( pJoypadState, pEmulatorContext->dominantInputType ) )
 	{
 		pEmulatorContext->dominantInputType = InputType::Gamepad;
-		return 1;
 	}
 
 	if( queryKeyboardInput( pJoypadState, pEmulatorContext->digipadKeyboardMappings, pEmulatorContext->actionButtonKeyboardMappings, pEmulatorContext->dominantInputType ) )
 	{
 		pEmulatorContext->dominantInputType = InputType::Keyboard;
-		return 1;
 	}
-
-	return 0;
 }
 
 void runVsyncMainLoop( Win32ApplicationContext* pContext )
@@ -1637,11 +1616,12 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 			break;
 		}
 
-		queryWin32SystemKeys( pEmulatorContext );
-
-		GBEmulatorJoypadState joypadState;
-		if( queryGBEmulatorJoypadState( &joypadState, pEmulatorContext ) )
+		if( pContext->hasFocus )
 		{
+			queryWin32SystemKeys( pContext );
+
+			GBEmulatorJoypadState joypadState;
+			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext );
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
@@ -1698,11 +1678,12 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 			break;
 		}
 
-		queryWin32SystemKeys( pEmulatorContext );
-
-		GBEmulatorJoypadState joypadState;
-		if( queryGBEmulatorJoypadState( &joypadState, pEmulatorContext ) )
+		if( pContext->hasFocus )
 		{
+			queryWin32SystemKeys( pContext );
+
+			GBEmulatorJoypadState joypadState;
+			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext );
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
