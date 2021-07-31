@@ -4,7 +4,7 @@
 This project tries to emulate the Nintendo GameBoy and Nintendo GameBoy Color game system hardware accurately so that games for these game systems can be played on hardware
 that is natively not able to do so.
 
-![image](https://user-images.githubusercontent.com/7531672/122221913-08149800-ceb2-11eb-877d-7a253811b252.png)
+![image](https://user-images.githubusercontent.com/7531672/127722959-08906958-a2d4-4002-ab79-d5f5692cdc5c.png)
 
 ## How do I build this software locally?
 
