@@ -61,23 +61,11 @@ For an example of how to use the API please take a look at `k15_win32_gb_emulato
 
 ## Current State and Goals
 
-- [x] Implement opcodes to get into tetris copyright text
-- [x] Display video ram and show the tetris tileset
 - [x] Emulate correct frame timings independend of monitor refresh rate
-- [x] Implement opcodes to get into tetris menu and start a game
-- [x] Test Tetris
-- [x] Add IMGUI dependency to be able to add debug features
-  - [x] Add breakpoints
-  - [x] Add conditional breakpoints
-  - [x] Add code stepping
-  - [x] Add memory inspection
-  - [x] Add VRAM viewer
-  - [x] Add background tile viewer
-  - [ ] Add window tile viewer
 - [ ] Implement rom-switching
   - [x] MBC1
   - [ ] MBC3
-  - [ ] MBC5
+  - [x] MBC5
 - [x] implement window support
 - [x] implement background scrolling
 - [x] complete sprite features
@@ -85,6 +73,7 @@ For an example of how to use the API please take a look at `k15_win32_gb_emulato
   - [x] x flip 
   - [x] y flip
   - [x] support for different palettes
+  - [ ] corrct 16x8 sprite handling
 - [ ] verify correctness with Blargg's Gameboy hardware test ROMs
   - [x] pass instr_timing
   - [ ] pass interrupt_time
