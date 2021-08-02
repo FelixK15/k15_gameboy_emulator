@@ -31,7 +31,7 @@
 #define RuntimeAssert(x)        if(!(x)) DebugBreak()
 #define CompiletimeAssert(x)    typedef char compile_time_assertion_##_LINE_[(x)?1:-1]
 
-static constexpr uint8_t    gbStateVersion = 3;
+static constexpr uint8_t    gbStateVersion = 4;
 static constexpr uint32_t   gbStateFourCC  = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
 
 
@@ -39,6 +39,7 @@ static constexpr uint8_t    gbNintendoLogo[]                        = { 0xCE, 0x
 static constexpr char       gbRamFileExtension[]                    = ".k15_gb_ram";
 static constexpr char       gbStateFileExtension[]                  = ".k15_gb_state";
 static constexpr uint32_t   gbCyclesPerFrame                        = 70224u;
+static constexpr uint32_t   gbSerialClockCyclesPerBitTransfer       = 512u;
 static constexpr uint32_t   gbEmulatorFrameRate                     = 60u;
 static constexpr uint8_t    gbOAMSizeInBytes                        = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                         = 160u;
@@ -196,6 +197,17 @@ struct GBCpuState
     uint16_t        dmaAddress;
     uint8_t         dmaCycleCounter;
     GBCpuStateFlags flags;          //FK: not to be confused with GBCpuRegisters::F
+};
+
+struct GBSerialState
+{
+    uint8_t* pSerialTransferData    = nullptr;
+    uint8_t* pSerialTransferControl = nullptr;
+    uint8_t shiftIndex              = 0u;
+    uint8_t outByte                 = 0u;
+    uint8_t inByte                  = 0xFFu;
+    uint8_t transferInProgress      = 0u;
+    uint32_t cycleCounter           = 0u;
 };
 
 enum GBCartridgeType : uint8_t
@@ -446,6 +458,7 @@ struct GBEmulatorInstance
     GBPpuState*             pPpuState;
     GBTimerState*           pTimerState;
     GBMemoryMapper*         pMemoryMapper;
+    GBSerialState*          pSerialState;
     GBCartridge*            pCartridge;
 
     GBEmulatorJoypadState   joypadState;
@@ -461,6 +474,7 @@ struct GBEmulatorState
     GBCpuState    cpuState;
     GBPpuState    ppuState;
     GBTimerState  timerState;
+    GBSerialState serialState;
     GBCartridge   cartridge;
     uint8_t       mappedRomBankNumber;
     uint8_t       mappedRamBankNumber;
@@ -529,6 +543,12 @@ void patchIOTimerMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBTimerStat
     pTimerState->pCounter       = pMemoryMapper->pBaseAddress + 0xFF05;
     pTimerState->pModulo        = pMemoryMapper->pBaseAddress + 0xFF06;
     pTimerState->pControl       = pMemoryMapper->pBaseAddress + 0xFF07;
+}
+
+void patchIOSerialMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBSerialState* pSerialState )
+{
+    pSerialState->pSerialTransferData       = pMemoryMapper->pBaseAddress + 0xFF01;
+    pSerialState->pSerialTransferControl    = pMemoryMapper->pBaseAddress + 0xFF02;
 }
 
 void patchIOPpuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
@@ -746,6 +766,7 @@ void storeGBEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t*
     const GBPpuState* pPpuState         = pEmulatorInstance->pPpuState;
     const GBTimerState* pTimerState     = pEmulatorInstance->pTimerState;
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
+    const GBSerialState* pSerialState   = pEmulatorInstance->pSerialState;
     const GBCartridge* pCartridge       = pEmulatorInstance->pCartridge;
 
     const GBCartridgeHeader header = getGBEmulatorCurrentCartridgeHeader( pEmulatorInstance );
@@ -755,6 +776,7 @@ void storeGBEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t*
     state.cpuState                  = *pCpuState;
     state.ppuState                  = *pPpuState;
     state.timerState                = *pTimerState;
+    state.serialState               = *pSerialState;
     state.cartridge                 = *pCartridge;
     state.mappedRomBankNumber       = pCartridge->mappedRomBankNumber;
     state.mappedRamBankNumber       = pCartridge->mappedRamBankNumber;
@@ -844,10 +866,11 @@ bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* 
     const uint8_t* pRomBaseAddress  = pEmulatorInstance->pCartridge->pRomBaseAddress;
     uint8_t* pRamBaseAddress        = pEmulatorInstance->pCartridge->pRamBaseAddress;
 
-    *pEmulatorInstance->pCpuState   = state.cpuState;
-    *pEmulatorInstance->pPpuState   = state.ppuState;
-    *pEmulatorInstance->pTimerState = state.timerState;
-    *pEmulatorInstance->pCartridge  = state.cartridge;
+    *pEmulatorInstance->pCpuState       = state.cpuState;
+    *pEmulatorInstance->pPpuState       = state.ppuState;
+    *pEmulatorInstance->pTimerState     = state.timerState;
+    *pEmulatorInstance->pSerialState    = state.serialState;
+    *pEmulatorInstance->pCartridge      = state.cartridge;
 
     GBCartridge* pCartridge = pEmulatorInstance->pCartridge;
     pCartridge->pRomBaseAddress     = pRomBaseAddress;
@@ -1151,6 +1174,20 @@ void initTimerState( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimerState )
     *pTimerState->pControl      = 0xFB;
 }
 
+void initSerialState( GBMemoryMapper* pMemoryMapper, GBSerialState* pSerialState )
+{
+    patchIOSerialMappedMemoryPointer( pMemoryMapper, pSerialState );
+
+    pSerialState->cycleCounter          = 0u;
+    pSerialState->inByte                = 0xFFu;
+    pSerialState->outByte               = 0u;
+    pSerialState->shiftIndex            = 0u;
+    pSerialState->transferInProgress    = 1u;
+
+    *pSerialState->pSerialTransferControl   = 0x81;
+    *pSerialState->pSerialTransferData      = 0x00;
+}
+
 void clearGBFrameBuffer( uint8_t* pGBFrameBuffer )
 {
     memset( pGBFrameBuffer, 0, gbFrameBufferSizeInBytes );
@@ -1188,6 +1225,8 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     *pPpuState->lcdRegisters.pWy  = 0;
     *pPpuState->lcdRegisters.pScx = 0;
     *pPpuState->lcdRegisters.pScy = 0;
+
+    pPpuState->pLcdControl->enable = 0;
     
     //FK: set default state of palettes (taken from bgb)
     extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, 0b11100100 );
@@ -1210,7 +1249,7 @@ size_t calculateGBEmulatorMemoryRequirementsInBytes()
 {
     const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + 
         sizeof(GBMemoryMapper) + sizeof(GBPpuState) + sizeof(GBTimerState) + sizeof(GBCartridge) + 
-        gbMappedMemorySizeInBytes + ( gbFrameBufferSizeInBytes * gbFrameBufferCount );
+        sizeof(GBSerialState) + gbMappedMemorySizeInBytes + ( gbFrameBufferSizeInBytes * gbFrameBufferCount );
 
     return memoryRequirementsInBytes;
 }
@@ -1238,6 +1277,7 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
     initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
     initPpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pPpuState);
     initTimerState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pTimerState);
+    initSerialState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pSerialState);
 
     pEmulatorInstance->joypadState.actionButtonMask  = 0;
     pEmulatorInstance->joypadState.dpadButtonMask    = 0;
@@ -1246,8 +1286,8 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
     pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF00] = 0x0F;
 
     //FK: Reset serial
-    pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF01] = 0x00;
-    pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF02] = 0x7E;
+    //pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF01] = 0x00;
+    //pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF02] = 0x7E;
 
 }
 
@@ -1286,7 +1326,8 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     pEmulatorInstance->pMemoryMapper    = (GBMemoryMapper*)(pEmulatorInstance->pCpuState + 1);
     pEmulatorInstance->pPpuState        = (GBPpuState*)(pEmulatorInstance->pMemoryMapper + 1);
     pEmulatorInstance->pTimerState      = (GBTimerState*)(pEmulatorInstance->pPpuState + 1);
-    pEmulatorInstance->pCartridge       = (GBCartridge*)(pEmulatorInstance->pTimerState + 1);
+    pEmulatorInstance->pSerialState     = (GBSerialState*)(pEmulatorInstance->pTimerState + 1);
+    pEmulatorInstance->pCartridge       = (GBCartridge*)(pEmulatorInstance->pSerialState + 1);
 
     uint8_t* pGBMemory = (uint8_t*)(pEmulatorInstance->pCartridge + 1);
     initMemoryMapper( pEmulatorInstance->pMemoryMapper, pGBMemory );
@@ -1747,6 +1788,34 @@ void updateTimerRegisters( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimer )
     }
 }
 
+void updateSerial( GBCpuState* pCpuState, GBSerialState* pSerial, const uint8_t cycleCount )
+{
+    if( !pSerial->transferInProgress )
+    {
+        return;
+    }
+
+    pSerial->cycleCounter += cycleCount;
+    while( pSerial->cycleCounter >= gbSerialClockCyclesPerBitTransfer )
+    {
+        const uint8_t transferData = *pSerial->pSerialTransferData;
+        pSerial->cycleCounter -= gbSerialClockCyclesPerBitTransfer;
+
+        const uint8_t outBits = ( transferData << 1 );
+        const uint8_t inBits  = pSerial->inByte >> ( 7 - pSerial->shiftIndex );
+        *pSerial->pSerialTransferData = outBits | inBits;
+
+        ++pSerial->shiftIndex;
+        if( pSerial->shiftIndex == 8 )
+        {
+            *pSerial->pSerialTransferControl &= ~0x80;
+            pSerial->transferInProgress = 0;
+            pSerial->shiftIndex = 0u;
+            triggerInterrupt( pCpuState, SerialInterrupt );
+        }
+    }
+}
+
 void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cycleCount )
 {
     if( pCpuState->flags.stop )
@@ -1794,11 +1863,6 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
 {
     GBLcdStatus* pLcdStatus = pPpuState->lcdRegisters.pStatus;
 
-    if( !pPpuState->pLcdControl->enable )
-    {
-        return;
-    }
-
     pPpuState->cycleCounter += cycleCount;
 
     uint8_t lcdMode         = pPpuState->lcdRegisters.pStatus->mode;
@@ -1810,13 +1874,21 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
 
     if( lcdMode == 2 && lcdDotCounter >= 80 )
     {
-        collectScanlineSprites( pPpuState, *pLy );
+        if( pPpuState->pLcdControl->enable )
+        {
+            collectScanlineSprites( pPpuState, *pLy );
+        }
+        
         lcdDotCounter -= 80;
         lcdMode = 3;
     }
     else if( lcdMode == 3 && lcdDotCounter >= 172 )
     {
-        drawScanline( pPpuState, *pLy );
+        if( pPpuState->pLcdControl->enable )
+        {
+            drawScanline( pPpuState, *pLy );
+        }
+
         lcdDotCounter -= 172;
         lcdMode = 0;
         triggerLCDStatInterrupt = pLcdStatus->enableMode0HBlankInterrupt;
@@ -3155,6 +3227,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
     GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
     GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
+    GBSerialState* pSerialState     = pEmulatorInstance->pSerialState;
 
     executePendingInterrupts( pCpuState, pMemoryMapper );
 
@@ -3182,10 +3255,14 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 
     updatePPU( pCpuState, pPpuState, cycleCost );
     updateTimer( pCpuState, pTimerState, cycleCost );
-    
+    updateSerial( pCpuState, pSerialState, cycleCost );
     //FK: LCD Control
     if( pMemoryMapper->memoryAccess == GBMemoryAccess_Written )
     {
+        if( pMemoryMapper->lastAddressWrittenTo == 0xFF02 )
+        {
+            pSerialState->transferInProgress = ( pMemoryMapper->lastValueWritten & 0x80 ) > 0u;
+        }
         if( handleInput( pMemoryMapper, pEmulatorInstance->joypadState ) )
         {
             triggerInterrupt( pCpuState, JoypadInterrupt );
