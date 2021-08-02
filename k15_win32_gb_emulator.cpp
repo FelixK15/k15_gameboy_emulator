@@ -758,54 +758,6 @@ void openRomFile( Win32ApplicationContext* pContext )
 	loadRomFile( pContext, romPath );
 }
 
-void enableFullscreen( Win32ApplicationContext* pContext )
-{
-	pContext->fullscreen 		= 1;
-	pContext->frameBufferScale 	= pContext->maxScale;
-
-	const LONG fullscreenWindowStyle 	=  pContext->windowStyle & ~( WS_CAPTION | WS_THICKFRAME );
-	const LONG fullscreenWindowStyleEx 	=  pContext->windowStyleEx & ~( WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE ) ;
-
-	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   fullscreenWindowStyle);
-	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, fullscreenWindowStyleEx);
-
-	//FK: Hide menu
-	SetMenu( pContext->pWindowHandle, nullptr );
-	SetWindowPos( pContext->pWindowHandle, HWND_TOP, 0u, 0u, pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING );
-	updateGameboyFrameVertexBuffer( pContext );
-}
-
-void disableFullscreen( Win32ApplicationContext* pContext )
-{
-	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   pContext->windowStyle );
-	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, pContext->windowStyleEx );
-
-	SetMenu( pContext->pWindowHandle, pContext->pMenuBar );
-
-	RECT windowRect = {};
-	windowRect.right = gbHorizontalResolutionInPixels * pContext->frameBufferScale;
-	windowRect.bottom = gbVerticalResolutionInPixels * pContext->frameBufferScale;
-	AdjustWindowRect( &windowRect, pContext->windowStyle, TRUE );
-
-	const int32_t windowWidth 	= windowRect.right - windowRect.left;
-	const int32_t windowHeight 	= windowRect.bottom - windowRect.top;
-	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
-
-	pContext->frameBufferScale 	= pContext->menuScale;
-	pContext->fullscreen 		= 0;
-}
-
-void toggleFullscreen( Win32ApplicationContext* pContext )
-{
-	if( pContext->fullscreen )
-	{
-		disableFullscreen( pContext );
-	}
-	else
-	{
-		enableFullscreen( pContext );
-	}
-}
 
 void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 {
@@ -831,6 +783,55 @@ void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 	
 	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
 	updateGameboyFrameVertexBuffer( pContext );
+}
+
+void enableFullscreen( Win32ApplicationContext* pContext )
+{
+	pContext->fullscreen = 1;
+	setFrameBufferScale( pContext, pContext->maxScale );
+
+	const LONG fullscreenWindowStyle 	=  pContext->windowStyle & ~( WS_CAPTION | WS_THICKFRAME );
+	const LONG fullscreenWindowStyleEx 	=  pContext->windowStyleEx & ~( WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE ) ;
+
+	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   fullscreenWindowStyle );
+	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, fullscreenWindowStyleEx );
+
+	//FK: Hide menu
+	SetMenu( pContext->pWindowHandle, nullptr );
+	SetWindowPos( pContext->pWindowHandle, HWND_TOP, 0u, 0u, pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING );
+	updateGameboyFrameVertexBuffer( pContext );
+}
+
+void disableFullscreen( Win32ApplicationContext* pContext )
+{
+	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   pContext->windowStyle );
+	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, pContext->windowStyleEx );
+
+	SetMenu( pContext->pWindowHandle, pContext->pMenuBar );
+
+	RECT windowRect = {};
+	windowRect.right = gbHorizontalResolutionInPixels * pContext->frameBufferScale;
+	windowRect.bottom = gbVerticalResolutionInPixels * pContext->frameBufferScale;
+	AdjustWindowRect( &windowRect, pContext->windowStyle, TRUE );
+
+	const int32_t windowWidth 	= windowRect.right - windowRect.left;
+	const int32_t windowHeight 	= windowRect.bottom - windowRect.top;
+	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
+
+	setFrameBufferScale( pContext, pContext->menuScale );
+	pContext->fullscreen = 0;
+}
+
+void toggleFullscreen( Win32ApplicationContext* pContext )
+{
+	if( pContext->fullscreen )
+	{
+		disableFullscreen( pContext );
+	}
+	else
+	{
+		enableFullscreen( pContext );
+	}
 }
 
 void handleWindowMinMaxInfo( LPARAM lparam )
@@ -985,15 +986,6 @@ void handleWindowResize( Win32ApplicationContext* pContext, WPARAM wparam )
 	pContext->maxScale = pContext->windowHeight / gbVerticalResolutionInPixels;
 
 	updateMonitorSettings( pContext );
-
-	if( wparam == SIZE_MAXIMIZED )
-	{
-		pContext->frameBufferScale = pContext->maxScale;
-	}
-	else if( wparam == SIZE_RESTORED )
-	{
-		pContext->frameBufferScale = pContext->menuScale;
-	}
 
 	if( pContext->pOpenGLContext != nullptr )
 	{
@@ -1747,6 +1739,18 @@ uint8_t verifySettings( const Win32Settings* pSettings, Win32ApplicationContext*
 	return 1;
 }
 
+void loadAndVerifySettings( Win32ApplicationContext* pContext )
+{
+	Win32Settings settings;
+	if( loadSettingsFromFile( &settings, pSettingsPath ) )
+	{
+		if( verifySettings( &settings, pContext ) )
+		{
+			applySettings( &settings, pContext );
+		}
+	}
+}
+
 void runVsyncMainLoop( Win32ApplicationContext* pContext )
 {
 	uint8_t loopRunning = true;
@@ -1877,7 +1881,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	Win32ApplicationContext appContext;
 	appContext.pInstanceHandle = hInstance;
 
-	//allocateDebugConsole();
+	allocateDebugConsole();
 
 	loadWin32FunctionPointers();
 	loadXInputFunctionPointers();
@@ -1899,14 +1903,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		loadRomFile( &appContext, args.romPath );
 	}
 
-	Win32Settings settings;
-	if( loadSettingsFromFile( &settings, pSettingsPath ) )
-	{
-		if( verifySettings( &settings, &appContext ) )
-		{
-			applySettings( &settings, &appContext );
-		}
-	}
+	loadAndVerifySettings( &appContext );
 
 	if( appContext.vsyncEnabled )
 	{
