@@ -5,6 +5,9 @@ This project tries to emulate the Nintendo GameBoy and Nintendo GameBoy Color ga
 that is natively not able to do so.
 
 ![image](https://user-images.githubusercontent.com/7531672/127722959-08906958-a2d4-4002-ab79-d5f5692cdc5c.png)
+![image](https://user-images.githubusercontent.com/7531672/127790199-8eb96c9b-6b92-46f9-b4e3-203d071b33b5.png)
+![image](https://user-images.githubusercontent.com/7531672/127790229-6ecf85f2-b8c5-4b1b-b496-d01e370be5a8.png)
+![image](https://user-images.githubusercontent.com/7531672/127790240-f8dc9de6-71e9-449d-bbf2-f958d01d918e.png)
 
 ## How do I build this software locally?
 
