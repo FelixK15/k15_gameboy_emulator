@@ -204,7 +204,6 @@ struct GBSerialState
     uint8_t* pSerialTransferData    = nullptr;
     uint8_t* pSerialTransferControl = nullptr;
     uint8_t shiftIndex              = 0u;
-    uint8_t outByte                 = 0u;
     uint8_t inByte                  = 0xFFu;
     uint8_t transferInProgress      = 0u;
     uint32_t cycleCounter           = 0u;
@@ -1180,11 +1179,10 @@ void initSerialState( GBMemoryMapper* pMemoryMapper, GBSerialState* pSerialState
 
     pSerialState->cycleCounter          = 0u;
     pSerialState->inByte                = 0xFFu;
-    pSerialState->outByte               = 0u;
     pSerialState->shiftIndex            = 0u;
-    pSerialState->transferInProgress    = 1u;
+    pSerialState->transferInProgress    = 0u;
 
-    *pSerialState->pSerialTransferControl   = 0x81;
+    *pSerialState->pSerialTransferControl   = 0x7E;
     *pSerialState->pSerialTransferData      = 0x00;
 }
 
@@ -1226,7 +1224,7 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     *pPpuState->lcdRegisters.pScx = 0;
     *pPpuState->lcdRegisters.pScy = 0;
 
-    pPpuState->pLcdControl->enable = 0;
+    //pPpuState->pLcdControl->enable = 1;
     
     //FK: set default state of palettes (taken from bgb)
     extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, 0b11100100 );
@@ -1284,11 +1282,6 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
 
     //FK: Reset joypad value
     pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF00] = 0x0F;
-
-    //FK: Reset serial
-    //pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF01] = 0x00;
-    //pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF02] = 0x7E;
-
 }
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
@@ -1688,7 +1681,7 @@ void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
     uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
     clearGBFrameBufferScanline( pActiveFrameBuffer, scanlineYCoordinate );
 
-    if( pPpuState->pLcdControl->bgEnable && pPpuState->flags.drawBackground )
+    if( pPpuState->pLcdControl->bgEnable )
     {
         //FK: Determine tile addressing mode
         if( !pPpuState->pLcdControl->bgAndWindowTileDataArea )
@@ -1703,7 +1696,7 @@ void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
         }
     }
 
-    if( pPpuState->pLcdControl->windowEnable && pPpuState->flags.drawWindow )
+    if( pPpuState->pLcdControl->windowEnable )
     {
         const uint8_t wy = *pPpuState->lcdRegisters.pWy;
         const uint8_t wx = *pPpuState->lcdRegisters.pWx;
@@ -1724,7 +1717,7 @@ void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
         }
     }
 
-    if( pPpuState->pLcdControl->objEnable && pPpuState->flags.drawObjects )
+    if( pPpuState->pLcdControl->objEnable )
     {
         pushSpritePixelsToScanline( pPpuState, scanlineYCoordinate );
     }
@@ -1861,8 +1854,12 @@ void incrementLy( GBLcdRegisters* pLcdRegisters, uint8_t* pLy )
 
 void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
 {
-    GBLcdStatus* pLcdStatus = pPpuState->lcdRegisters.pStatus;
+    if( !pPpuState->pLcdControl->enable )
+    {
+        return;
+    }
 
+    GBLcdStatus* pLcdStatus = pPpuState->lcdRegisters.pStatus;
     pPpuState->cycleCounter += cycleCount;
 
     uint8_t lcdMode         = pPpuState->lcdRegisters.pStatus->mode;
@@ -1874,20 +1871,14 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
 
     if( lcdMode == 2 && lcdDotCounter >= 80 )
     {
-        if( pPpuState->pLcdControl->enable )
-        {
-            collectScanlineSprites( pPpuState, *pLy );
-        }
+        collectScanlineSprites( pPpuState, *pLy );
         
         lcdDotCounter -= 80;
         lcdMode = 3;
     }
     else if( lcdMode == 3 && lcdDotCounter >= 172 )
     {
-        if( pPpuState->pLcdControl->enable )
-        {
-            drawScanline( pPpuState, *pLy );
-        }
+        drawScanline( pPpuState, *pLy );
 
         lcdDotCounter -= 172;
         lcdMode = 0;
