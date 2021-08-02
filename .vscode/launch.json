@@ -56,16 +56,28 @@
             //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                             //FAIL
             //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                             //FAIL
             //"args": [ "-r", "testroms/acceptance/call_cc_timing.gb"],                         //FAIL
+
+            //## MBC1
             //"args": [ "-r", "testroms/emulator-only/mbc1/bits_bank1.gb" ],                    //PASS
             //"args": [ "-r", "testroms/emulator-only/mbc1/bits_bank2.gb" ],                    //PASS
             //"args": [ "-r", "testroms/emulator-only/mbc1/bits_mode.gb" ],                     //PASS
             //"args": [ "-r", "testroms/emulator-only/mbc1/bits_ramg.gb" ],                     //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_512kb.gb" ],                     //PASS
             //"args": [ "-r", "testroms/emulator-only/mbc1/rom_1Mb.gb" ],                       //PASS
             //"args": [ "-r", "testroms/emulator-only/mbc1/rom_2Mb.gb" ],                       //PASS
             //"args": [ "-r", "testroms/emulator-only/mbc1/rom_4Mb.gb" ],                       //PASS
             //"args": [ "-r", "testroms/emulator-only/mbc1/rom_8Mb.gb" ],                       //PASS
             //"args": [ "-r", "testroms/emulator-only/mbc1/rom_16Mb.gb" ],                      //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_512kb.gb" ],                     //PASS
+
+            //## MBC5
+            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_512kb.gb" ],                     //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_1Mb.gb" ],                       //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_2Mb.gb" ],                       //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_4Mb.gb" ],                       //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_8Mb.gb" ],                       //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_16Mb.gb" ],                      //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_32MB.gb" ],                      //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_64MB.gb" ],                      //PASS
 
             //### BLARGGS
             //"args": [ "-r", "testroms/blarggs/cpu_instrs.gb"],                                //PASS
@@ -91,6 +103,7 @@
             //"args": [ "-r", "roms/Alfred Chicken (Europe).gb" ],                             //Works
             //"args": [ "-r", "roms/Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb" ],   //Works
             //"args": [ "-r", "roms/Street Fighter II (USA) (SGB Enhanced).gb" ],              //Graphic Corruption, no input
+            //"args": [ "-r", "roms/Pokemon - Blaue Edition (Germany) (SGB Enhanced).gb" ],    //Works but some graphic glitches
             
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
