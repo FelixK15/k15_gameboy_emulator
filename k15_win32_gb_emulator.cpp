@@ -89,6 +89,8 @@ PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 constexpr float pi 		= 3.14159f;
 constexpr float twoPi 	= 6.28318f;
 
+constexpr uint32_t gbMaxRomHistoryCount = 32;
+
 const IID 	IID_IAudioClient			= _uuidof(IAudioClient);
 const IID 	IID_IAudioRenderClient		= _uuidof(IAudioRenderClient);
 const IID 	IID_IMMDeviceEnumerator 	= _uuidof(IMMDeviceEnumerator);
@@ -112,6 +114,15 @@ constexpr uint32_t gbMenuSpeed16x		= 40;
 
 constexpr uint32_t gbMenuResetEmulator 	= 50;
 
+constexpr char* pSettingsFormatting = R"(
+stateSlot=%hhu
+scaleFactor=%hhu
+windowPosX=%d
+windowPosY=%d
+fullscreen=%hhu)";
+
+constexpr char* pSettingsPath = "k15_gb_emu_settings.ini";
+
 enum InputType
 {
 	Gamepad,
@@ -130,6 +141,15 @@ struct UserMessage
 	char messageBuffer[256];
 	size_t messageBufferLength;
 	LARGE_INTEGER startTime;
+};
+
+struct Win32Settings
+{
+	uint8_t scaleFactor;
+	uint8_t stateSlot;
+	uint8_t	fullscreen;
+	int32_t	windowPosX;
+	int32_t	windowPosY;
 };
 
 #define K15_RETURN_ON_HRESULT_ERROR(comFunction) \
@@ -165,7 +185,7 @@ struct Win32EmulatorContext
 {
 	char				romBaseFileName[MAX_PATH];
 
-	GBEmulatorInstance*	pEmulatorInstance 				= nullptr;
+	GBEmulatorInstance*	pEmulatorInstance = nullptr;
 	
 	Win32FileMapping	romMapping;
 	Win32FileMapping	ramMapping;
@@ -183,55 +203,54 @@ struct Win32ApplicationContext
 {
 	Win32EmulatorContext		emulatorContext;
 
-	HINSTANCE					pInstanceHandle						= nullptr;
-	HMONITOR					pMonitorHandle						= nullptr;
-	HWND						pWindowHandle						= nullptr;
-	HMENU						pFileMenuItems 						= nullptr;
-	HMENU						pViewMenuItems 						= nullptr;
-	HMENU						pScaleMenuItems 					= nullptr;
-	HMENU						pStateMenuItems						= nullptr;
-	HMENU						pMenuBar							= nullptr;
-	HMENU						pContextMenu						= nullptr;
-	HGLRC						pOpenGLContext						= nullptr;
-	HDC							pDeviceContext						= nullptr;
-	uint8_t* 					pGameboyRGBVideoBuffer 				= nullptr;
-	UserMessage 				userMessages[8] 					= {};
-	char 						gameTitle[16] 						= {};
-	char						romBaseFileName[256]				= {};
+	HINSTANCE					pInstanceHandle									= nullptr;
+	HMONITOR					pMonitorHandle									= nullptr;
+	HWND						pWindowHandle									= nullptr;
+	HMENU						pFileMenuItems 									= nullptr;
+	HMENU						pViewMenuItems 									= nullptr;
+	HMENU						pScaleMenuItems 								= nullptr;
+	HMENU						pStateMenuItems									= nullptr;
+	HMENU						pMenuBar										= nullptr;
+	HMENU						pContextMenu									= nullptr;
+	HGLRC						pOpenGLContext									= nullptr;
+	HDC							pDeviceContext									= nullptr;
+	uint8_t* 					pGameboyRGBVideoBuffer 							= nullptr;
+	UserMessage 				userMessages[8] 								= {};
+	char 						gameTitle[16] 									= {};
+	char						romBaseFileName[256]							= {};
+	uint32_t					monitorWidth									= 0u;
+	uint32_t					monitorHeight									= 0u;
+	uint32_t					monitorPosX										= 0u;
+	uint32_t					monitorPosY										= 0u;
+	uint16_t					textVertexCount									= 0u;
+	uint16_t					monitorRefreshRate								= 60u;
 
-	uint32_t					monitorWidth						= 0;
-	uint32_t					monitorHeight						= 0;
-	uint32_t					monitorPosX							= 0;
-	uint32_t					monitorPosY							= 0;
-	uint16_t					textVertexCount						= 0;
-	uint16_t					monitorRefreshRate					= 60;
+	uint32_t 					windowWidth										= gbHorizontalResolutionInPixels;
+	uint32_t 					windowHeight									= gbVerticalResolutionInPixels;
+	int32_t						windowPosX										= 0;
+	int32_t						windowPosY										= 0;
 
-	uint32_t 					windowWidth							= gbHorizontalResolutionInPixels;
-	uint32_t 					windowHeight						= gbVerticalResolutionInPixels;
-	int32_t						windowPosX							= 0;
-	int32_t						windowPosY							= 0;
+	int16_t						leftMouseDownDeltaX								= 0;
+	int16_t						leftMouseDownDeltaY								= 0;
 
-	int16_t						leftMouseDownDeltaX					= 0;
-	int16_t						leftMouseDownDeltaY					= 0;
+	uint32_t 					emulatorDeltaTimeInMicroseconds 				= 0u;
+	uint8_t						frameBufferScale								= 1u;	
+	uint8_t						menuScale										= 1u; //FK: What has been selected in the menu
+	uint8_t						maxScale										= 1u;
 
-	uint32_t 					emulatorDeltaTimeInMicroseconds 	= 0u;
-	uint8_t						frameBufferScale					= 1;	
-	uint8_t						menuScale							= 1; //FK: What has been selected in the menu
-	uint8_t						maxScale							= 1;
+	DWORD						windowStyle										= 0u;
+	DWORD						windowStyleEx									= 0u;
 
-	DWORD						windowStyle							= 0u;
-	DWORD						windowStyleEx						= 0u;
+	GLuint 						gameboyFrameBufferTexture						= 0u;
+	GLuint						gameboyFrameBufferShader						= 0u;
+	GLuint						gameboyFrameVertexBuffer						= 0u;
+	GLuint						gameboyVertexArray								= 0u;
 
-	GLuint 						gameboyFrameBufferTexture;
-	GLuint						gameboyFrameBufferShader;
-	GLuint						gameboyFrameVertexBuffer;
-	GLuint						gameboyVertexArray;
-
-	uint8_t 					userMessageCount 					= 0;
-	uint8_t   					leftMouseDown						= 0;
-	uint8_t						fullscreen							= 0;
-	uint8_t						vsyncEnabled						= 0;
-	uint8_t						hasFocus							= 1;
+	uint8_t 					userMessageCount 								= 0u;
+	uint8_t   					leftMouseDown									= 0u;
+	uint8_t						fullscreen										= 0u;
+	uint8_t						vsyncEnabled									= 0u;
+	uint8_t						hasFocus										= 1u;
 };
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
@@ -240,6 +259,63 @@ struct Win32GBEmulatorArguments
 {
 	char romPath[MAX_PATH] = {0};
 };
+
+Win32Settings serializeSettings( Win32ApplicationContext* pContext )
+{
+	Win32Settings settings;
+	settings.stateSlot 		= pContext->emulatorContext.stateSlot;
+	settings.scaleFactor 	= pContext->frameBufferScale;
+	settings.windowPosX 	= pContext->windowPosX;
+	settings.windowPosY 	= pContext->windowPosY;
+	settings.fullscreen 	= pContext->fullscreen;
+
+	return settings;
+}
+
+uint8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
+{
+	const HANDLE pFileHandle = CreateFileA( pPath, GENERIC_WRITE, 0u, nullptr, CREATE_ALWAYS, 0u, nullptr );
+	if( pFileHandle == INVALID_HANDLE_VALUE )
+	{
+		return 0;
+	}
+
+	char settingsBuffer[512] = {};
+	const int32_t charsWritten = sprintf_s( settingsBuffer, sizeof( settingsBuffer ), pSettingsFormatting, 
+		pSettings->stateSlot, pSettings->scaleFactor, pSettings->windowPosX, pSettings->windowPosY, pSettings->fullscreen );
+
+	DWORD bytesWritten = 0u;
+	const BOOL writeResult = WriteFile( pFileHandle, settingsBuffer, charsWritten, &bytesWritten, nullptr );
+	CloseHandle( pFileHandle );
+
+	return writeResult == TRUE;
+}
+
+uint8_t loadSettingsFromFile( Win32Settings* pOutSettings, const char* pPath )
+{
+	const HANDLE pFileHandle = CreateFileA( pPath, GENERIC_READ, 0u, nullptr, OPEN_EXISTING, 0u, nullptr );
+	if( pFileHandle == INVALID_HANDLE_VALUE )
+	{
+		return 0;
+	}
+
+	char settingsBuffer[512] = {};
+	DWORD bytesRead = 0u;
+	const BOOL readResult = ReadFile( pFileHandle, settingsBuffer, sizeof( settingsBuffer ), &bytesRead, nullptr );
+	CloseHandle( pFileHandle );
+
+	if( readResult == FALSE )
+	{
+		return 0;
+	}
+
+	sscanf_s( settingsBuffer, pSettingsFormatting, 
+		&pOutSettings->stateSlot, &pOutSettings->scaleFactor, 
+		&pOutSettings->windowPosX, &pOutSettings->windowPosY, 
+		&pOutSettings->fullscreen );
+
+	return 1;
+}
 
 void parseCommandLineArguments( Win32GBEmulatorArguments* pOutArguments, LPSTR pCommandLineArguments )
 {
@@ -475,7 +551,7 @@ uint8_t mapFileForReading( Win32FileMapping* pOutFileMapping, const char* pFileN
 
 uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileName, const size_t fileSizeInBytes )
 {
-	const HANDLE pFileHandle = CreateFileA( pFileName, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, 0u, nullptr );
+	const HANDLE pFileHandle = CreateFileA( pFileName, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, 0u, nullptr );
 	if( pFileHandle == INVALID_HANDLE_VALUE )
 	{
 		const DWORD lastError = GetLastError();
@@ -494,7 +570,7 @@ uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileN
 		return 0;
 	}
 
-	uint8_t* pFileBaseAddress = ( uint8_t* )MapViewOfFile( pFileMappingHandle, FILE_MAP_WRITE, 0u, 0u, 0u );
+	uint8_t* pFileBaseAddress = ( uint8_t* )MapViewOfFile( pFileMappingHandle, FILE_MAP_WRITE | FILE_MAP_READ, 0u, 0u, 0u );
 	if( pFileBaseAddress == nullptr )
 	{
 		const DWORD lastError = GetLastError();
@@ -610,17 +686,17 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 
 	char fixedRomPath[ MAX_PATH ];
 	strcpy_s( fixedRomPath, sizeof( fixedRomPath ), pRomPath );
-	fixRomFileName( fixedRomPath );
+	char* pFixedRomPath = fixRomFileName( fixedRomPath );
 	
 	char romBaseFileName[ MAX_PATH ];
 	CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
 
-	getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), fixedRomPath );
+	getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), pFixedRomPath );
 		
 	unmapFileMapping( &pEmulatorContext->romMapping );
 	unmapFileMapping( &pEmulatorContext->ramMapping );
 
-	if( mapFileForReading( &pEmulatorContext->romMapping, fixedRomPath ) == 0 )
+	if( mapFileForReading( &pEmulatorContext->romMapping, pFixedRomPath ) == 0 )
 	{
 		//pushUserMessage( pContext, "Couldn't open rom file '%s'", pRomPath );
 		return;
@@ -637,7 +713,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	//memcpy( pContext->gameTitle, header.gameTitle, sizeof( header.gameTitle ) );
 
 	loadGBEmulatorRom( pEmulatorContext->pEmulatorInstance, pEmulatorContext->romMapping.pFileBaseAddress );
-
+	
 	const size_t ramSizeInBytes = mapRamSizeToByteSize( header.ramSize );
 	if( ramSizeInBytes > 0 )
 	{
@@ -656,7 +732,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 
 	strcpy_s( pEmulatorContext->romBaseFileName, sizeof( pEmulatorContext->romBaseFileName ), romBaseFileName );
 
-	//FK: TODO: only enable if the thread verified the rom and successfully loaded the rom data
+	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
 	enableRomMenuItems( pContext );
 }
 
@@ -750,6 +826,9 @@ void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 	const int32_t windowWidth 	= windowRect.right - windowRect.left;
 	const int32_t windowHeight 	= windowRect.bottom - windowRect.top;
 
+	pContext->windowWidth = windowWidth;
+	pContext->windowHeight = windowHeight;
+	
 	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
 	updateGameboyFrameVertexBuffer( pContext );
 }
@@ -833,7 +912,7 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 			break;
 
 		case gbMenuClose:
-			PostQuitMessage(0);
+			PostMessage( pContext->pWindowHandle, WM_CLOSE, 0u, 0u );
 			break;
 
 		case gbMenuFullscreen:
@@ -1034,9 +1113,14 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 	switch (message)
 	{
 	case WM_CLOSE:
+	{
+		Win32Settings settings = serializeSettings( pContext );
+		writeSettingsToFile( &settings, pSettingsPath );
+
 		PostQuitMessage(0);
 		messageHandled = true;
 		break;
+	}
 
 	case WM_PAINT:
 	{
@@ -1624,6 +1708,45 @@ void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32Emula
 	}
 }
 
+void applySettings( const Win32Settings* pSettings, Win32ApplicationContext* pContext )
+{
+	changeStateSlot( pContext, pSettings->stateSlot );
+
+	pContext->menuScale = pSettings->scaleFactor;
+	setFrameBufferScale( pContext, pSettings->scaleFactor );
+	SetWindowPos( pContext->pWindowHandle, HWND_TOP, pSettings->windowPosX, pSettings->windowPosY, 0u, 0u, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_NOSIZE );
+	
+	if( pSettings->fullscreen )
+	{
+		enableFullscreen( pContext );
+	}
+}
+
+uint8_t verifySettings( const Win32Settings* pSettings, Win32ApplicationContext* pContext )
+{
+	if( pSettings->stateSlot > 3 || pSettings->stateSlot == 0 )
+	{
+		return 0;
+	}
+
+	if( pSettings->scaleFactor > pContext->maxScale && pSettings->scaleFactor > 0 )
+	{
+		return 0;
+	}
+
+	if( pSettings->windowPosX < 0 && ( uint32_t )pSettings->windowPosX > pContext->monitorWidth )
+	{
+		return 0;
+	}
+
+	if( pSettings->windowPosY < 0 && ( uint32_t )pSettings->windowPosY > pContext->monitorHeight )
+	{
+		return 0;
+	}
+
+	return 1;
+}
+
 void runVsyncMainLoop( Win32ApplicationContext* pContext )
 {
 	uint8_t loopRunning = true;
@@ -1721,7 +1844,7 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 		}
 
 		const uint32_t cycleCountForThisHostFrame = gbCyclesPerFrame * pEmulatorContext->cyclePerHostFrameFactor;
-		const GBEmulatorInstanceEventMask emulatorEventMask = runGBEmulatorForCycles( pEmulatorContext->pEmulatorInstance, gbCyclesPerFrame );
+		const GBEmulatorInstanceEventMask emulatorEventMask = runGBEmulatorForCycles( pEmulatorContext->pEmulatorInstance, cycleCountForThisHostFrame );
 
 		//FK: Since we're running with locked 60hz in non-vsync the vblank flag should *always* be set.
 		if( emulatorEventMask & K15_GB_VBLANK_EVENT_FLAG )
@@ -1754,7 +1877,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	Win32ApplicationContext appContext;
 	appContext.pInstanceHandle = hInstance;
 
-	allocateDebugConsole();
+	//allocateDebugConsole();
 
 	loadWin32FunctionPointers();
 	loadXInputFunctionPointers();
@@ -1774,6 +1897,15 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	if( args.romPath[0] != 0 )
 	{
 		loadRomFile( &appContext, args.romPath );
+	}
+
+	Win32Settings settings;
+	if( loadSettingsFromFile( &settings, pSettingsPath ) )
+	{
+		if( verifySettings( &settings, &appContext ) )
+		{
+			applySettings( &settings, &appContext );
+		}
 	}
 
 	if( appContext.vsyncEnabled )

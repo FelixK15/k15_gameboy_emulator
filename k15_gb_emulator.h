@@ -31,13 +31,15 @@
 #define RuntimeAssert(x)        if(!(x)) DebugBreak()
 #define CompiletimeAssert(x)    typedef char compile_time_assertion_##_LINE_[(x)?1:-1]
 
+static constexpr uint8_t    gbStateVersion = 3;
+static constexpr uint32_t   gbStateFourCC  = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
+
+
 static constexpr uint8_t    gbNintendoLogo[]                        = { 0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E };
 static constexpr char       gbRamFileExtension[]                    = ".k15_gb_ram";
 static constexpr char       gbStateFileExtension[]                  = ".k15_gb_state";
-static constexpr uint32_t   gbStateFourCC                           = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
 static constexpr uint32_t   gbCyclesPerFrame                        = 70224u;
 static constexpr uint32_t   gbEmulatorFrameRate                     = 60u;
-static constexpr uint8_t    gbStateVersion                          = 2;
 static constexpr uint8_t    gbOAMSizeInBytes                        = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                         = 160u;
 static constexpr uint8_t    gbSpriteHeight                          = 16u;
@@ -57,6 +59,8 @@ static constexpr size_t     gbFrameBufferSizeInBytes                = gbFrameBuf
 static constexpr uint8_t    gbFrameBufferCount                      = 2;
 static constexpr size_t     gbMappedMemorySizeInBytes               = 0x10000;
 static constexpr size_t     gbCompressionTokenSizeInBytes           = 1;
+static constexpr size_t     gbRamBankSizeInBytes                    = Kbyte( 8 );
+static constexpr size_t     gbRomBankSizeInBytes                    = Kbyte( 16 );
 
 typedef uint32_t GBEmulatorInstanceEventMask;
 
@@ -318,6 +322,13 @@ struct GBPpuState
     uint8_t             backgroundMonochromePalette[ 4 ];
 };
 
+enum GBMemoryAccess
+{
+    GBMemoryAccess_None     = 0,
+    GBMemoryAccess_Written  = 1,
+    GBMemoryAccess_Read     = 2
+};
+
 struct GBMemoryMapper
 {
     uint8_t*            pBaseAddress;
@@ -329,6 +340,7 @@ struct GBMemoryMapper
     uint16_t            lastAddressReadFrom;
     uint8_t             lastValueWritten;
 
+    GBMemoryAccess      memoryAccess;
     GBLcdStatus         lcdStatus;  //FK: Mirror lcd status to check wether we can read from VRAM and/or OAM 
     uint8_t             lcdEnabled; //FK: Mirror lcd enabled flag to check wether we can read from VRAM and/or OAM
     uint8_t             dmaActive;  //FK: Mirror dma flag to check wether we can read only from HRAM
@@ -391,7 +403,8 @@ struct GBEmulatorInstanceFlags
     {
         struct 
         {
-            uint8_t vblank : 1;
+            uint8_t vblank      : 1;
+            uint8_t ramAccessed : 1;
         };
 
         uint8_t value;
@@ -415,10 +428,16 @@ struct GBCartridge
     const uint8_t*      pRomBaseAddress;
     uint8_t*            pRamBaseAddress;
 
+    uint32_t            romSizeInBytes;
+    uint32_t            ramSizeInBytes;
+
     GBCartridgeHeader   header;
     uint8_t             romBankCount;
+    uint8_t             ramBankCount;
     uint8_t             mappedRomBankNumber;
+    uint8_t             mappedRamBankNumber;
     uint8_t             ramEnabled              : 1;
+    uint8_t             bankingMode             : 1;
 };
 
 struct GBEmulatorInstance
@@ -444,6 +463,8 @@ struct GBEmulatorState
     GBTimerState  timerState;
     GBCartridge   cartridge;
     uint8_t       mappedRomBankNumber;
+    uint8_t       mappedRamBankNumber;
+    uint8_t       ramEnabled;
 };
 
 uint8_t isInVRAMAddressRange( const uint16_t address )
@@ -483,7 +504,7 @@ uint8_t isInMBC1RamEnableRegisterRange( const uint16_t address )
 
 uint8_t isInExternalRamRange( const uint16_t address )
 {
-    return address >= 0x8000 && address < 0xA000;
+    return address >= 0xA000 && address < 0xC000;
 }
 
 uint8_t isInHRAMAddressRange( const uint16_t address )
@@ -550,19 +571,23 @@ size_t mapRomSizeToByteSize(uint8_t romSize)
     switch(romSize)
     {
         case 0x00:
-            return Kbit(256u);
+            return Kbyte(32u);
         case 0x01:
-            return Kbit(512u);
+            return Kbyte(64u);
         case 0x02:
-            return Mbit(1u);
+            return Kbyte(128u);
         case 0x03:
-            return Mbit(2u);
+            return Kbyte(256u);
         case 0x04:
-            return Mbit(4u);
+            return Kbyte(512u);
         case 0x05:
-            return Mbit(8u);
+            return Mbyte(1u);
         case 0x06:
-            return Mbit(16u);
+            return Mbyte(2u);
+        case 0x07:
+            return Mbyte(4u);
+        case 0x08:
+            return Mbyte(8u);
     }
 
     //FK: Unsupported romSize identifier
@@ -577,13 +602,13 @@ size_t mapRamSizeToByteSize(uint8_t ramSize)
         case 0x00:
             return 0;
         case 0x02:
-            return Kbit(8);
+            return Kbyte(8);
         case 0x03:
-            return Kbit(32);
+            return Kbyte(32);
         case 0x04:
-            return Kbit(128);
+            return Kbyte(128);
         case 0x05:
-            return Kbit(64);
+            return Kbyte(64);
     }
 
     //FK: Unsupported ramSize identifier
@@ -591,8 +616,9 @@ size_t mapRamSizeToByteSize(uint8_t ramSize)
     return 0;
 }
 
-void mapCartridgeMemoryBank( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper, uint8_t romBankNumber )
+void mapCartridgeRomBank( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper, uint8_t romBankNumber )
 {
+    RuntimeAssert( romBankNumber < pCartridge->romBankCount );
     if( pCartridge->mappedRomBankNumber == romBankNumber )
     {
         return;
@@ -600,8 +626,22 @@ void mapCartridgeMemoryBank( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMap
 
     pCartridge->mappedRomBankNumber = romBankNumber;
 
-    const uint8_t* pRomBank = pCartridge->pRomBaseAddress + romBankNumber * Kbyte( 16 );
-    memcpy( pMemoryMapper->pRomBankSwitch, pRomBank, Kbyte( 16 ) );
+    const uint8_t* pRomBank = pCartridge->pRomBaseAddress + romBankNumber * gbRomBankSizeInBytes;
+    memcpy( pMemoryMapper->pRomBankSwitch, pRomBank, gbRomBankSizeInBytes );
+}
+
+void mapCartridgeRamBank( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper, uint8_t ramBankNumber )
+{
+    RuntimeAssert( ramBankNumber < pCartridge->ramBankCount );
+    if( pCartridge->mappedRamBankNumber == ramBankNumber )
+    {
+        return;
+    }
+
+    pCartridge->mappedRamBankNumber = ramBankNumber;
+
+    const uint8_t* pRamBank = pCartridge->pRamBaseAddress + ramBankNumber * gbRamBankSizeInBytes;
+    memcpy( pMemoryMapper->pRamBankSwitch, pRamBank, gbRamBankSizeInBytes );
 }
 
 uint8_t isGBEmulatorRomMapped( const GBEmulatorInstance* pEmulatorInstance )
@@ -617,7 +657,13 @@ GBCartridgeHeader getGBEmulatorCurrentCartridgeHeader( const GBEmulatorInstance*
 
 void setGBEmulatorRamData( GBEmulatorInstance* pEmulatorInstance, uint8_t* pRamData )
 {
-    pEmulatorInstance->pCartridge->pRamBaseAddress = pRamData;
+    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
+    GBCartridge* pCartridge         = pEmulatorInstance->pCartridge;
+
+    pCartridge->pRamBaseAddress = pRamData;
+
+    //FK: map RAM bank #0
+    memcpy( pMemoryMapper->pRamBankSwitch, pRamData, gbRamBankSizeInBytes );
 }
 
 size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySizeInBytes )
@@ -711,6 +757,8 @@ void storeGBEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t*
     state.timerState                = *pTimerState;
     state.cartridge                 = *pCartridge;
     state.mappedRomBankNumber       = pCartridge->mappedRomBankNumber;
+    state.mappedRamBankNumber       = pCartridge->mappedRamBankNumber;
+    state.ramEnabled                = pCartridge->ramEnabled;
 
     memcpy( pStateMemory, &gbStateFourCC, sizeof( gbStateFourCC ) );
     pStateMemory += sizeof( gbStateFourCC );
@@ -793,7 +841,8 @@ bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* 
     memcpy( &state, pStateMemory, sizeof( GBEmulatorState ) );
     pStateMemory += sizeof( GBEmulatorState );
 
-    const uint8_t* pRomBaseAddress = pEmulatorInstance->pCartridge->pRomBaseAddress;
+    const uint8_t* pRomBaseAddress  = pEmulatorInstance->pCartridge->pRomBaseAddress;
+    uint8_t* pRamBaseAddress        = pEmulatorInstance->pCartridge->pRamBaseAddress;
 
     *pEmulatorInstance->pCpuState   = state.cpuState;
     *pEmulatorInstance->pPpuState   = state.ppuState;
@@ -802,13 +851,22 @@ bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* 
 
     GBCartridge* pCartridge = pEmulatorInstance->pCartridge;
     pCartridge->pRomBaseAddress     = pRomBaseAddress;
-    pCartridge->mappedRomBankNumber = 0;
+    pCartridge->pRamBaseAddress     = pRamBaseAddress;
+    pCartridge->ramEnabled          = state.ramEnabled;
     pCartridge->header              = getGBCartridgeHeader( pRomBaseAddress );
 
     const size_t romSizeInBytes = mapRomSizeToByteSize( pCartridge->header.romSize );
-    pCartridge->romBankCount    = ( uint8_t )( romSizeInBytes / Kbyte( 16 ) );
-    
-    mapCartridgeMemoryBank( pCartridge, pEmulatorInstance->pMemoryMapper, state.mappedRomBankNumber );
+    pCartridge->mappedRomBankNumber = 0;
+    pCartridge->romBankCount        = ( uint8_t )( romSizeInBytes / gbRomBankSizeInBytes );
+    mapCartridgeRomBank( pCartridge, pEmulatorInstance->pMemoryMapper, state.mappedRomBankNumber );
+
+    const size_t ramSizeInBytes = mapRamSizeToByteSize( pCartridge->header.ramSize );
+    if( ramSizeInBytes > 0u )
+    {
+        pCartridge->mappedRamBankNumber = 0;
+        pCartridge->ramBankCount = ( uint8_t )( ramSizeInBytes / gbRamBankSizeInBytes );
+        mapCartridgeRamBank( pCartridge, pEmulatorInstance->pMemoryMapper, state.mappedRamBankNumber );
+    }
 
     patchIOTimerMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pTimerState );
     patchIOPpuMappedMemoryPointer( pMemoryMapper, pEmulatorInstance->pPpuState );
@@ -865,12 +923,14 @@ uint8_t read8BitValueFromMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t a
         return 0xFF;
     }
 
+    pMemoryMapper->memoryAccess = GBMemoryAccess_Read;
     pMemoryMapper->lastAddressReadFrom = addressOffset;
     return pMemoryMapper->pBaseAddress[addressOffset];
 }
 
 uint16_t read16BitValueFromMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
+    pMemoryMapper->memoryAccess = GBMemoryAccess_Read;
     pMemoryMapper->lastAddressReadFrom = addressOffset;
     const uint8_t ls = read8BitValueFromMappedMemory( pMemoryMapper, addressOffset + 0);
     const uint8_t hs = read8BitValueFromMappedMemory( pMemoryMapper, addressOffset + 1);
@@ -915,6 +975,7 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
 {
     pMemoryMapper->lastValueWritten     = value;
     pMemoryMapper->lastAddressWrittenTo = addressOffset;
+    pMemoryMapper->memoryAccess         = GBMemoryAccess_Written;
 
     if( !allowWriteToMemoryAddress( pMemoryMapper, addressOffset ) )
     {
@@ -983,14 +1044,21 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
 {
     const GBCartridgeHeader header = getGBCartridgeHeader( pRomMemory );
     const size_t romSizeInBytes = mapRomSizeToByteSize( header.romSize );
+    const size_t ramSizeInBytes = mapRamSizeToByteSize( header.ramSize );
     pCartridge->ramEnabled      = 0;
     pCartridge->header          = header;
     pCartridge->pRomBaseAddress = pRomMemory;
     pCartridge->pRamBaseAddress = nullptr;
-    pCartridge->romBankCount    = ( uint8_t )( romSizeInBytes / Kbyte( 16 ) );
+    pCartridge->romBankCount    = ( uint8_t )( romSizeInBytes / gbRomBankSizeInBytes );
+    pCartridge->ramBankCount    = ( uint8_t )( ramSizeInBytes / gbRamBankSizeInBytes );
+    pCartridge->romSizeInBytes  = romSizeInBytes;
+    pCartridge->ramSizeInBytes  = ramSizeInBytes;
 
     //FK: Map first rom bank to 0x0000-0x4000
-    memcpy( pMemoryMapper->pBaseAddress, pRomMemory, Kbyte( 16 ) );
+    memcpy( pMemoryMapper->pBaseAddress, pRomMemory, gbRomBankSizeInBytes );
+
+    //FK: Clear ram bank
+    memset( pMemoryMapper->pRamBankSwitch, 0, gbRamBankSizeInBytes );
 
     //FK: Selectively enable different cartridge types after testing
     switch(pCartridge->header.cartridgeType)
@@ -1000,7 +1068,7 @@ void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper,
         case ROM_MBC1_RAM:
         case ROM_MBC1_RAM_BATT:
         {
-            mapCartridgeMemoryBank( pCartridge, pMemoryMapper, 1 );
+            mapCartridgeRomBank( pCartridge, pMemoryMapper, 1 );
             break;
         }
         default:
@@ -1154,10 +1222,17 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
 
     resetMemoryMapper(pEmulatorInstance->pMemoryMapper );
 
+    uint8_t* pRamBaseAddress = pCartridge->pRamBaseAddress;
     if( pCartridge->pRomBaseAddress != nullptr )
     {
         pCartridge->mappedRomBankNumber = 0;
+        pCartridge->mappedRamBankNumber = 0;
         mapCartridgeMemory(pCartridge, pMemoryMapper, pCartridge->pRomBaseAddress );
+    }
+
+    if( pRamBaseAddress != nullptr )
+    {
+        setGBEmulatorRamData( pEmulatorInstance, pRamBaseAddress );
     }
 
     initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
@@ -1240,6 +1315,8 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 void loadGBEmulatorRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
 {
     pEmulator->pCartridge->pRomBaseAddress = nullptr;
+    pEmulator->pCartridge->pRamBaseAddress = nullptr;
+    pEmulator->pCartridge->mappedRamBankNumber = 0u;
     pEmulator->pCartridge->mappedRomBankNumber = 0u;
 
     resetGBEmulator( pEmulator );
@@ -2888,7 +2965,7 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
     return pOpcode->cycleCosts[ opcodeCondition ];
 }
 
-void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t cycleCostOfLastOpCode )
+void updateDmaState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t cycleCostOfLastOpCode )
 {
     if( pCpuState->flags.dma )
     {
@@ -2900,21 +2977,6 @@ void checkDMAState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_
             //FK: Copy sprite attributes from dma address to OAM h
             memcpy( pMemoryMapper->pSpriteAttributes, pMemoryMapper->pBaseAddress + pCpuState->dmaAddress, gbOAMSizeInBytes );
         }
-    }
-
-    const uint8_t startDMATransfer = ( pMemoryMapper->lastAddressWrittenTo == 0xFF46 );
-    if( startDMATransfer )
-    {
-        //FK: Cpu can only write to HRAM during DMA transfer
-        pCpuState->flags.dma = 1;
-
-        pCpuState->dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
-
-        //FK: Count up to 160 cycles for the dma flag to be reset
-        pCpuState->dmaCycleCounter = 0;
-
-        //FK: hack to not run into an endless DMA loop
-        pMemoryMapper->lastAddressWrittenTo = 0x0000;
     }
 }
 
@@ -2979,12 +3041,16 @@ void handleMBC1RamWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper 
     {
         pCartridge->ramEnabled = ( value & 0xF ) == 0xA;
     }
-    else if( isInExternalRamRange( address ) && pCartridge->ramEnabled )
-    {
-        //FK: mirror writes to ram area to emulator ram memory
-        const uint16_t baseAddressOffset = (address - 0xA000);
-        pCartridge->pRamBaseAddress[ baseAddressOffset ] = value;
-    }
+}
+
+uint8_t isLargeRamCartridge( uint32_t ramSizeInBytes )
+{
+    return ramSizeInBytes > Kbit( 8 );
+}
+
+uint8_t isLargeRomCartridge( uint32_t romSizeInBytes )
+{
+    return romSizeInBytes >= Mbit( 1 );
 }
 
 void handleMBC1RomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper )
@@ -2996,7 +3062,37 @@ void handleMBC1RomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper 
     {
         const uint8_t romBankNumberMask = ( pCartridge->romBankCount - 1 );
         const uint8_t romBankNumber = value == 0 ? 1 : ( value & romBankNumberMask );
-        mapCartridgeMemoryBank( pCartridge, pMemoryMapper, romBankNumber );
+        mapCartridgeRomBank( pCartridge, pMemoryMapper, romBankNumber );
+    }
+    else if( isInMBC1RamBankNumberRegisterRange( address ) )
+    {
+        if( pCartridge->bankingMode == 1 )
+        {
+            if( isLargeRomCartridge( pCartridge->ramSizeInBytes ) )
+            {
+                const uint8_t romBankUpperBits = value & 0x3;
+                const uint8_t romBankNumber = ( romBankUpperBits << 5 ) + pCartridge->mappedRomBankNumber;
+                mapCartridgeRomBank( pCartridge, pMemoryMapper, romBankNumber );
+            }
+            else
+            {
+                RuntimeAssert( pCartridge->ramEnabled );
+                const uint8_t ramBankNumber = value & 0x3;
+                mapCartridgeRamBank( pCartridge, pMemoryMapper, ramBankNumber );
+            }
+        }
+        
+    }
+    else if( isInMBC1BankingModeSelectRegisterRange( address ) )
+    {
+        const uint8_t bankingMode = ( value & 0x1 );
+        //FK: according to Pandocs, ram bank should be mapped once 
+        //    bankingmode 1 is selected and the cartridge is a 
+        //    large ram cartridge. 
+        //  TODO: Check if it is enough to only switch ram bank 
+        //        when writing to isInMBC1RamBankNumberRegisterRange
+
+        pCartridge->bankingMode = bankingMode;
     }
 }
 
@@ -3018,6 +3114,8 @@ void handleCartridgeRomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMa
     switch( pCartridge->header.cartridgeType )
     {
         case ROM_MBC1:
+        case ROM_MBC1_RAM:
+        case ROM_MBC1_RAM_BATT:
             handleMBC1RomWrite( pCartridge, pMemoryMapper );
             return;
     }
@@ -3080,51 +3178,78 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         }
     }
 
-    updateTimerRegisters( pMemoryMapper, pTimerState );
-    
-    checkDMAState( pCpuState, pMemoryMapper, cycleCost ); 
+    updateDmaState( pCpuState, pMemoryMapper, cycleCost ); 
 
     updatePPU( pCpuState, pPpuState, cycleCost );
     updateTimer( pCpuState, pTimerState, cycleCost );
-    if( handleInput( pMemoryMapper, pEmulatorInstance->joypadState ) )
-    {
-        triggerInterrupt( pCpuState, JoypadInterrupt );
-    }
-
+    
     //FK: LCD Control
-    if( pMemoryMapper->lastAddressWrittenTo == 0xFF40 )
+    if( pMemoryMapper->memoryAccess == GBMemoryAccess_Written )
     {
-        GBLcdControl lcdControlValue;
-        memcpy(&lcdControlValue, &pMemoryMapper->lastValueWritten, sizeof(GBLcdControl) );
-        updatePPULcdControl( pPpuState, lcdControlValue );
+        if( handleInput( pMemoryMapper, pEmulatorInstance->joypadState ) )
+        {
+            triggerInterrupt( pCpuState, JoypadInterrupt );
+        }
+
+        updateTimerRegisters( pMemoryMapper, pTimerState );
+
+        if( pMemoryMapper->lastAddressWrittenTo == 0xFF46 )
+        {
+            //FK: Cpu can only write to HRAM during DMA transfer
+            pCpuState->flags.dma = 1;
+
+            pCpuState->dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
+
+            //FK: Count up to 160 cycles for the dma flag to be reset
+            pCpuState->dmaCycleCounter = 0;
+        }
+
+        if( pMemoryMapper->lastAddressWrittenTo == 0xFF40 )
+        {
+            GBLcdControl lcdControlValue;
+            memcpy(&lcdControlValue, &pMemoryMapper->lastValueWritten, sizeof(GBLcdControl) );
+            updatePPULcdControl( pPpuState, lcdControlValue );
+        }
+
+        //FK: LCD Monochrome palette - Background
+        if( pMemoryMapper->lastAddressWrittenTo == 0xFF47 )
+        {
+            extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, pMemoryMapper->lastValueWritten );
+        }
+
+        //FK: LCD Monochrome palette - Object
+        if( pMemoryMapper->lastAddressWrittenTo == 0xFF48 || pMemoryMapper->lastAddressWrittenTo == 0xFF49 )
+        {
+            const uint8_t paletteOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xFF48 ) * 4;
+            extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
+        }
+
+        if( isInCartridgeRomAddressRange( pMemoryMapper->lastAddressWrittenTo ) )
+        {
+            GBCartridge* pCartridge = pEmulatorInstance->pCartridge;
+            const uint8_t ramEnabled = pCartridge->ramEnabled;
+
+            handleCartridgeRamWrite( pCartridge, pMemoryMapper );
+            handleCartridgeRomWrite( pCartridge, pMemoryMapper );
+
+            pEmulatorInstance->flags.ramAccessed = ( ramEnabled == 1 && ramEnabled != pCartridge->ramEnabled );
+        }
+
+        if( isInExternalRamRange( pMemoryMapper->lastAddressWrittenTo ) && pEmulatorInstance->pCartridge->ramEnabled )
+        {
+            //FK: mirror writes to ram area to emulator ram memory
+            const uint16_t baseAddressOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xA000 );
+            RuntimeAssert( baseAddressOffset < gbRamBankSizeInBytes );
+
+            pEmulatorInstance->pCartridge->pRamBaseAddress[ baseAddressOffset ] = pMemoryMapper->lastValueWritten;
+            pEmulatorInstance->flags.ramAccessed = 1;
+        }
     }
-
-    //FK: LCD Monochrome palette - Background
-    if( pMemoryMapper->lastAddressWrittenTo == 0xFF47 )
-    {
-        extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, pMemoryMapper->lastValueWritten );
-    }
-
-    //FK: LCD Monochrome palette - Object
-    if( pMemoryMapper->lastAddressWrittenTo == 0xFF48 || pMemoryMapper->lastAddressWrittenTo == 0xFF49 )
-    {
-        const uint8_t paletteOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xFF48 ) * 4;
-        extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
-    }
-
-    if( isInCartridgeRomAddressRange( pMemoryMapper->lastAddressWrittenTo ) )
-    {
-        handleCartridgeRamWrite( pEmulatorInstance->pCartridge, pMemoryMapper );
-        handleCartridgeRomWrite( pEmulatorInstance->pCartridge, pMemoryMapper );
-    }
-
-    //FK: Only keep these values alive for one instruction tick
-    pMemoryMapper->lastAddressWrittenTo = 0x0;
-    pMemoryMapper->lastValueWritten     = 0x0;
-
-    pMemoryMapper->lcdStatus    = *pPpuState->lcdRegisters.pStatus;
-    pMemoryMapper->lcdEnabled   = pPpuState->pLcdControl->enable;
-    pMemoryMapper->dmaActive    = pCpuState->flags.dma;
+    
+    pMemoryMapper->memoryAccess         = GBMemoryAccess_None;
+    pMemoryMapper->lcdStatus            = *pPpuState->lcdRegisters.pStatus;
+    pMemoryMapper->lcdEnabled           = pPpuState->pLcdControl->enable;
+    pMemoryMapper->dmaActive            = pCpuState->flags.dma;
 
     return cycleCost;
 }
