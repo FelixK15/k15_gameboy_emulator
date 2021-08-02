@@ -11,21 +11,78 @@
             "program": "k15_win32_gb_emulator_debug.exe",
             
             //#### TESTS
-            //"args": [ "-r", "testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],           //FAIL
-            //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                        //PASS
-            //"args": [ "-r", "testroms/acceptance/call_cc_timing.gb"],                    //PASS
-            //"args": [ "-r", "cpu_instrs.gb"],                                           //PASS
-            //"args": [ "-r", "halt_bug.gb"],                                             //MISSING RAM SUPPORT
-            //"args": [ "-r", "gejmboj.gb"],                                              //FAIL
-            //"args": [ "-r", "pocket.gb"],                                               //FAIL
-            //"args": [ "-r", "Dawn_fixed.gb"],                                           //PASS
-            //"args": [ "-r", "interrupt_time.gb"],                                       //MISSING RAM SUPPORT
-            //"args": [ "-r", "instr_timing.gb"],                                         //PASS
+            //### MOONEYE
+            //## PPU ACCEPTANCE
+            //"args": [ "-r", "testroms/acceptance/ppu/hblank_ly_scx_timing-GS.gb"],            //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/intr_1_2_timing-GS.gb"],                 //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_0_timing.gb"],                    //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_mode0_timing.gb"],                //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_mode0_timing_sprites.gb"],        //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_mode3_timing.gb"],                //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_oam_ok_timing.gb"],               //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/ilcdon_timing-GS.gb"],                   //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/lcdon_write_timing-GS.gb"],              //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/stat_irq_blocking.gb"],                  //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/stat_lyc_onoff.gb"],                     //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],                //FAIL
+            //"args": [ "-r", "testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],                //FAIL
+
+            //## SERIAL ACCEPTANCE
+            //"args": [ "-r", "testroms/acceptance/serial/boot_sclk_align-dmgABCmgb.gb"],       //FAIL
+            
+            //## BITS ACCEPTANCE
+            //"args": [ "-r", "testroms/acceptance/bits/mem_oam.gb"],                           //PASS
+            //"args": [ "-r", "testroms/acceptance/bits/reg_f.gb"],                             //PASS
+            //"args": [ "-r", "testroms/acceptance/bits/unused_hwio-GS.gb"],                    //FAIL
+            
+            //## INSTR ACCEPTANCE
+            //"args": [ "-r", "testroms/acceptance/instr/daa.gb"],                              //FAIL
+
+            //## TIMER ACCEPTANCE
+            //"args": [ "-r", "testroms/acceptance/timer/div_write.gb"],                        //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/rapid_toggle.gb"],                     //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tim00.gb"],                            //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tim00_div_trigger.gb"],                //PASS
+            //"args": [ "-r", "testroms/acceptance/timer/tim01.gb"],                            //PASS
+            //"args": [ "-r", "testroms/acceptance/timer/tim01_div_trigger.gb"],                //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tim10.gb"],                            //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tim10_div_trigger.gb"],                //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tim11.gb"],                            //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tim11_div_trigger.gb"],                //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tima_reload.gb"],                      //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tima_write_reloading.gb"],             //FAIL
+            //"args": [ "-r", "testroms/acceptance/timer/tma_write_reloading.gb"],              //FAIL
+
+            //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                             //FAIL
+            //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                             //FAIL
+            //"args": [ "-r", "testroms/acceptance/call_cc_timing.gb"],                         //FAIL
+            //"args": [ "-r", "testroms/emulator-only/mbc1/bits_bank1.gb" ],                    //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/bits_bank2.gb" ],                    //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/bits_mode.gb" ],                     //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/bits_ramg.gb" ],                     //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_1Mb.gb" ],                       //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_2Mb.gb" ],                       //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_4Mb.gb" ],                       //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_8Mb.gb" ],                       //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_16Mb.gb" ],                      //PASS
+            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_512kb.gb" ],                     //PASS
+
+            //### BLARGGS
+            //"args": [ "-r", "testroms/blarggs/cpu_instrs.gb"],                                //PASS
+            //"args": [ "-r", "testroms/blarggs/halt_bug.gb"],                                  //FAIL
+            //"args": [ "-r", "testroms/blarggs/interrupt_time.gb"],                            //FAIL
+            //"args": [ "-r", "testroms/blarggs/instr_timing.gb"],                              //PASS
+            //"args": [ "-r", "testroms/blarggs/mem_timing.gb"],                                //FAIL
+
+            //### DEMOS
+            //"args": [ "-r", "roms/gejmboj.gb"],                                               //FAIL
+            //"args": [ "-r", "roms/pocket.gb"],                                                //FAIL
+            //"args": [ "-r", "roms/Dawn_fixed.gb"],                                            //PASS
 
             //####  GAMES
             //"args": [ "-r", "roms/Prehistorik Man (USA, Europe).gb"],                        //Hang after Intro
-            //"args": [ "-r", "roms/Alleyway (World).gb"],                                     //Serial interrupt issue
-            //"args": [ "-r", "roms/Baseball (World).gb"],                                     //Serial interrupt issue
+            //"args": [ "-r", "roms/Alleyway (World).gb"],                                     //Works
+            //"args": [ "-r", "roms/Baseball (World).gb"],                                     //Works
             //"args": [ "-r", "roms/Super Mario Land (World).gb" ],                            //Works
             //"args": [ "-r", "roms/Mega Man - Dr. Wily's Revenge (USA).gb" ],                 //Works, Sprite flickering (8x16 sprites)
             //"args": [ "-r", "roms/Bomb Jack (Europe).gb" ],                                  //Works
@@ -33,6 +90,7 @@
             //"args": [ "-r", "roms/BattleCity (Japan).gb" ],                                  //Works
             //"args": [ "-r", "roms/Alfred Chicken (Europe).gb" ],                             //Works
             //"args": [ "-r", "roms/Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb" ],   //Works
+            //"args": [ "-r", "roms/Street Fighter II (USA) (SGB Enhanced).gb" ],              //Graphic Corruption, no input
             
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
