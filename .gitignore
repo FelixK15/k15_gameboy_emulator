@@ -7,7 +7,8 @@
 *.gbc
 *.sav
 *.sn1
-*.k15_gb_state.bin
+*.k15_gb_state
+*.k15_gb_ram
 *.suo
 .vscode
 bugs.plan.txt
