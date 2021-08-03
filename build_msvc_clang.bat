@@ -2,13 +2,13 @@
 
 set BUILD_CONFIG=%1
 if [%1]==[] (
-	echo Missing argument, assuming debug build
-	set BUILD_CONFIG=debug
+	echo Missing argument, assuming release build
+	set BUILD_CONFIG=release
 )
 
 if not "%BUILD_CONFIG%"=="debug" if not "%BUILD_CONFIG%"=="release" (
-	echo Wrong build config "%BUILD_CONFIG%", assuming debug build
-	set BUILD_CONFIG="debug"
+	echo Wrong build config "%BUILD_CONFIG%", assuming release build
+	set BUILD_CONFIG="release"
 )
 
 setlocal enableextensions enabledelayedexpansion
