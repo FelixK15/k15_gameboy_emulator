@@ -33,10 +33,10 @@
             //## BITS ACCEPTANCE
             //"args": [ "-r", "testroms/acceptance/bits/mem_oam.gb"],                           //PASS
             //"args": [ "-r", "testroms/acceptance/bits/reg_f.gb"],                             //PASS
-            //"args": [ "-r", "testroms/acceptance/bits/unused_hwio-GS.gb"],                    //FAIL
+            "args": [ "-r", "testroms/acceptance/bits/unused_hwio-GS.gb"],                    //FAIL
             
             //## INSTR ACCEPTANCE
-            //"args": [ "-r", "testroms/acceptance/instr/daa.gb"],                              //FAIL
+            //"args": [ "-r", "testroms/acceptance/instr/daa.gb"],                              //PASS
 
             //## TIMER ACCEPTANCE
             //"args": [ "-r", "testroms/acceptance/timer/div_write.gb"],                        //FAIL
@@ -53,7 +53,6 @@
             //"args": [ "-r", "testroms/acceptance/timer/tima_write_reloading.gb"],             //FAIL
             //"args": [ "-r", "testroms/acceptance/timer/tma_write_reloading.gb"],              //FAIL
 
-            //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                             //FAIL
             //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                             //FAIL
             //"args": [ "-r", "testroms/acceptance/call_cc_timing.gb"],                         //FAIL
 
@@ -92,18 +91,22 @@
             //"args": [ "-r", "roms/Dawn_fixed.gb"],                                            //PASS
 
             //####  GAMES
-            //"args": [ "-r", "roms/Prehistorik Man (USA, Europe).gb"],                        //Hang after Intro
-            //"args": [ "-r", "roms/Alleyway (World).gb"],                                     //Works
-            //"args": [ "-r", "roms/Baseball (World).gb"],                                     //Works
-            //"args": [ "-r", "roms/Super Mario Land (World).gb" ],                            //Works
-            //"args": [ "-r", "roms/Mega Man - Dr. Wily's Revenge (USA).gb" ],                 //Works, Sprite flickering (8x16 sprites)
-            //"args": [ "-r", "roms/Bomb Jack (Europe).gb" ],                                  //Works
-            //"args": [ "-r", "roms/Tetris (Japan) (En).gb" ],                                 //Works
-            //"args": [ "-r", "roms/BattleCity (Japan).gb" ],                                  //Works
-            //"args": [ "-r", "roms/Alfred Chicken (Europe).gb" ],                             //Works
-            //"args": [ "-r", "roms/Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb" ],   //Works
-            //"args": [ "-r", "roms/Street Fighter II (USA) (SGB Enhanced).gb" ],              //Graphic Corruption, no input
-            //"args": [ "-r", "roms/Pokemon - Blaue Edition (Germany) (SGB Enhanced).gb" ],    //Works but some graphic glitches
+            //"args": [ "-r", "roms/Prehistorik Man (USA, Europe).gb"],                         //Hang after Intro
+            //"args": [ "-r", "roms/Alleyway (World).gb"],                                      //Works
+            //"args": [ "-r", "roms/Baseball (World).gb"],                                      //Works
+            //"args": [ "-r", "roms/Super Mario Land (World).gb" ],                             //Works
+            //"args": [ "-r", "roms/Mega Man - Dr. Wily's Revenge (USA).gb" ],                  //Works, Sprite flickering (8x16 sprites)
+            //"args": [ "-r", "roms/Bomb Jack (Europe).gb" ],                                   //Works
+            //"args": [ "-r", "roms/Tetris (Japan) (En).gb" ],                                  //Works
+            //"args": [ "-r", "roms/BattleCity (Japan).gb" ],                                   //Works
+            //"args": [ "-r", "roms/Alfred Chicken (Europe).gb" ],                              //Works
+            //"args": [ "-r", "roms/Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb" ],    //Works
+            //"args": [ "-r", "roms/Street Fighter II (USA) (SGB Enhanced).gb" ],               //Graphic Corruption, no input
+            //"args": [ "-r", "roms/Pokemon - Blaue Edition (Germany) (SGB Enhanced).gb" ],     //Works but some graphic glitches
+            //"args": [ "-r", "roms/Asterix (Europe) (En,Fr,De,Es,It).gb" ],                    //Works
+            //"args": [ "-r", "roms/Castlevania - The Adventure (Europe).gb" ],                 //Works, 16x8 Sprite issue
+            //"args": [ "-r", "roms/Donkey Kong Land (USA, Europe) (SGB Enhanced).gb" ],        //Works but weird palette
+            //"args": [ "-r", "roms/Donkey Kong Land III (USA, Europe) (SGB Enhanced).gb" ],    //Works but weird palette
             
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
