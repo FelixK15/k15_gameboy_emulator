@@ -5,26 +5,25 @@ This project tries to emulate the Nintendo GameBoy and Nintendo GameBoy Color ga
 that is natively not able to do so.
 
 ![image](https://user-images.githubusercontent.com/7531672/127722959-08906958-a2d4-4002-ab79-d5f5692cdc5c.png)
-![image](https://user-images.githubusercontent.com/7531672/127790199-8eb96c9b-6b92-46f9-b4e3-203d071b33b5.png)
+![image](https://user-images.githubusercontent.com/7531672/128100368-f75af3f2-ef31-401f-b329-b24052612a08.png)
 ![image](https://user-images.githubusercontent.com/7531672/127790229-6ecf85f2-b8c5-4b1b-b496-d01e370be5a8.png)
 ![image](https://user-images.githubusercontent.com/7531672/127790240-f8dc9de6-71e9-449d-bbf2-f958d01d918e.png)
+![image](https://user-images.githubusercontent.com/7531672/128100405-4dfe06cc-08b5-436b-9d18-e0119b732418.png)
 
 ## How do I build this software locally?
 
 Currently the codebase can only be build on a Windows machine with Microsoft Visual Studio installed.
-If these requirements are met, simply run the `build.bat` - This should spawn a `cl.exe` instance which will compile
-the project and output a `k15_win32_gb_emulator.exe`
+If these requirements are met, simply run the `build_msvc_cl.bat` or `build_msvc_clang` - This should spawn a `cl.exe` or `clang.exe` instance which will compile
+the project and output the executible. In case you want to build a debug version, pass the argument `debug` to the build scripts.
 
 ## How do I navigate the codebase?
 
-The win32 entry point and interface is located in the `k15_win32_gb_emulator.cpp` file.
-All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h` with the main entry point being `runGBEmulatorInstance()`.
+The win32 entry point `WinMain()` and interface is located in the `k15_win32_gb_emulator.cpp` file.
+All Nintendo GameBoy hardware emulation code can be found in `k15_gb_emulator.h` with the main entry point being `runGBEmulatorForCycles()`.
 
 ## Can I run this emulator locally?
 
 Yes, prebuild release can be found [here](https://github.com/FelixK15/k15_gameboy_emulator/releases)
-Alternatively, the codebase can be build using the `build_msvc_cl.bat` or `build_msvc_clang.bat` scripts (Visual Studio installation required)
-
 Input is supported via keyboard and xinput gamepads.
 
 Input on keyboard:
@@ -43,15 +42,15 @@ input on xinput pad:
 
 Inside `k15_win32_gb_emulator.cpp` you can find the Win32 platform layer for orientation.
 Basically, all you have to do is create an emulator instance by first providing the API with a block of memory.
-The required memory size can be calculated by calling `calculateGBEmulatorInstanceMemoryRequirementsInBytes()`.
+The required memory size can be calculated by calling `calculateGBEmulatorMemoryRequirementsInBytes()`.
 
 An emulator instance can be created by calling `createGBEmulatorInstance()` (this function will take the aforemention memory block).
 Each emulator instance is independent from one another (goal would be link cable multiplayer using multiple instances in a single process)
 
-After an emulator instance could be created, load a game rom using `loadGBEmulatorInstanceRom()` (this rom data should be provided as a memory blob
+After an emulator instance could be created, load a game rom using `loadGBEmulatorRom()` (this rom data should be provided as a memory blob
 either by mapping the rom file or by copying the rom file content to a memory buffer).
 
-Now, call `runGBEmulatorForCycles()` each frame and check with `hasGBEmulatorHitVBlank()` if the GameBoy frame has finished. By calling `getGBEmulatorFrameBuffer()` you can get a pointer to the framebuffer data (attention: the pixel format is still in gameboy format - 2bpp. To convert to RGB8 call `convertGBFrameBufferToRGB8Buffer()`).
+Now, call `runGBEmulatorForCycles()` each frame and check the return value for the flag `K15_GB_VBLANK_EVENT_FLAG` (indicating, that the GameBoy frame has finished). By calling `getGBEmulatorFrameBuffer()` you can get a pointer to the framebuffer data (attention: the pixel format is still in gameboy format - 2bpp. To convert to RGB8 call `convertGBFrameBufferToRGB8Buffer()`).
 
 To set the joystick state of the emulator instance, call `setGBEmulatorJoypadState()` (this function is thread-safe so that input code can 
 high frequently poll asynchronously for smaller input lag). 
