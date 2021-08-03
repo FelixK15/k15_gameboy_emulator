@@ -476,10 +476,14 @@ void updateGameboyFrameVertexBuffer( Win32ApplicationContext* pContext )
 
 void pushUserMessage( Win32UserMessage* pUserMessage, const char* pText )
 {
+	const size_t textLength = strlen( pText );
+	RuntimeAssert( textLength < 18 );
+
 	//FK: It's save to store the pointer since puserUserMessage is only being called with statically allocated strings
 	pUserMessage->pText 					= pText;
-	pUserMessage->textLength				= ( uint32_t )strlen( pText );
+	pUserMessage->textLength				= ( uint8_t )textLength;
 	pUserMessage->timeToLiveInMilliseconds	= 1000000u;
+
 }
 
 void allocateDebugConsole()
@@ -626,7 +630,7 @@ void loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	Win32FileMapping stateFileMapping;
 	if( mapFileForReading( &stateFileMapping, pStateFileName ) == 0 )
 	{
-		pushUserMessage( pUserMessage, "Can't map state file" );
+		pushUserMessage( pUserMessage, "Can't open state" );
 		return;
 	}
 
@@ -638,15 +642,15 @@ void loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 			break;
 
 		case K15_GB_STATE_LOAD_FAILED_INCOMPATIBLE_DATA:
-			pushUserMessage( pUserMessage, "Incompatible state file" );
+			pushUserMessage( pUserMessage, "Not a state file" );
 			break;
 		
 		case K15_GB_STATE_LOAD_FAILED_OLD_VERSION:
-			pushUserMessage( pUserMessage, "Old state file version" );
+			pushUserMessage( pUserMessage, "Old state version" );
 			break;
 
 		case K15_GB_STATE_LOAD_FAILED_WRONG_ROM:
-			pushUserMessage( pUserMessage, "State for different rom" );
+			pushUserMessage( pUserMessage, "State wrong rom" );
 			break;
 	}
 
@@ -660,7 +664,7 @@ void saveStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	Win32FileMapping stateFileMapping;
 	if( mapFileForWriting( &stateFileMapping, pStateFileName, stateSizeInBytes ) == 0 )
 	{
-		pushUserMessage( pUserMessage, "Can't map state file" );
+		pushUserMessage( pUserMessage, "Can't open state" );
 		return;
 	}
 
@@ -756,7 +760,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 
 	if( !isValidGBRomData( pEmulatorContext->romMapping.pFileBaseAddress ) )
 	{
-		pushUserMessage( &pContext->userMessage, "Rom file not valid" );
+		pushUserMessage( &pContext->userMessage, "Rom file invalid" );
 		unmapFileMapping( &pEmulatorContext->romMapping );
 		return;
 	}
@@ -1905,7 +1909,14 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 		if( emulatorEventMask & K15_GB_VBLANK_EVENT_FLAG )
 		{
 			const uint8_t* pGameBoyNativeFrameBuffer = getGBEmulatorFrameBuffer( pEmulatorContext->pEmulatorInstance );
-			uploadGBFrameBufferWithUserMessage( pContext->pDeviceContext, &pContext->userMessage, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
+			if( pContext->showUserMessage )
+			{
+				uploadGBFrameBufferWithUserMessage( pContext->pDeviceContext, &pContext->userMessage, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
+			}
+			else
+			{
+				uploadGBFrameBufferWithoutUserMessage( pContext->pDeviceContext, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
+			}
 		}
 
 		drawGBFrameBuffer( pContext->pDeviceContext );
@@ -1974,7 +1985,15 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 		if( emulatorEventMask & K15_GB_VBLANK_EVENT_FLAG )
 		{
 			const uint8_t* pGameBoyNativeFrameBuffer = getGBEmulatorFrameBuffer( pEmulatorContext->pEmulatorInstance );
-			uploadGBFrameBufferWithUserMessage( pContext->pDeviceContext, &pContext->userMessage, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer);
+
+			if( pContext->showUserMessage )
+			{
+				uploadGBFrameBufferWithUserMessage( pContext->pDeviceContext, &pContext->userMessage, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
+			}
+			else
+			{
+				uploadGBFrameBufferWithoutUserMessage( pContext->pDeviceContext, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
+			}
 		}
 
 		drawGBFrameBuffer( pContext->pDeviceContext );
