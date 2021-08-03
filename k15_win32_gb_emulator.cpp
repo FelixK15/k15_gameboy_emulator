@@ -89,41 +89,43 @@ PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 constexpr float pi 		= 3.14159f;
 constexpr float twoPi 	= 6.28318f;
 
-constexpr uint32_t gbMaxRomHistoryCount = 32;
+constexpr uint32_t gbMaxRomHistoryCount 	= 32;
 
-const IID 	IID_IAudioClient			= _uuidof(IAudioClient);
-const IID 	IID_IAudioRenderClient		= _uuidof(IAudioRenderClient);
-const IID 	IID_IMMDeviceEnumerator 	= _uuidof(IMMDeviceEnumerator);
-const CLSID CLSID_MMDeviceEnumerator 	= _uuidof(MMDeviceEnumerator);
+const IID 	IID_IAudioClient				= _uuidof(IAudioClient);
+const IID 	IID_IAudioRenderClient			= _uuidof(IAudioRenderClient);
+const IID 	IID_IMMDeviceEnumerator 		= _uuidof(IMMDeviceEnumerator);
+const CLSID CLSID_MMDeviceEnumerator 		= _uuidof(MMDeviceEnumerator);
 
-constexpr uint32_t gbMenuOpenRom 		= 1;
-constexpr uint32_t gbMenuClose 			= 2;
+constexpr uint32_t gbMenuOpenRom 			= 1;
+constexpr uint32_t gbMenuClose 				= 2;
 
-constexpr uint32_t gbMenuScale0 		= 10;
-constexpr uint32_t gbMenuFullscreen		= 25;
+constexpr uint32_t gbMenuScale0 			= 10;
+constexpr uint32_t gbMenuFullscreen			= 25;
+constexpr uint32_t gbMenuShowUserMessage	= 26;
 
-constexpr uint32_t gbMenuState1 		= 30;
-constexpr uint32_t gbMenuState2 		= 31;
-constexpr uint32_t gbMenuState3 		= 32;
-constexpr uint32_t gbMenuSaveState		= 35;
-constexpr uint32_t gbMenuLoadState		= 36;
-constexpr uint32_t gbMenuSpeed1x		= 37;
-constexpr uint32_t gbMenuSpeed4x		= 38;
-constexpr uint32_t gbMenuSpeed8x		= 39;
-constexpr uint32_t gbMenuSpeed16x		= 40;
+constexpr uint32_t gbMenuState1 			= 30;
+constexpr uint32_t gbMenuState2 			= 31;
+constexpr uint32_t gbMenuState3 			= 32;
+constexpr uint32_t gbMenuSaveState			= 35;
+constexpr uint32_t gbMenuLoadState			= 36;
+constexpr uint32_t gbMenuSpeed1x			= 37;
+constexpr uint32_t gbMenuSpeed4x			= 38;
+constexpr uint32_t gbMenuSpeed8x			= 39;
+constexpr uint32_t gbMenuSpeed16x			= 40;
 
-constexpr uint32_t gbMenuResetEmulator 	= 50;
+constexpr uint32_t gbMenuResetEmulator 		= 50;
 
 const char* pSettingsFormatting = R"(
 stateSlot=%hhu
 scaleFactor=%hhu
 windowPosX=%d
 windowPosY=%d
-fullscreen=%hhu)";
+fullscreen=%hhu
+userMessage=%hhu)";
 
 const char* pSettingsPath = "k15_gb_emu_settings.ini";
 
-enum InputType
+enum Win32InputType
 {
 	Gamepad,
 	Keyboard
@@ -136,18 +138,12 @@ struct Win32FileMapping
 	HANDLE   pFileHandle			= nullptr;
 };
 
-struct UserMessage
-{
-	char messageBuffer[256];
-	size_t messageBufferLength;
-	LARGE_INTEGER startTime;
-};
-
 struct Win32Settings
 {
 	uint8_t scaleFactor;
 	uint8_t stateSlot;
 	uint8_t	fullscreen;
+	uint8_t showUserMessage;
 	int32_t	windowPosX;
 	int32_t	windowPosY;
 };
@@ -181,6 +177,13 @@ enum class Win32EmulatorKeyboardActionButtonBindings
 	COUNT
 };
 
+struct Win32UserMessage
+{
+	const char* 	pText;
+	uint8_t			textLength;
+	uint32_t 		timeToLiveInMilliseconds;
+};
+
 struct Win32EmulatorContext
 {
 	char				romBaseFileName[MAX_PATH];
@@ -194,14 +197,15 @@ struct Win32EmulatorContext
 	int 				actionButtonKeyboardMappings[ (size_t)Win32EmulatorKeyboardActionButtonBindings::COUNT ];
 	uint32_t			cyclesPerHostFrame 			= gbCyclesPerFrame;
 	uint32_t			cyclesPerHostFrameRest		= 0;
-	InputType 			dominantInputType 			= Gamepad;
+	Win32InputType 		dominantInputType 			= Gamepad;
 	uint8_t 			stateSlot 					= 1u;
 	uint8_t				cyclePerHostFrameFactor		= 1u;
 };
 
 struct Win32ApplicationContext
 {
-	Win32EmulatorContext		emulatorContext;
+	Win32EmulatorContext		emulatorContext									= {};
+	Win32UserMessage			userMessage										= {};
 
 	HINSTANCE					pInstanceHandle									= nullptr;
 	HMONITOR					pMonitorHandle									= nullptr;
@@ -215,9 +219,7 @@ struct Win32ApplicationContext
 	HGLRC						pOpenGLContext									= nullptr;
 	HDC							pDeviceContext									= nullptr;
 	uint8_t* 					pGameboyRGBVideoBuffer 							= nullptr;
-	UserMessage 				userMessages[8] 								= {};
 	char 						gameTitle[16] 									= {};
-	char						romBaseFileName[256]							= {};
 	uint32_t					monitorWidth									= 0u;
 	uint32_t					monitorHeight									= 0u;
 	uint32_t					monitorPosX										= 0u;
@@ -246,11 +248,11 @@ struct Win32ApplicationContext
 	GLuint						gameboyFrameVertexBuffer						= 0u;
 	GLuint						gameboyVertexArray								= 0u;
 
-	uint8_t 					userMessageCount 								= 0u;
 	uint8_t   					leftMouseDown									= 0u;
 	uint8_t						fullscreen										= 0u;
 	uint8_t						vsyncEnabled									= 0u;
 	uint8_t						hasFocus										= 1u;
+	uint8_t						showUserMessage									= 1u;
 };
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
@@ -263,13 +265,48 @@ struct Win32GBEmulatorArguments
 Win32Settings serializeSettings( Win32ApplicationContext* pContext )
 {
 	Win32Settings settings;
-	settings.stateSlot 		= pContext->emulatorContext.stateSlot;
-	settings.scaleFactor 	= pContext->frameBufferScale;
-	settings.windowPosX 	= pContext->windowPosX;
-	settings.windowPosY 	= pContext->windowPosY;
-	settings.fullscreen 	= pContext->fullscreen;
+	settings.stateSlot 			= pContext->emulatorContext.stateSlot;
+	settings.scaleFactor 		= pContext->frameBufferScale;
+	settings.windowPosX 		= pContext->windowPosX;
+	settings.windowPosY 		= pContext->windowPosY;
+	settings.fullscreen 		= pContext->fullscreen;
+	settings.showUserMessage	= pContext->showUserMessage;
 
 	return settings;
+}
+
+void renderUserMessageToRGBFrameBuffer( const Win32UserMessage* pUserMessage, uint8_t* pRGBFrameBuffer )
+{
+	if( pUserMessage->timeToLiveInMilliseconds == 0 )
+	{
+		return;
+	}
+
+    const size_t pixelWidth = pUserMessage->textLength * glyphWidthInPixels;
+    
+    const size_t startX = ( gbHorizontalResolutionInPixels - pixelWidth );
+    const size_t startY = ( gbVerticalResolutionInPixels - glyphHeightInPixels );
+	const char* pText = pUserMessage->pText;
+    for( size_t charIndex = 0; charIndex < pUserMessage->textLength; ++charIndex )
+    {
+        const uint8_t* pFontGlyphPixels = getFontGlyphPixel( pUserMessage->pText[charIndex] );
+        size_t x = startX + charIndex * glyphWidthInPixels;
+        for( size_t y = startY; y < gbVerticalResolutionInPixels; ++y)
+        {
+            const uint8_t* pFontGlyphPixelsRunning = pFontGlyphPixels;
+            const size_t endX = x + glyphWidthInPixels;
+            for( ;x < endX; ++x)
+            {
+                const size_t pixelIndex = ( x + y * gbHorizontalResolutionInPixels ) * 3;
+                //FK: BGR
+                pRGBFrameBuffer[pixelIndex + 2] = *pFontGlyphPixelsRunning++;
+                pRGBFrameBuffer[pixelIndex + 1] = *pFontGlyphPixelsRunning++;
+                pRGBFrameBuffer[pixelIndex + 0] = *pFontGlyphPixelsRunning++;
+            }
+            x = startX + charIndex * glyphWidthInPixels;
+            pFontGlyphPixels -= ( fontPixelDataWidthInPixels * 3 );
+        }
+    }
 }
 
 uint8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
@@ -282,7 +319,9 @@ uint8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
 
 	char settingsBuffer[512] = {};
 	const int32_t charsWritten = sprintf_s( settingsBuffer, sizeof( settingsBuffer ), pSettingsFormatting, 
-		pSettings->stateSlot, pSettings->scaleFactor, pSettings->windowPosX, pSettings->windowPosY, pSettings->fullscreen );
+		pSettings->stateSlot, pSettings->scaleFactor, 
+		pSettings->windowPosX, pSettings->windowPosY, 
+		pSettings->fullscreen, pSettings->showUserMessage );
 
 	DWORD bytesWritten = 0u;
 	const BOOL writeResult = WriteFile( pFileHandle, settingsBuffer, charsWritten, &bytesWritten, nullptr );
@@ -312,7 +351,7 @@ uint8_t loadSettingsFromFile( Win32Settings* pOutSettings, const char* pPath )
 	sscanf_s( settingsBuffer, pSettingsFormatting, 
 		&pOutSettings->stateSlot, &pOutSettings->scaleFactor, 
 		&pOutSettings->windowPosX, &pOutSettings->windowPosY, 
-		&pOutSettings->fullscreen );
+		&pOutSettings->fullscreen, &pOutSettings->showUserMessage );
 
 	return 1;
 }
@@ -435,22 +474,12 @@ void updateGameboyFrameVertexBuffer( Win32ApplicationContext* pContext )
 	glUnmapBuffer( GL_ARRAY_BUFFER );
 }
 
-void pushUserMessage( Win32ApplicationContext* pContext, const char* pFormattedMessage, ... )
+void pushUserMessage( Win32UserMessage* pUserMessage, const char* pText )
 {
-	UserMessage* pUserMessage = &pContext->userMessages[ pContext->userMessageCount++ ];
-	if( pContext->userMessageCount == 8 )
-	{
-		//FK: Order is important here
-		pContext->userMessageCount = 7;
-		memmove( pContext->userMessages, pContext->userMessages + 1, sizeof(UserMessage) * pContext->userMessageCount );
-	}
-
-	va_list argList;
-	va_start( argList, pFormattedMessage );
-	pUserMessage->messageBufferLength = vsnprintf_s( pUserMessage->messageBuffer, sizeof( pUserMessage->messageBuffer ), pFormattedMessage, argList );
-	va_end(argList);
-
-	QueryPerformanceCounter( &pUserMessage->startTime );
+	//FK: It's save to store the pointer since puserUserMessage is only being called with statically allocated strings
+	pUserMessage->pText 					= pText;
+	pUserMessage->textLength				= ( uint32_t )strlen( pText );
+	pUserMessage->timeToLiveInMilliseconds	= 1000000u;
 }
 
 void allocateDebugConsole()
@@ -592,34 +621,53 @@ uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileN
 	return 1;
 }
 
-uint8_t loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateFileName, uint8_t stateSlot )
+void loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateFileName, uint8_t stateSlot, Win32UserMessage* pUserMessage )
 {
 	Win32FileMapping stateFileMapping;
 	if( mapFileForReading( &stateFileMapping, pStateFileName ) == 0 )
 	{
-		return 0;
+		pushUserMessage( pUserMessage, "Can't map state file" );
+		return;
 	}
 
+	const GBStateLoadResult result = loadGBEmulatorState( pEmulatorInstance, stateFileMapping.pFileBaseAddress );
+	switch( result )
+	{
+		case K15_GB_STATE_LOAD_SUCCESS:
+			pushUserMessage( pUserMessage, "State loaded!" );
+			break;
 
-	loadGBEmulatorState( pEmulatorInstance, stateFileMapping.pFileBaseAddress );
+		case K15_GB_STATE_LOAD_FAILED_INCOMPATIBLE_DATA:
+			pushUserMessage( pUserMessage, "Incompatible state file" );
+			break;
+		
+		case K15_GB_STATE_LOAD_FAILED_OLD_VERSION:
+			pushUserMessage( pUserMessage, "Old state file version" );
+			break;
+
+		case K15_GB_STATE_LOAD_FAILED_WRONG_ROM:
+			pushUserMessage( pUserMessage, "State for different rom" );
+			break;
+	}
+
 	unmapFileMapping( &stateFileMapping );
-	return 1;
 }
 
-uint8_t saveStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateFileName, uint8_t stateSlot )
+void saveStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateFileName, uint8_t stateSlot, Win32UserMessage* pUserMessage )
 {
 	const size_t stateSizeInBytes = calculateGBEmulatorStateSizeInBytes( pEmulatorInstance );
 
 	Win32FileMapping stateFileMapping;
 	if( mapFileForWriting( &stateFileMapping, pStateFileName, stateSizeInBytes ) == 0 )
 	{
-		return 0;
+		pushUserMessage( pUserMessage, "Can't map state file" );
+		return;
 	}
 
 	storeGBEmulatorState( pEmulatorInstance, stateFileMapping.pFileBaseAddress, stateSizeInBytes );
 	unmapFileMapping( &stateFileMapping );
 
-	return 1;
+	pushUserMessage( pUserMessage, "State saved!" );
 }
 
 void updateMonitorSettings( Win32ApplicationContext* pContext )
@@ -702,13 +750,13 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 
 	if( mapFileForReading( &pEmulatorContext->romMapping, pFixedRomPath ) == 0 )
 	{
-		//pushUserMessage( pContext, "Couldn't open rom file '%s'", pRomPath );
+		pushUserMessage( &pContext->userMessage, "Can't map rom" );
 		return;
 	}
 
 	if( !isValidGBRomData( pEmulatorContext->romMapping.pFileBaseAddress ) )
 	{
-		//pushUserMessage( pContext, "Rom file '%s' is not a valid rom file.", pRomPath );
+		pushUserMessage( &pContext->userMessage, "Rom file not valid" );
 		unmapFileMapping( &pEmulatorContext->romMapping );
 		return;
 	}
@@ -726,7 +774,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 
 		if( mapFileForWriting( &pEmulatorContext->ramMapping, ramFileName, ramSizeInBytes ) == 0 )
 		{
-			//pushUserMessage( pContext, "Couldn't open ram file '%s'", ramFileName );
+			pushUserMessage( &pContext->userMessage, "Can't map ram" );
 			unmapFileMapping( &pEmulatorContext->romMapping );
 			return;
 		}
@@ -735,6 +783,8 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	}
 
 	strcpy_s( pEmulatorContext->romBaseFileName, sizeof( pEmulatorContext->romBaseFileName ), romBaseFileName );
+
+	pushUserMessage( &pContext->userMessage, "Rom loaded!");
 
 	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
 	enableRomMenuItems( pContext );
@@ -761,7 +811,6 @@ void openRomFile( Win32ApplicationContext* pContext )
 	
 	loadRomFile( pContext, romPath );
 }
-
 
 void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 {
@@ -826,6 +875,33 @@ void disableFullscreen( Win32ApplicationContext* pContext )
 	pContext->fullscreen = 0;
 }
 
+void hideUserMessage( Win32ApplicationContext* pContext )
+{
+	pContext->showUserMessage = 0;
+	pContext->userMessage.timeToLiveInMilliseconds = 0;
+
+	CheckMenuItem( pContext->pViewMenuItems, gbMenuShowUserMessage, MF_UNCHECKED );
+}
+
+void showUserMessage( Win32ApplicationContext* pContext )
+{
+	pContext->showUserMessage = 1;
+	CheckMenuItem( pContext->pViewMenuItems, gbMenuShowUserMessage, MF_CHECKED );
+}
+
+void toggleShowUserMessage( Win32ApplicationContext* pContext )
+{
+	if( pContext->showUserMessage )
+	{
+		hideUserMessage( pContext );
+	}
+	else
+	{
+		showUserMessage( pContext );
+		pushUserMessage( &pContext->userMessage, "User message!");
+	}
+}
+
 void toggleFullscreen( Win32ApplicationContext* pContext )
 {
 	if( pContext->fullscreen )
@@ -845,38 +921,32 @@ void handleWindowMinMaxInfo( LPARAM lparam )
 	pMinMaxInfo->ptMinTrackSize.y = gbVerticalResolutionInPixels;
 }
 
-void loadEmulatorState( Win32EmulatorContext* pContext )
+void loadEmulatorState( Win32ApplicationContext* pContext )
 {
-	if( !isGBEmulatorRomMapped( pContext->pEmulatorInstance ) )
+	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
+	if( !isGBEmulatorRomMapped( pEmulatorContext->pEmulatorInstance ) )
 	{
-		//FK: TODO error reporting
+		pushUserMessage( &pContext->userMessage, "Failed to map state file." );
 		return;
 	}
 
 	char stateFileName[MAX_PATH];
-	generateStateFileName( stateFileName, sizeof( stateFileName ), pContext->stateSlot, pContext->romBaseFileName );
-
-	if( !loadStateInSlot( pContext->pEmulatorInstance, stateFileName, pContext->stateSlot ) )
-	{
-		//FK: TODO: error reporting
-		return;
-	}
+	generateStateFileName( stateFileName, sizeof( stateFileName ), pEmulatorContext->stateSlot, pEmulatorContext->romBaseFileName );
+	loadStateInSlot( pEmulatorContext->pEmulatorInstance, stateFileName, pEmulatorContext->stateSlot, &pContext->userMessage );
 }
 
-void saveEmulatorState( Win32EmulatorContext* pContext )
+void saveEmulatorState( Win32ApplicationContext* pContext )
 {
-	if( !isGBEmulatorRomMapped( pContext->pEmulatorInstance ) )
+	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
+	if( !isGBEmulatorRomMapped( pEmulatorContext->pEmulatorInstance ) )
 	{
+		pushUserMessage( &pContext->userMessage, "Failed to map state file." );
 		return;
 	}
 
 	char stateFileName[MAX_PATH];
-	generateStateFileName( stateFileName, sizeof( stateFileName ), pContext->stateSlot, pContext->romBaseFileName );
-
-	if( !saveStateInSlot( pContext->pEmulatorInstance, stateFileName, pContext->stateSlot ) )
-	{
-		//FK: TODO: error reporting
-	}
+	generateStateFileName( stateFileName, sizeof( stateFileName ), pEmulatorContext->stateSlot, pEmulatorContext->romBaseFileName );
+	saveStateInSlot( pEmulatorContext->pEmulatorInstance, stateFileName, pEmulatorContext->stateSlot, &pContext->userMessage );
 }
 
 void setEmulatorSpeedFactor( Win32ApplicationContext* pContext, uint8_t speedFactor )
@@ -886,7 +956,7 @@ void setEmulatorSpeedFactor( Win32ApplicationContext* pContext, uint8_t speedFac
 
 	CheckMenuItem( pContext->pStateMenuItems,  gbMenuSpeed1x, MF_UNCHECKED );
 	CheckMenuItem( pContext->pStateMenuItems,  gbMenuSpeed4x, MF_UNCHECKED );
-	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed8x, MF_UNCHECKED );
+	CheckMenuItem( pContext->pStateMenuItems,  gbMenuSpeed8x, MF_UNCHECKED );
 	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed16x, MF_UNCHECKED );
 
 	if( speedFactor == 1 )
@@ -897,11 +967,11 @@ void setEmulatorSpeedFactor( Win32ApplicationContext* pContext, uint8_t speedFac
 	{
 		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed4x, MF_CHECKED );
 	}
-	else if( speedFactor == 16 )
+	else if( speedFactor == 8 )
 	{
 		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed8x, MF_CHECKED );
 	}
-	else if( speedFactor == 32 )
+	else if( speedFactor == 16 )
 	{
 		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed8x, MF_CHECKED );
 	}
@@ -924,6 +994,10 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 			toggleFullscreen( pContext );
 			break;
 
+		case gbMenuShowUserMessage:
+			toggleShowUserMessage( pContext );
+			break;
+
 		case gbMenuState1:
 			changeStateSlot( pContext, 1 );
 			break;
@@ -937,11 +1011,11 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 			break;
 
 		case gbMenuLoadState:
-			loadEmulatorState( &pContext->emulatorContext );
+			loadEmulatorState( pContext );
 			break;
 
 		case gbMenuSaveState:
-			saveEmulatorState( &pContext->emulatorContext );
+			saveEmulatorState( pContext );
 			break;
 
 		case gbMenuResetEmulator:
@@ -1012,7 +1086,7 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 	if( strcmp( pFileExtension, ".gb") != 0 &&
 		strcmp( pFileExtension, ".gbc" ) != 0 )
 	{
-		pushUserMessage( pContext, "Not a valid rom file." );
+		pushUserMessage( &pContext->userMessage, "Not a valid rom file." );
 		return;	
 	}
 
@@ -1288,8 +1362,11 @@ uint8_t setupMenu( Win32ApplicationContext* pContext )
 	}
 
 	//FK: View menu
-	result |= AppendMenuA( pContext->pViewMenuItems , MF_POPUP, (UINT_PTR)pContext->pScaleMenuItems, "&Scale" );
-	result |= AppendMenuA( pContext->pViewMenuItems , MF_STRING, gbMenuFullscreen, "Fullscreen\tF11");
+	result |= AppendMenuA( pContext->pViewMenuItems , MF_POPUP, 				(UINT_PTR)pContext->pScaleMenuItems, 	"&Scale" );
+	result |= AppendMenuA( pContext->pViewMenuItems , MF_STRING, 				gbMenuFullscreen, 						"Fullscreen\tF11" );
+	result |= AppendMenuA( pContext->pViewMenuItems , MF_SEPARATOR, 			0, 										nullptr );
+	result |= AppendMenuA( pContext->pViewMenuItems , MF_STRING | MF_CHECKED, 	gbMenuShowUserMessage,					"Show User Message" );
+
 
 	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pFileMenuItems,  "&File" );
 	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pViewMenuItems,  "&View" );
@@ -1493,7 +1570,7 @@ void setupOpenGL( Win32ApplicationContext* pContext )
 	generateOpenGLTextures( pContext );
 }
 
-uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const InputType dominantInputType )
+uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32InputType dominantInputType )
 {
 	XINPUT_STATE state;
 	const DWORD result = w32XInputGetState(0, &state);
@@ -1503,7 +1580,7 @@ uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const InputTy
 	}
 
 	const WORD gamepadButtons = state.Gamepad.wButtons;
-	if( dominantInputType != InputType::Gamepad && gamepadButtons == 0)
+	if( dominantInputType != Win32InputType::Gamepad && gamepadButtons == 0)
 	{
 		return 0;
 	}
@@ -1520,7 +1597,7 @@ uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const InputTy
 	return 1;
 }
 
-uint8_t queryKeyboardInput( GBEmulatorJoypadState* pJoypadState, const int* pDigipadKeyboardMappings, const int* pActionButtonKeyboardMappings, const InputType dominantInputType )
+uint8_t queryKeyboardInput( GBEmulatorJoypadState* pJoypadState, const int* pDigipadKeyboardMappings, const int* pActionButtonKeyboardMappings, const Win32InputType dominantInputType )
 {
 	uint8_t keyboardPressed = 0;
 	GBEmulatorJoypadState joypadState;
@@ -1542,7 +1619,7 @@ uint8_t queryKeyboardInput( GBEmulatorJoypadState* pJoypadState, const int* pDig
 		}
 	}
 
-	if( keyboardPressed == 0 && dominantInputType != InputType::Keyboard )
+	if( keyboardPressed == 0 && dominantInputType != Win32InputType::Keyboard )
 	{
 		return 0;
 	}
@@ -1588,11 +1665,19 @@ uint8_t setupEmulator( Win32EmulatorContext* pContext )
 	return 1;
 }
 
-void uploadGBFrameBuffer( HDC pDeviceContext, uint8_t* pGameBoyRGBVideoBuffer, const uint8_t* pGameBoyNativeFrameBuffer )
+void uploadGBFrameBufferWithoutUserMessage( HDC pDeviceContext, uint8_t* pGameBoyRGBVideoBuffer, const uint8_t* pGameBoyNativeFrameBuffer )
 {
 	convertGBFrameBufferToRGB8Buffer( pGameBoyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
 
-	//FK: GB frame finished, upload gb framebuffer to texture
+	glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, gbHorizontalResolutionInPixels, gbVerticalResolutionInPixels,
+					 GL_RGB, GL_UNSIGNED_BYTE, pGameBoyRGBVideoBuffer );
+}
+
+void uploadGBFrameBufferWithUserMessage( HDC pDeviceContext, const Win32UserMessage* pUserMessage, uint8_t* pGameBoyRGBVideoBuffer, const uint8_t* pGameBoyNativeFrameBuffer )
+{
+	convertGBFrameBufferToRGB8Buffer( pGameBoyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
+	renderUserMessageToRGBFrameBuffer( pUserMessage, pGameBoyRGBVideoBuffer );
+
 	glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, gbHorizontalResolutionInPixels, gbVerticalResolutionInPixels,
 					 GL_RGB, GL_UNSIGNED_BYTE, pGameBoyRGBVideoBuffer );
 }
@@ -1665,14 +1750,14 @@ void queryWin32SystemKeys( Win32ApplicationContext* pContext )
 	if( currentKeyStates.quicksave_state != prevKeyStates.quicksave_state &&
 		currentKeyStates.quicksave_state )
 	{
-		saveEmulatorState( pEmulatorContext );
+		saveEmulatorState( pContext );
 	}
 
 	//FK: QuickLoad
 	if( currentKeyStates.quickload_state != prevKeyStates.quickload_state &&
 		currentKeyStates.quickload_state )
 	{
-		loadEmulatorState( pEmulatorContext );
+		loadEmulatorState( pContext );
 	}
 	
 	//FK: Fullscreen
@@ -1695,12 +1780,12 @@ void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32Emula
 {
 	if( queryControllerInput( pJoypadState, pEmulatorContext->dominantInputType ) )
 	{
-		pEmulatorContext->dominantInputType = InputType::Gamepad;
+		pEmulatorContext->dominantInputType = Win32InputType::Gamepad;
 	}
 
 	if( queryKeyboardInput( pJoypadState, pEmulatorContext->digipadKeyboardMappings, pEmulatorContext->actionButtonKeyboardMappings, pEmulatorContext->dominantInputType ) )
 	{
-		pEmulatorContext->dominantInputType = InputType::Keyboard;
+		pEmulatorContext->dominantInputType = Win32InputType::Keyboard;
 	}
 }
 
@@ -1715,6 +1800,11 @@ void applySettings( const Win32Settings* pSettings, Win32ApplicationContext* pCo
 	if( pSettings->fullscreen )
 	{
 		enableFullscreen( pContext );
+	}
+
+	if( !pSettings->showUserMessage )
+	{
+		hideUserMessage( pContext );
 	}
 }
 
@@ -1755,6 +1845,17 @@ void loadAndVerifySettings( Win32ApplicationContext* pContext )
 	}
 }
 
+void updateUserMessage( Win32UserMessage* pUserMessage, const uint32_t deltaTimeInMicroSeconds )
+{
+	if( pUserMessage->timeToLiveInMilliseconds < deltaTimeInMicroSeconds )
+	{
+		pUserMessage->timeToLiveInMilliseconds = 0;
+		return;
+	}
+
+	pUserMessage->timeToLiveInMilliseconds -= deltaTimeInMicroSeconds;
+}
+
 void runVsyncMainLoop( Win32ApplicationContext* pContext )
 {
 	uint8_t loopRunning = true;
@@ -1780,6 +1881,12 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 			break;
 		}
 
+		if( pContext->showUserMessage && pContext->userMessage.timeToLiveInMilliseconds > 0 )
+		{
+			const uint32_t fixedFrameTimeInMicroseconds = 1000000 / pContext->monitorRefreshRate;
+			updateUserMessage( &pContext->userMessage, fixedFrameTimeInMicroseconds );
+		}
+
 		if( pContext->hasFocus )
 		{
 			queryWin32SystemKeys( pContext );
@@ -1798,7 +1905,7 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 		if( emulatorEventMask & K15_GB_VBLANK_EVENT_FLAG )
 		{
 			const uint8_t* pGameBoyNativeFrameBuffer = getGBEmulatorFrameBuffer( pEmulatorContext->pEmulatorInstance );
-			uploadGBFrameBuffer( pContext->pDeviceContext, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
+			uploadGBFrameBufferWithUserMessage( pContext->pDeviceContext, &pContext->userMessage, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
 		}
 
 		drawGBFrameBuffer( pContext->pDeviceContext );
@@ -1819,6 +1926,9 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 
 	start.QuadPart = 0;
 	end.QuadPart = 0;
+
+	//FK: run with 60hz when vsync is disabled
+	const uint32_t fixedFrameTimeInMicroseconds = 16666u;
 
 	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
 	while (loopRunning)
@@ -1842,6 +1952,12 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 			break;
 		}
 
+		if( pContext->showUserMessage && pContext->userMessage.timeToLiveInMilliseconds > 0 )
+		{
+			const uint32_t fixedFrameTimeInMicroseconds = 1000000 / pContext->monitorRefreshRate;
+			updateUserMessage( &pContext->userMessage, fixedFrameTimeInMicroseconds );
+		}
+
 		if( pContext->hasFocus )
 		{
 			queryWin32SystemKeys( pContext );
@@ -1858,7 +1974,7 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 		if( emulatorEventMask & K15_GB_VBLANK_EVENT_FLAG )
 		{
 			const uint8_t* pGameBoyNativeFrameBuffer = getGBEmulatorFrameBuffer( pEmulatorContext->pEmulatorInstance );
-			uploadGBFrameBuffer( pContext->pDeviceContext, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer);
+			uploadGBFrameBufferWithUserMessage( pContext->pDeviceContext, &pContext->userMessage, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer);
 		}
 
 		drawGBFrameBuffer( pContext->pDeviceContext );
@@ -1866,9 +1982,7 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 
 		QueryPerformanceCounter( &end );
 
-		//FK: run with 60hz when vsync is disabled
-		const uint32_t fixedFrameTimeInMicroseconds = 16666u;
-		const uint32_t frameTimeInMicroseconds		= (uint32_t)( ( ( end.QuadPart - start.QuadPart ) * 1000000u )/freq.QuadPart );
+		const uint32_t frameTimeInMicroseconds = (uint32_t)( ( ( end.QuadPart - start.QuadPart ) * 1000000u )/freq.QuadPart );
 		if( frameTimeInMicroseconds < fixedFrameTimeInMicroseconds )
 		{
 			LARGE_INTEGER sleepTime;

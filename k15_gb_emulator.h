@@ -7,6 +7,7 @@
 #define K15_UNUSED_VAR(x) (void)x
 
 #include "k15_gb_opcodes.h"
+#include "k15_gb_font.h"
 
 //FK: Compiler specific functions
 #ifdef _MSC_VER
@@ -75,6 +76,14 @@ enum
     K15_GB_VBLANK_EVENT_FLAG        = 0x01,
     K15_GB_STATE_SAVED_EVENT_FLAG   = 0x02,
     K15_GB_STATE_LOADED_EVENT_FLAG  = 0x04,
+};
+
+enum GBStateLoadResult
+{
+    K15_GB_STATE_LOAD_SUCCESS = 0,
+    K15_GB_STATE_LOAD_FAILED_OLD_VERSION,
+    K15_GB_STATE_LOAD_FAILED_INCOMPATIBLE_DATA,
+    K15_GB_STATE_LOAD_FAILED_WRONG_ROM
 };
 
 struct GBEmulatorJoypadState
@@ -489,6 +498,19 @@ struct GBEmulatorState
     uint8_t       mappedRamBankNumber;
 };
 
+const uint8_t* getFontGlyphPixel( char glyph )
+{
+    //FK: bitmap font starts with space
+    RuntimeAssert( glyph >= 32 );
+
+    const char glyphIndex = glyph - 32;
+    const uint8_t rowIndex = glyphIndex / glyphRowCount;
+    const uint8_t columnIndex = glyphIndex % glyphRowCount;
+    const uint8_t y = ( fontPixelDataHeightInPixels - 1 ) - ( rowIndex * glyphHeightInPixels );
+    const uint8_t x = columnIndex * glyphWidthInPixels;
+    return fontPixelData + (x + y * fontPixelDataWidthInPixels) * 3;
+}
+
 uint8_t isInVRAMAddressRange( const uint16_t address )
 {
     return address >= 0x8000 && address < 0xA000;
@@ -859,7 +881,7 @@ size_t uncompressMemoryBlockRLE( uint8_t* pDestination, const uint8_t* pSource )
     return compressedMemorySizeInBytes;
 }
 
-bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pStateMemory )
+GBStateLoadResult loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* pStateMemory )
 {
     uint32_t fourCC;
     memcpy( &fourCC, pStateMemory, sizeof( gbStateFourCC ) );
@@ -867,7 +889,7 @@ bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* 
 
     if( fourCC != gbStateFourCC )
     {
-        return false;
+        return K15_GB_STATE_LOAD_FAILED_INCOMPATIBLE_DATA;
     }
 
     const uint16_t stateCartridgeChecksum = *(uint16_t*)pStateMemory;
@@ -878,7 +900,7 @@ bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* 
     const uint16_t cartridgeChecksum = cartridgeHeader.checksumHigher << 8 | cartridgeHeader.checksumLower;
     if( cartridgeChecksum != stateCartridgeChecksum )
     {
-        return false;
+        return K15_GB_STATE_LOAD_FAILED_WRONG_ROM;
     }
 
     const uint8_t stateVersion = *pStateMemory;
@@ -886,7 +908,7 @@ bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* 
 
     if( stateVersion != gbStateVersion )
     {
-        return false;
+        return K15_GB_STATE_LOAD_FAILED_OLD_VERSION;
     }
 
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
@@ -943,7 +965,7 @@ bool loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, const uint8_t* 
 
     const uint8_t* pCompressedMemory = pStateMemory;
     uncompressMemoryBlockRLE( pMemoryMapper->pBaseAddress + 0x8000, pCompressedMemory );
-    return true;
+    return K15_GB_STATE_LOAD_SUCCESS;
 }
 
 uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
