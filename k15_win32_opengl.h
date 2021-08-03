@@ -457,7 +457,7 @@ void compileOpenGLShader(GLuint shader, const char* pShaderSource, uint32_t shad
 
 	char infoLogBuffer[1024];
 	glGetShaderInfoLog( shader, sizeof(infoLogBuffer), nullptr, infoLogBuffer );
-	printf(infoLogBuffer);
+	printf( "%s", infoLogBuffer );
 }
 
 #endif 

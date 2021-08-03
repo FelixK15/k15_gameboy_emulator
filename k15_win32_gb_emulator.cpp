@@ -114,14 +114,14 @@ constexpr uint32_t gbMenuSpeed16x		= 40;
 
 constexpr uint32_t gbMenuResetEmulator 	= 50;
 
-constexpr char* pSettingsFormatting = R"(
+const char* pSettingsFormatting = R"(
 stateSlot=%hhu
 scaleFactor=%hhu
 windowPosX=%d
 windowPosY=%d
 fullscreen=%hhu)";
 
-constexpr char* pSettingsPath = "k15_gb_emu_settings.ini";
+const char* pSettingsPath = "k15_gb_emu_settings.ini";
 
 enum InputType
 {
@@ -455,6 +455,10 @@ void pushUserMessage( Win32ApplicationContext* pContext, const char* pFormattedM
 
 void allocateDebugConsole()
 {
+#ifdef K15_RELEASE_BUILD
+	return;
+#endif
+
 	AllocConsole();
 	AttachConsole(ATTACH_PARENT_PROCESS);
 	freopen("CONOUT$", "w", stdout);
@@ -517,7 +521,7 @@ uint8_t mapFileForReading( Win32FileMapping* pOutFileMapping, const char* pFileN
 	if( pFileHandle== INVALID_HANDLE_VALUE )
 	{
 		const DWORD lastError = GetLastError();
-		printf("Could not open file handle to '%s'. CreateFileA() error = %d\n", pFileName, lastError );
+		printf("Could not open file handle to '%s'. CreateFileA() error = %lu\n", pFileName, lastError );
 		return 0;
 	}
 
@@ -525,7 +529,7 @@ uint8_t mapFileForReading( Win32FileMapping* pOutFileMapping, const char* pFileN
 	if( pFileMappingHandle == INVALID_HANDLE_VALUE )
 	{
 		const DWORD lastError = GetLastError();
-		printf("Could not create file mapping handle for file '%s'. CreateFileMapping() error = %d.\n", pFileName, lastError );
+		printf("Could not create file mapping handle for file '%s'. CreateFileMapping() error = %lu.\n", pFileName, lastError );
 
 		CloseHandle( pFileHandle );
 		return 0;
@@ -535,7 +539,7 @@ uint8_t mapFileForReading( Win32FileMapping* pOutFileMapping, const char* pFileN
 	if( pFileBaseAddress == nullptr )
 	{
 		const DWORD lastError = GetLastError();
-		printf("Could not create map view of file '%s'. MapViewOfFile() error = %d.\n", pFileName, lastError );
+		printf("Could not create map view of file '%s'. MapViewOfFile() error = %lu.\n", pFileName, lastError );
 
 		CloseHandle( pFileHandle );
 		CloseHandle( pFileMappingHandle );
@@ -555,7 +559,7 @@ uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileN
 	if( pFileHandle == INVALID_HANDLE_VALUE )
 	{
 		const DWORD lastError = GetLastError();
-		printf("Could not open file handle to '%s'. CreateFileA() error = %d\n", pFileName, lastError );
+		printf("Could not open file handle to '%s'. CreateFileA() error = %lu\n", pFileName, lastError );
 		return 0;
 	}
 
@@ -564,7 +568,7 @@ uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileN
 	if( pFileMappingHandle == nullptr )
 	{
 		const DWORD lastError = GetLastError();
-		printf("Could not create file mapping handle for file '%s'. CreateFileMapping() error = %d.\n", pFileName, lastError );
+		printf("Could not create file mapping handle for file '%s'. CreateFileMapping() error = %lu.\n", pFileName, lastError );
 
 		CloseHandle( pFileHandle );
 		return 0;
@@ -574,7 +578,7 @@ uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileN
 	if( pFileBaseAddress == nullptr )
 	{
 		const DWORD lastError = GetLastError();
-		printf("Could not create map view of file '%s'. MapViewOfFile() error = %d.\n", pFileName, lastError );
+		printf("Could not create map view of file '%s'. MapViewOfFile() error = %lu.\n", pFileName, lastError );
 
 		CloseHandle( pFileHandle );
 		CloseHandle( pFileMappingHandle );

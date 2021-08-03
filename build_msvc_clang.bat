@@ -24,7 +24,7 @@ if "%BUILD_CONFIG%"=="debug" (
 	set COMPILER_OPTIONS=!COMPILER_OPTIONS! --debug
 ) else (
 	echo Build config = optimized release
-	set COMPILER_OPTIONS=!COMPILER_OPTIONS! -O3
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! -O3 -DK15_RELEASE_BUILD
 )
 
 ::is cl.exe part of PATH?

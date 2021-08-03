@@ -8,15 +8,6 @@
 
 #include "k15_gb_opcodes.h"
 
-#define Kbyte(x) ((x)*1024)
-#define Mbyte(x) (Kbyte(x)*1024)
-
-#define Kbit(x) (Kbyte(x)/8)
-#define Mbit(x) (Mbyte(x)/8)
-
-#define FourCC(a, b, c, d)  ((uint32_t)((a) << 0) | (uint32_t)((b) << 8) | (uint32_t)((c) << 16) | (uint32_t)((d) << 24))
-#define ArrayCount(arr)     (sizeof(arr)/sizeof(arr[0]))
-
 //FK: Compiler specific functions
 #ifdef _MSC_VER
 #   include <intrin.h>
@@ -27,13 +18,26 @@
 #   define DebugBreak
 #endif
 
+#define Kbyte(x) ((x)*1024)
+#define Mbyte(x) (Kbyte(x)*1024)
+
+#define Kbit(x) (Kbyte(x)/8)
+#define Mbit(x) (Mbyte(x)/8)
+
+#define FourCC(a, b, c, d)  ((uint32_t)((a) << 0) | (uint32_t)((b) << 8) | (uint32_t)((c) << 16) | (uint32_t)((d) << 24))
+#define ArrayCount(arr)     (sizeof(arr)/sizeof(arr[0]))
+
 #define IllegalCodePath()       DebugBreak()
-#define RuntimeAssert(x)        if(!(x)) DebugBreak()
 #define CompiletimeAssert(x)    typedef char compile_time_assertion_##_LINE_[(x)?1:-1]
+
+#ifdef K15_RELEASE_BUILD
+    #define RuntimeAssert(x)
+#else
+    #define RuntimeAssert(x)        if(!(x)) DebugBreak()
+#endif
 
 static constexpr uint8_t    gbStateVersion = 5;
 static constexpr uint32_t   gbStateFourCC  = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
-
 
 static constexpr uint8_t    gbNintendoLogo[]                        = { 0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E };
 static constexpr char       gbRamFileExtension[]                    = ".k15_gb_ram";
@@ -3366,8 +3370,12 @@ void handleCartridgeRomWrite( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMa
         case ROM_MBC5_RUMBLE_SRAM_BATT:
             handleMemoryControllerWrite( pCartridge, pMemoryMapper );
             return;
+        
+        default:
+            return;
     }
 
+    IllegalCodePath();
     return;
 }
 
