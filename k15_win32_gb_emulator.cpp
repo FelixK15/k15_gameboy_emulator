@@ -136,6 +136,7 @@ struct Win32FileMapping
 	uint8_t* pFileBaseAddress		= nullptr;
 	HANDLE	 pFileMappingHandle		= nullptr;
 	HANDLE   pFileHandle			= nullptr;
+	uint32_t fileSizeInBytes		= 0u;
 };
 
 struct Win32Settings
@@ -286,10 +287,11 @@ void renderUserMessageToRGBFrameBuffer( const Win32UserMessage* pUserMessage, ui
     
     const size_t startX = ( gbHorizontalResolutionInPixels - pixelWidth );
     const size_t startY = ( gbVerticalResolutionInPixels - glyphHeightInPixels );
+	
 	const char* pText = pUserMessage->pText;
     for( size_t charIndex = 0; charIndex < pUserMessage->textLength; ++charIndex )
     {
-        const uint8_t* pFontGlyphPixels = getFontGlyphPixel( pUserMessage->pText[charIndex] );
+        const uint8_t* pFontGlyphPixels = getFontGlyphPixel( pText[charIndex] );
         size_t x = startX + charIndex * glyphWidthInPixels;
         for( size_t y = startY; y < gbVerticalResolutionInPixels; ++y)
         {
@@ -477,7 +479,7 @@ void updateGameboyFrameVertexBuffer( Win32ApplicationContext* pContext )
 void pushUserMessage( Win32UserMessage* pUserMessage, const char* pText )
 {
 	const size_t textLength = strlen( pText );
-	RuntimeAssert( textLength < 18 );
+	RuntimeAssert( textLength < 17 );
 
 	//FK: It's save to store the pointer since puserUserMessage is only being called with statically allocated strings
 	pUserMessage->pText 					= pText;
@@ -582,6 +584,7 @@ uint8_t mapFileForReading( Win32FileMapping* pOutFileMapping, const char* pFileN
 	pOutFileMapping->pFileHandle 		= pFileHandle;
 	pOutFileMapping->pFileMappingHandle = pFileMappingHandle;
 	pOutFileMapping->pFileBaseAddress	= pFileBaseAddress;
+	pOutFileMapping->fileSizeInBytes 	= ( uint32_t )GetFileSize( pFileHandle, nullptr );
 
 	return 1;
 }
@@ -621,6 +624,7 @@ uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileN
 	pOutFileMapping->pFileHandle 		= pFileHandle;
 	pOutFileMapping->pFileMappingHandle = pFileMappingHandle;
 	pOutFileMapping->pFileBaseAddress	= pFileBaseAddress;
+	pOutFileMapping->fileSizeInBytes	= fileSizeInBytes;
 
 	return 1;
 }
@@ -748,50 +752,68 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
 
 	getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), pFixedRomPath );
-		
-	unmapFileMapping( &pEmulatorContext->romMapping );
-	unmapFileMapping( &pEmulatorContext->ramMapping );
 
-	if( mapFileForReading( &pEmulatorContext->romMapping, pFixedRomPath ) == 0 )
+	Win32FileMapping romFileMapping;
+	if( mapFileForReading( &romFileMapping, pFixedRomPath ) == 0 )
 	{
 		pushUserMessage( &pContext->userMessage, "Can't map rom" );
 		return;
 	}
 
-	if( !isValidGBRomData( pEmulatorContext->romMapping.pFileBaseAddress ) )
+	if( !isValidGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
 	{
 		pushUserMessage( &pContext->userMessage, "Rom file invalid" );
-		unmapFileMapping( &pEmulatorContext->romMapping );
+		unmapFileMapping( &romFileMapping );
 		return;
 	}
 
-	const GBCartridgeHeader header = getGBCartridgeHeader( pEmulatorContext->romMapping.pFileBaseAddress );
-	//memcpy( pContext->gameTitle, header.gameTitle, sizeof( header.gameTitle ) );
+	const GBCartridgeHeader header = getGBCartridgeHeader( romFileMapping.pFileBaseAddress );
+	if( header.colorCompatibility == 0xC0 )
+	{
+		MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
+		return;
+	}
 
-	loadGBEmulatorRom( pEmulatorContext->pEmulatorInstance, pEmulatorContext->romMapping.pFileBaseAddress );
-	
+	unmapFileMapping( &pEmulatorContext->romMapping );
+	unmapFileMapping( &pEmulatorContext->ramMapping );
+
+	const uint8_t* pRomBaseAddress 	= romFileMapping.pFileBaseAddress;
+	uint8_t* pRamBaseAddress 		= nullptr;
+
+	Win32FileMapping ramFileMapping;
 	const size_t ramSizeInBytes = mapRamSizeToByteSize( header.ramSize );
 	if( ramSizeInBytes > 0 )
 	{
 		char ramFileName[MAX_PATH] = {0};
 		generateRamFileName( ramFileName, sizeof( ramFileName ), romBaseFileName );
 
-		if( mapFileForWriting( &pEmulatorContext->ramMapping, ramFileName, ramSizeInBytes ) == 0 )
+		if( mapFileForWriting( &ramFileMapping, ramFileName, ramSizeInBytes ) == 0 )
 		{
 			pushUserMessage( &pContext->userMessage, "Can't map ram" );
-			unmapFileMapping( &pEmulatorContext->romMapping );
+			unmapFileMapping( &romFileMapping );
 			return;
 		}
 
-		setGBEmulatorRamData( pEmulatorContext->pEmulatorInstance, pEmulatorContext->ramMapping.pFileBaseAddress );
+		pRamBaseAddress = ramFileMapping.pFileBaseAddress;
+	}
+
+	const GBMapCartridgeResult result = loadGBEmulatorRom( pEmulatorContext->pEmulatorInstance, pRomBaseAddress, pRamBaseAddress );
+	if( result == K15_GB_CARTRIDGE_TYPE_UNSUPPORTED )
+	{
+		unmapFileMapping( &romFileMapping );
+		unmapFileMapping( &ramFileMapping );
+		MessageBoxA( pContext->pWindowHandle, "This rom type is currently not supported.", "Rom not supported.", MB_OK );
+		return;
 	}
 
 	strcpy_s( pEmulatorContext->romBaseFileName, sizeof( pEmulatorContext->romBaseFileName ), romBaseFileName );
-
 	pushUserMessage( &pContext->userMessage, "Rom loaded!");
 
 	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
 	enableRomMenuItems( pContext );
+
+	pEmulatorContext->romMapping = romFileMapping;
+	pEmulatorContext->ramMapping = ramFileMapping;
 }
 
 void openRomFile( Win32ApplicationContext* pContext )
@@ -958,9 +980,9 @@ void setEmulatorSpeedFactor( Win32ApplicationContext* pContext, uint8_t speedFac
 	RuntimeAssert( speedFactor > 0u );
 	pContext->emulatorContext.cyclePerHostFrameFactor = speedFactor;
 
-	CheckMenuItem( pContext->pStateMenuItems,  gbMenuSpeed1x, MF_UNCHECKED );
-	CheckMenuItem( pContext->pStateMenuItems,  gbMenuSpeed4x, MF_UNCHECKED );
-	CheckMenuItem( pContext->pStateMenuItems,  gbMenuSpeed8x, MF_UNCHECKED );
+	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed1x,  MF_UNCHECKED );
+	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed4x,  MF_UNCHECKED );
+	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed8x,  MF_UNCHECKED );
 	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed16x, MF_UNCHECKED );
 
 	if( speedFactor == 1 )
@@ -977,7 +999,7 @@ void setEmulatorSpeedFactor( Win32ApplicationContext* pContext, uint8_t speedFac
 	}
 	else if( speedFactor == 16 )
 	{
-		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed8x, MF_CHECKED );
+		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed16x, MF_CHECKED );
 	}
 }
 
@@ -1090,7 +1112,7 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 	if( strcmp( pFileExtension, ".gb") != 0 &&
 		strcmp( pFileExtension, ".gbc" ) != 0 )
 	{
-		pushUserMessage( &pContext->userMessage, "Not a valid rom file." );
+		pushUserMessage( &pContext->userMessage, "Invalid rom" );
 		return;	
 	}
 
@@ -1236,6 +1258,10 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 		handleWindowMinMaxInfo( lparam );
 		break;
 
+	case WM_SYSKEYDOWN:
+		printf("syskeydown\n");
+		break;
+
 	case WM_COMMAND:
 		handleWindowCommand( pContext, wparam );
 		break;
@@ -1341,7 +1367,7 @@ uint8_t setupMenu( Win32ApplicationContext* pContext )
 	result |= AppendMenuA( pContext->pFileMenuItems, MF_STRING, gbMenuClose, "&Quit" );
 
 	//FK: State menu
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_CHECKED, gbMenuState1, "State Slot 1\tF2" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_CHECKED,   gbMenuState1, "State Slot 1\tF2" );
 	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuState2, "State Slot 2\tF3" );
 	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuState3, "State Slot 3\tF4" );
 	result |= AppendMenuA( pContext->pStateMenuItems, MF_SEPARATOR, 0, nullptr );
@@ -1350,8 +1376,8 @@ uint8_t setupMenu( Win32ApplicationContext* pContext )
 	result |= AppendMenuA( pContext->pStateMenuItems, MF_SEPARATOR, 0, nullptr );
 	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_CHECKED,	gbMenuSpeed1x,  "Run Emulator in 1x Speed" );
 	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuSpeed4x,  "Run Emulator in 4x Speed" );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuSpeed8x, "Run Emulator in 16x Speed" );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuSpeed16x, "Run Emulator in 32x Speed" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuSpeed8x,  "Run Emulator in 8x Speed" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuSpeed16x, "Run Emulator in 16x Speed" );
 
 	//FK: Scale settings
 	char menuScaleText[] = "Scale 1x";

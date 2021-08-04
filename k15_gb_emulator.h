@@ -86,6 +86,12 @@ enum GBStateLoadResult
     K15_GB_STATE_LOAD_FAILED_WRONG_ROM
 };
 
+enum GBMapCartridgeResult
+{
+    K15_GB_CARTRIDGE_MAPPED_SUCCESSFULLY = 0,
+    K15_GB_CARTRIDGE_TYPE_UNSUPPORTED
+};
+
 struct GBEmulatorJoypadState
 {
     union 
@@ -625,8 +631,13 @@ GBCartridgeHeader getGBCartridgeHeader(const uint8_t* pRomData)
     return header;
 }
 
-uint8_t isValidGBRomData( const uint8_t* pRomData )
+uint8_t isValidGBRomData( const uint8_t* pRomData, const uint32_t romSizeInBytes )
 {
+    if( romSizeInBytes < Kbyte( 32u ) )
+    {
+        return 0;
+    }
+    
     const GBCartridgeHeader header = getGBCartridgeHeader( pRomData );
     return memcmp( header.nintendoLogo, gbNintendoLogo, sizeof( gbNintendoLogo ) ) == 0;
 }
@@ -732,17 +743,6 @@ GBCartridgeHeader getGBEmulatorCurrentCartridgeHeader( const GBEmulatorInstance*
 {
     RuntimeAssert( pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr );
     return getGBCartridgeHeader( pEmulatorInstance->pCartridge->pRomBaseAddress );
-}
-
-void setGBEmulatorRamData( GBEmulatorInstance* pEmulatorInstance, uint8_t* pRamData )
-{
-    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
-    GBCartridge* pCartridge         = pEmulatorInstance->pCartridge;
-
-    pCartridge->pRamBaseAddress     = pRamData;
-    pCartridge->mappedRamBankNumber = 0xFF;
-
-    mapCartridgeRamBank( pCartridge, pMemoryMapper, 0 );
 }
 
 size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySizeInBytes )
@@ -1134,52 +1134,74 @@ void write16BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addr
     write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 1, msn );
 }
 
-void mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory )
+uint8_t isCartridgeTypeSupported( const GBCartridgeType cartridgeType )
 {
-    const GBCartridgeHeader header = getGBCartridgeHeader( pRomMemory );
-    const uint32_t romSizeInBytes = mapRomSizeToByteSize( header.romSize );
-    const uint32_t ramSizeInBytes = mapRamSizeToByteSize( header.ramSize );
-    pCartridge->ramEnabled      = 0;
-    pCartridge->header          = header;
-    pCartridge->pRomBaseAddress = pRomMemory;
-    pCartridge->pRamBaseAddress = nullptr;
-    pCartridge->romBankCount    = ( uint16_t )( romSizeInBytes / gbRomBankSizeInBytes );
-    pCartridge->ramBankCount    = ( uint8_t )( ramSizeInBytes / gbRamBankSizeInBytes );
-    pCartridge->romSizeInBytes  = romSizeInBytes;
-    pCartridge->ramSizeInBytes  = ramSizeInBytes;
-    pCartridge->lowBankValue    = 1;
-    pCartridge->highBankValue   = 0;
-
-    //FK: Map first rom bank to 0x0000-0x4000
-    mapCartridgeRom0Bank( pCartridge, pMemoryMapper, 0 );
-
-    //FK: Clear ram bank
-    memset( pMemoryMapper->pRamBankSwitch, 0, gbRamBankSizeInBytes );
-
-    //FK: Selectively enable different cartridge types after testing
-    switch(pCartridge->header.cartridgeType)
+    switch( cartridgeType )
     {
         case ROM_ONLY:
+        case ROM_RAM:
+        case ROM_RAM_BATT:
+
         case ROM_MBC1:
         case ROM_MBC1_RAM:
         case ROM_MBC1_RAM_BATT:
+
         case ROM_MBC5:
         case ROM_MBC5_RAM:
         case ROM_MBC5_RAM_BATT:
-        case ROM_MBC5_RUMBLE:     
+        case ROM_MBC5_RUMBLE:
         case ROM_MBC5_RUMBLE_SRAM:
         case ROM_MBC5_RUMBLE_SRAM_BATT:
-        {
-            mapCartridgeRom1Bank( pCartridge, pMemoryMapper, 1 );
-            break;
-        }
- 
-        default:
-        {
-            //FK: Cartridge type not supported
-            DebugBreak();
-        }
+            return 1;
+
+        case ROM_MBC2:
+        case ROM_MBC2_BATT:
+        case ROM_MBC3_TIMER_BATT:
+        case ROM_MBC3_TIMER_RAM_BATT: 
+        case ROM_MBC3:
+        case ROM_MBC3_RAM:
+        case ROM_MBC3_RAM_BATT:
+        case ROM_MMMD1:
+        case ROM_MMMD1_SRAM:
+        case ROM_MMMD1_SRAM_BATT:
+            return 0;
     }
+
+    IllegalCodePath();
+    return 0;
+}
+
+GBMapCartridgeResult mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory, uint8_t* pRamMemory )
+{
+    const GBCartridgeHeader header = getGBCartridgeHeader( pRomMemory );
+    if( !isCartridgeTypeSupported( header.cartridgeType ) )
+    {
+        return K15_GB_CARTRIDGE_TYPE_UNSUPPORTED;
+    }
+
+    const uint32_t romSizeInBytes = mapRomSizeToByteSize( header.romSize );
+    const uint32_t ramSizeInBytes = mapRamSizeToByteSize( header.ramSize );
+    pCartridge->ramEnabled              = 0;
+    pCartridge->header                  = header;
+    pCartridge->pRomBaseAddress         = pRomMemory;
+    pCartridge->pRamBaseAddress         = pRamMemory;
+    pCartridge->romBankCount            = ( uint16_t )( romSizeInBytes / gbRomBankSizeInBytes );
+    pCartridge->ramBankCount            = ( uint8_t )( ramSizeInBytes / gbRamBankSizeInBytes );
+    pCartridge->romSizeInBytes          = romSizeInBytes;
+    pCartridge->ramSizeInBytes          = ramSizeInBytes;
+    pCartridge->lowBankValue            = 1;
+    pCartridge->highBankValue           = 0;
+
+    mapCartridgeRom0Bank( pCartridge, pMemoryMapper, 0 );
+    mapCartridgeRom1Bank( pCartridge, pMemoryMapper, 1 );
+
+    if( pCartridge->ramBankCount > 0 )
+    {
+        mapCartridgeRamBank( pCartridge, pMemoryMapper, 0 );
+    }
+
+
+    return K15_GB_CARTRIDGE_MAPPED_SUCCESSFULLY;
 }
 
 void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
@@ -1345,15 +1367,10 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
     uint8_t* pRamBaseAddress = pCartridge->pRamBaseAddress;
     if( pCartridge->pRomBaseAddress != nullptr )
     {
-        pCartridge->mappedRom0BankNumber = 0;
-        pCartridge->mappedRom1BankNumber = 0;
-        pCartridge->mappedRamBankNumber = 0;
-        mapCartridgeMemory(pCartridge, pMemoryMapper, pCartridge->pRomBaseAddress );
-    }
-
-    if( pRamBaseAddress != nullptr )
-    {
-        setGBEmulatorRamData( pEmulatorInstance, pRamBaseAddress );
+        pCartridge->mappedRom0BankNumber    = 0;
+        pCartridge->mappedRom1BankNumber    = 0;
+        pCartridge->mappedRamBankNumber     = 0;
+        mapCartridgeMemory(pCartridge, pMemoryMapper, pCartridge->pRomBaseAddress, pCartridge->pRamBaseAddress );
     }
 
     initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
@@ -1430,16 +1447,15 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     return pEmulatorInstance;
 }
 
-void loadGBEmulatorRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory )
+GBMapCartridgeResult loadGBEmulatorRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory, uint8_t* pRamMemory )
 {
     pEmulator->pCartridge->pRomBaseAddress = nullptr;
-    pEmulator->pCartridge->pRamBaseAddress = nullptr;
-    pEmulator->pCartridge->mappedRamBankNumber  = 0xFFu;
     pEmulator->pCartridge->mappedRom0BankNumber = 0xFFu;
     pEmulator->pCartridge->mappedRom1BankNumber = 0xFFu;
+    pEmulator->pCartridge->mappedRamBankNumber  = 0xFFu;
 
     resetGBEmulator( pEmulator );
-    mapCartridgeMemory( pEmulator->pCartridge, pEmulator->pMemoryMapper, pRomMemory );
+    return mapCartridgeMemory( pEmulator->pCartridge, pEmulator->pMemoryMapper, pRomMemory, pRamMemory );
 }
 
 uint8_t reverseBitsInByte( uint8_t value )
