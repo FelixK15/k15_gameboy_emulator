@@ -1101,6 +1101,13 @@ uint8_t* getMappedMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t address
 
 uint8_t allowWriteToMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
+    if( isInIORegisterRange( addressOffset ) )
+    {
+         //FK: Check if the address is part of the I/O registers
+        //    these will be written later in `handleMappedIORegisterWrite()`
+        return 0;
+    }
+
     if( isInCartridgeRomAddressRange( addressOffset ) )
     {
         return 0;
@@ -1143,25 +1150,20 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
     {
         return;
     }
+   
+    //FK: Save to write immediately to memory
+    pMemoryMapper->pBaseAddress[addressOffset] = value;
 
-    //FK: Check if the address is part of the I/O registers
-    //    these will be written later in `handleMappedIORegisterWrite()`
-    if( !isInIORegisterRange( addressOffset ) )
+    //FK: Echo 8kB internal Ram
+    if( isInWorkRamRange( addressOffset ) )
     {
-        //FK: Save to write immediately to memory
+        addressOffset += 0x2000;
         pMemoryMapper->pBaseAddress[addressOffset] = value;
-
-        //FK: Echo 8kB internal Ram
-        if( isInWorkRamRange( addressOffset ) )
-        {
-            addressOffset += 0x2000;
-            pMemoryMapper->pBaseAddress[addressOffset] = value;
-        }
-        else if( isInEchoRamRange( addressOffset ) )
-        {
-            addressOffset -= 0x2000;
-            pMemoryMapper->pBaseAddress[addressOffset] = value;
-        }
+    }
+    else if( isInEchoRamRange( addressOffset ) )
+    {
+        addressOffset -= 0x2000;
+        pMemoryMapper->pBaseAddress[addressOffset] = value;
     }
 }
 
@@ -3592,8 +3594,9 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
     uint8_t writeMemoryValue    = 1;
     uint8_t memoryValueBitMask  = 0xFF;
     uint8_t memoryValue         = pMemoryMapper->lastValueWritten;
+    const uint16_t address      = pMemoryMapper->lastAddressWrittenTo;
 
-    switch( pMemoryMapper->lastAddressWrittenTo )
+    switch( address )
     {
         case 0xFF00:
         {
@@ -3604,7 +3607,7 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         case 0xFF02:
         {
             memoryValueBitMask = 0b10000011;
-            pSerialState->transferInProgress = ( pMemoryMapper->lastValueWritten & 0x80 ) > 0u;
+            pSerialState->transferInProgress = ( memoryValue & 0x80 ) > 0u;
             break;
         }
         case 0xFF04:
@@ -3615,24 +3618,24 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         }
         case 0xFF07:
         {
-            const uint8_t timerControlValue = pMemoryMapper->lastValueWritten;
+            const uint8_t timerControlValue = memoryValue;
             pTimerState->enableCounter = (timerControlValue >> 2) & 0x1;
             pTimerState->counterTarget = readTimerControlFrequency( timerControlValue );
             break;
         }
         case 0xFF1A:
         {
-            pApuState->waveChannel.channelEnabled = pMemoryMapper->lastValueWritten & 0x80;
+            pApuState->waveChannel.channelEnabled = memoryValue & 0x80;
             break;
         }
         case 0xFF1B:
         {
-            pApuState->waveChannel.lengthTimer = pMemoryMapper->lastValueWritten & 0x1F;
+            pApuState->waveChannel.lengthTimer = memoryValue & 0x1F;
             break;
         }
         case 0xFF1C:
         {
-            const uint8_t outputLevel = ( pMemoryMapper->lastValueWritten >> 4 ) & 0x3;
+            const uint8_t outputLevel = ( memoryValue >> 4 ) & 0x3;
             pApuState->waveChannel.volumeShift = convertOutputLevelToVolumeShift( outputLevel );
             break;
         }
@@ -3640,20 +3643,20 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         {
             //FK: Clear and set lower 8 bits of frequency
             pApuState->waveChannel.frequencyCycleCountTarget &= 0xFF;
-            pApuState->waveChannel.frequencyCycleCountTarget |= pMemoryMapper->lastValueWritten;
+            pApuState->waveChannel.frequencyCycleCountTarget |= memoryValue;
             break;
         }
         case 0xFF1E:
         {
             //FK: clear an set higher 3 bits of frequency
             pApuState->waveChannel.frequencyCycleCountTarget &= 0x700;
-            pApuState->waveChannel.frequencyCycleCountTarget |= ( pMemoryMapper->lastValueWritten & 0x3 ) << 8;
+            pApuState->waveChannel.frequencyCycleCountTarget |= ( memoryValue & 0x3 ) << 8;
             break;
         }
         case 0xFF40:
         {
             GBLcdControl lcdControlValue;
-            memcpy(&lcdControlValue, &pMemoryMapper->lastValueWritten, sizeof(GBLcdControl) );
+            memcpy(&lcdControlValue, &memoryValue, sizeof(GBLcdControl) );
             updatePPULcdControl( pPpuState, lcdControlValue );
             break;
         }
@@ -3673,21 +3676,21 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         {
             //FK: Cpu can only write to HRAM during DMA transfer
             pCpuState->flags.dma = 1;
-            pCpuState->dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
+            pCpuState->dmaAddress = ( memoryValue << 8 );
             //FK: Count up to 160 cycles for the dma flag to be reset
             pCpuState->dmaCycleCounter = 0;
             break;
         }
         case 0xFF47:
         {
-            extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, pMemoryMapper->lastValueWritten );
+            extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, memoryValue );
             break;
         }
         case 0xFF48:
         case 0xFF49:
         {
-            const uint8_t paletteOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xFF48 ) * 4;
-            extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
+            const uint8_t paletteOffset = ( address - 0xFF48 ) * 4;
+            extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, memoryValue );
             break;
         }
     }
@@ -3697,7 +3700,7 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         return;
     }
 
-    pMemoryMapper->pBaseAddress[ pMemoryMapper->lastAddressWrittenTo ] = memoryValue & memoryValueBitMask;
+    pMemoryMapper->pBaseAddress[ address ] = memoryValue & memoryValueBitMask;
 }
 
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
