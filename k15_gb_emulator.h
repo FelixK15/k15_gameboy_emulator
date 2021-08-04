@@ -37,7 +37,7 @@
     #define RuntimeAssert(x)        if(!(x)) DebugBreak()
 #endif
 
-static constexpr uint8_t    gbStateVersion = 5;
+static constexpr uint8_t    gbStateVersion = 6;
 static constexpr uint32_t   gbStateFourCC  = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
 
 static constexpr uint8_t    gbNintendoLogo[]                        = { 0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E };
@@ -475,10 +475,54 @@ struct GBCartridge
     uint8_t             bankingMode                 : 1;
 };
 
+struct GBApuSquareWaveChannel1
+{
+    uint8_t lengthTimer;
+};
+
+struct GBApuSquareWaveChannel2
+{
+    uint8_t lengthTimer;
+};
+
+struct GBApuWaveChannel
+{
+    uint8_t* pWavePattern;
+    uint8_t lengthTimer;
+    uint8_t currentSample;
+    uint16_t samplePosition;
+    uint16_t cycleCount;
+    uint16_t frequencyCycleCountTarget;
+
+    uint8_t channelEnabled  : 1;
+    uint8_t volumeShift     : 3;
+};
+
+struct GBApuNoiseChannel
+{
+    uint8_t lengthTimer;
+};
+
+struct GBApuFrameSequencer
+{
+    uint16_t cycleCounter;
+    uint8_t clockCounter;
+};
+
+struct GBApuState
+{
+    GBApuSquareWaveChannel1 squareWaveChannel1;
+    GBApuSquareWaveChannel2 squareWaveChannel2;
+    GBApuWaveChannel        waveChannel;
+    GBApuNoiseChannel       noiseChannel;
+    GBApuFrameSequencer     frameSequencer;
+};
+
 struct GBEmulatorInstance
 {
     GBCpuState*             pCpuState;
     GBPpuState*             pPpuState;
+    GBApuState*             pApuState;
     GBTimerState*           pTimerState;
     GBMemoryMapper*         pMemoryMapper;
     GBSerialState*          pSerialState;
@@ -496,6 +540,7 @@ struct GBEmulatorState
 {
     GBCpuState    cpuState;
     GBPpuState    ppuState;
+    GBApuState    apuState;
     GBTimerState  timerState;
     GBSerialState serialState;
     GBCartridge   cartridge;
@@ -517,7 +562,7 @@ const uint8_t* getFontGlyphPixel( char glyph )
     return fontPixelData + (x + y * fontPixelDataWidthInPixels) * 3;
 }
 
-uint8_t isInVRAMAddressRange( const uint16_t address )
+uint8_t isInVideoRamAddressRange( const uint16_t address )
 {
     return address >= 0x8000 && address < 0xA000;
 }
@@ -572,9 +617,24 @@ uint8_t isInExternalRamRange( const uint16_t address )
     return address >= 0xA000 && address < 0xC000;
 }
 
-uint8_t isInHRAMAddressRange( const uint16_t address )
+uint8_t isInIORegisterRange( const uint16_t address )
+{
+    return address >= 0xFF00 && address < 0xFF80;
+}
+
+uint8_t isInHighRamAddressRange( const uint16_t address )
 {
     return address >= 0xFF80 && address < 0xFFFF;
+}
+
+uint8_t isInWorkRamRange( const uint16_t address )
+{
+    return address >= 0xC000 && address < 0xCFFF;
+}
+
+uint8_t isInEchoRamRange( const uint16_t address )
+{
+    return address >= 0xE000 && address < 0xFDFF;
 }
 
 void patchIOCartridgeMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBCartridge* pCartridge )
@@ -624,6 +684,11 @@ void patchIOPpuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBPpuState* p
     pPpuState->lcdRegisters.pWx     = pMemoryMapper->pBaseAddress + 0xFF4B;
 }
 
+void patchIOApuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBApuState* pApuState )
+{
+    pApuState->waveChannel.pWavePattern = pMemoryMapper->pBaseAddress + 0xFF30;
+}
+
 GBCartridgeHeader getGBCartridgeHeader(const uint8_t* pRomData)
 {
     GBCartridgeHeader header;
@@ -637,7 +702,7 @@ uint8_t isValidGBRomData( const uint8_t* pRomData, const uint32_t romSizeInBytes
     {
         return 0;
     }
-    
+
     const GBCartridgeHeader header = getGBCartridgeHeader( pRomData );
     return memcmp( header.nintendoLogo, gbNintendoLogo, sizeof( gbNintendoLogo ) ) == 0;
 }
@@ -823,6 +888,7 @@ void storeGBEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t*
 {
     const GBCpuState* pCpuState         = pEmulatorInstance->pCpuState;
     const GBPpuState* pPpuState         = pEmulatorInstance->pPpuState;
+    const GBApuState* pApuState         = pEmulatorInstance->pApuState;
     const GBTimerState* pTimerState     = pEmulatorInstance->pTimerState;
     const GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
     const GBSerialState* pSerialState   = pEmulatorInstance->pSerialState;
@@ -834,6 +900,7 @@ void storeGBEmulatorState( const GBEmulatorInstance* pEmulatorInstance, uint8_t*
     GBEmulatorState state;
     state.cpuState                  = *pCpuState;
     state.ppuState                  = *pPpuState;
+    state.apuState                  = *pApuState;
     state.timerState                = *pTimerState;
     state.serialState               = *pSerialState;
     state.cartridge                 = *pCartridge;
@@ -927,6 +994,7 @@ GBStateLoadResult loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, co
 
     *pEmulatorInstance->pCpuState       = state.cpuState;
     *pEmulatorInstance->pPpuState       = state.ppuState;
+    *pEmulatorInstance->pApuState       = state.apuState;
     *pEmulatorInstance->pTimerState     = state.timerState;
     *pEmulatorInstance->pSerialState    = state.serialState;
     *pEmulatorInstance->pCartridge      = state.cartridge;
@@ -976,7 +1044,7 @@ uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addr
         if ( pMemoryMapper->lcdStatus.mode == 3 )
         {
             if( isInOAMAddressRange( addressOffset ) ||
-                isInVRAMAddressRange( addressOffset ) )
+                isInVideoRamAddressRange( addressOffset ) )
             {
                 return 0;
             }
@@ -992,7 +1060,7 @@ uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addr
     }
     
     //FK: Only allow access to HRAM while DMA is active
-    if( pMemoryMapper->dmaActive && !isInHRAMAddressRange( addressOffset ) )
+    if( pMemoryMapper->dmaActive && !isInHighRamAddressRange( addressOffset ) )
     {
         return 0;
     }
@@ -1045,7 +1113,7 @@ uint8_t allowWriteToMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addre
 
     if( pMemoryMapper->lcdStatus.mode == 3 && pMemoryMapper->lcdEnabled )
     {
-        if( isInVRAMAddressRange( addressOffset ) || 
+        if( isInVideoRamAddressRange( addressOffset ) || 
             isInOAMAddressRange( addressOffset ) )
         {
             //FK: can't read from VRAM and/or OAM during lcd mode 3 
@@ -1055,7 +1123,7 @@ uint8_t allowWriteToMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addre
 
     if( pMemoryMapper->dmaActive )
     {
-        if( !isInHRAMAddressRange( addressOffset ) )
+        if( !isInHighRamAddressRange( addressOffset ) )
         {
             //FK: can only access HRAM during dma
             return 0;
@@ -1076,53 +1144,24 @@ void write8BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addre
         return;
     }
 
-    switch( addressOffset )
+    //FK: Check if the address is part of the I/O registers
+    //    these will be written later in `handleMappedIORegisterWrite()`
+    if( !isInIORegisterRange( addressOffset ) )
     {
-        //FK: Joypad input
-        case 0xFF00:
-        {
-            const uint8_t currentValue = pMemoryMapper->pBaseAddress[addressOffset];
-            pMemoryMapper->pBaseAddress[addressOffset] = ( value & 0xF0 ) | ( currentValue & 0x0F );
-            break;
-        }
+        //FK: Save to write immediately to memory
+        pMemoryMapper->pBaseAddress[addressOffset] = value;
 
-        case 0xFF40:
+        //FK: Echo 8kB internal Ram
+        if( isInWorkRamRange( addressOffset ) )
         {
-            //FK: LCD control - will be evaluated and written to memory in updatePPULcdControl()
-            break;
-        }
-
-        case 0xFF41:
-        {
-            //FK: LCD Status - only bit 3:6 are writeable
-            value &= 0x78;
-            pMemoryMapper->pBaseAddress[addressOffset] |= value;
-            break;
-        }
-
-        case 0xFF44:
-        {
-            //FK: Read only
-            break;
-        }
-
-        default:
-        {
+            addressOffset += 0x2000;
             pMemoryMapper->pBaseAddress[addressOffset] = value;
-            break;
         }
-    }
-
-    //FK: Echo 8kB internal Ram
-    if( addressOffset >= 0xC000 && addressOffset < 0xDE00 )
-    {
-        addressOffset += 0x2000;
-        pMemoryMapper->pBaseAddress[addressOffset] = value;
-    }
-    else if( addressOffset >= 0xE000 && addressOffset < 0xFE00 )
-    {
-        addressOffset -= 0x2000;
-        pMemoryMapper->pBaseAddress[addressOffset] = value;
+        else if( isInEchoRamRange( addressOffset ) )
+        {
+            addressOffset -= 0x2000;
+            pMemoryMapper->pBaseAddress[addressOffset] = value;
+        }
     }
 }
 
@@ -1199,7 +1238,6 @@ GBMapCartridgeResult mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper
     {
         mapCartridgeRamBank( pCartridge, pMemoryMapper, 0 );
     }
-
 
     return K15_GB_CARTRIDGE_MAPPED_SUCCESSFULLY;
 }
@@ -1348,6 +1386,24 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     clearGBFrameBuffer( pPpuState->pGBFrameBuffers[ pPpuState->activeFrameBufferIndex ] );
 }
 
+void initApuState( GBMemoryMapper* pMemoryMapper, GBApuState* pApuState)
+{
+    patchIOApuMappedMemoryPointer( pMemoryMapper, pApuState );
+    pApuState->frameSequencer.clockCounter = 0u;
+    pApuState->frameSequencer.cycleCounter = 0u;
+
+    pApuState->squareWaveChannel1.lengthTimer = 0u;
+    pApuState->squareWaveChannel2.lengthTimer = 0u;
+    pApuState->noiseChannel.lengthTimer = 0u;
+
+    pApuState->waveChannel.cycleCount                   = 0u;
+    pApuState->waveChannel.frequencyCycleCountTarget    = 0u;    
+    pApuState->waveChannel.channelEnabled               = 0u;
+    pApuState->waveChannel.currentSample                = 0u;
+    pApuState->waveChannel.samplePosition               = 0u;
+    pApuState->waveChannel.lengthTimer                  = 0u;
+}
+
 size_t calculateGBEmulatorMemoryRequirementsInBytes()
 {
     const size_t memoryRequirementsInBytes = sizeof(GBEmulatorInstance) + sizeof(GBCpuState) + 
@@ -1375,6 +1431,7 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
 
     initCpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pCpuState);
     initPpuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pPpuState);
+    initApuState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pApuState);
     initTimerState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pTimerState);
     initSerialState(pEmulatorInstance->pMemoryMapper, pEmulatorInstance->pSerialState);
 
@@ -1417,7 +1474,8 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 {
     GBEmulatorInstance* pEmulatorInstance = (GBEmulatorInstance*)pEmulatorInstanceMemory;
     pEmulatorInstance->pCpuState        = (GBCpuState*)(pEmulatorInstance + 1);
-    pEmulatorInstance->pMemoryMapper    = (GBMemoryMapper*)(pEmulatorInstance->pCpuState + 1);
+    pEmulatorInstance->pApuState        = (GBApuState*)(pEmulatorInstance->pCpuState + 1);
+    pEmulatorInstance->pMemoryMapper    = (GBMemoryMapper*)(pEmulatorInstance->pApuState + 1);
     pEmulatorInstance->pPpuState        = (GBPpuState*)(pEmulatorInstance->pMemoryMapper + 1);
     pEmulatorInstance->pTimerState      = (GBTimerState*)(pEmulatorInstance->pPpuState + 1);
     pEmulatorInstance->pSerialState     = (GBSerialState*)(pEmulatorInstance->pTimerState + 1);
@@ -1864,24 +1922,6 @@ uint16_t readTimerControlFrequency( const uint8_t timerControlValue )
     return 0;
 }
 
-void updateTimerRegisters( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimer )
-{
-    //FK: Timer Divider
-    if( pMemoryMapper->lastAddressWrittenTo == 0xFF04 )
-    {
-        pMemoryMapper->pBaseAddress[0xFF04] = 0x00;
-        pTimer->dividerCounter = 0;
-    }
-
-    //FK: Timer Control
-    if( pMemoryMapper->lastAddressWrittenTo == 0xFF07 )
-    {
-        const uint8_t timerControlValue = pMemoryMapper->lastValueWritten;
-        pTimer->enableCounter = (timerControlValue >> 2) & 0x1;
-        pTimer->counterTarget = readTimerControlFrequency( timerControlValue );
-    }
-}
-
 void updateSerial( GBCpuState* pCpuState, GBSerialState* pSerial, const uint8_t cycleCount )
 {
     if( !pSerial->transferInProgress )
@@ -2032,6 +2072,87 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
     //FK: update ppu state
     pPpuState->dotCounter = lcdDotCounter;
     pLcdStatus->mode = lcdMode;
+}
+
+uint8_t convertOutputLevelToVolumeShift( const uint8_t outputLevel )
+{
+    switch( outputLevel )
+    {
+        case 0b00:
+            return 4u;
+        case 0b01:
+            return 0;
+        case 0b10:
+            return 1;
+        case 0b11:
+            return 2;
+    }
+
+    IllegalCodePath();
+    return 0;
+}
+
+void updateAPU( GBApuState* pApuState, const uint8_t cycleCost )
+{
+    pApuState->frameSequencer.cycleCounter += cycleCost;
+    if( pApuState->frameSequencer.cycleCounter >= 512 )
+    {
+        pApuState->frameSequencer.cycleCounter -= 512;
+
+        const uint8_t clockLengthCounter    = ( pApuState->frameSequencer.clockCounter % 2 );
+        const uint8_t clockVolumeEnvelop    = ( pApuState->frameSequencer.clockCounter == 7 );
+        const uint8_t clockSweep            = ( pApuState->frameSequencer.clockCounter == 2 || pApuState->frameSequencer.clockCounter == 6 );
+
+        const uint8_t clockCounter = pApuState->frameSequencer.clockCounter + 1;
+        pApuState->frameSequencer.clockCounter = clockCounter % 8;
+
+        if( clockLengthCounter )
+        {
+            if( pApuState->squareWaveChannel1.lengthTimer > 0 )
+            {
+                --pApuState->squareWaveChannel1.lengthTimer;
+            }
+
+            if( pApuState->squareWaveChannel2.lengthTimer > 0 )
+            {
+                --pApuState->squareWaveChannel2.lengthTimer;
+            }
+
+            if( pApuState->waveChannel.lengthTimer > 0 )
+            {
+                --pApuState->waveChannel.lengthTimer;
+            }
+
+            if( pApuState->noiseChannel.lengthTimer > 0 )
+            {
+                --pApuState->noiseChannel.lengthTimer;
+            }
+        }
+    }
+
+    const uint8_t waveChannelLenghtTime = pApuState->waveChannel.lengthTimer;
+    if( waveChannelLenghtTime > 0u )
+    {
+        const uint8_t waveSampleVolumeShift     = pApuState->waveChannel.volumeShift;
+        const uint16_t cycleCountTarget         = pApuState->waveChannel.frequencyCycleCountTarget;
+        uint16_t samplePosition                 = pApuState->waveChannel.samplePosition;
+        uint16_t cycleCount                     = pApuState->waveChannel.cycleCount;
+
+        cycleCount += cycleCost;
+        if( cycleCount > cycleCountTarget )
+        {
+            cycleCount -= cycleCountTarget;
+            ++samplePosition %= 64u;
+
+            const uint8_t* pWaveSample = pApuState->waveChannel.pWavePattern + ( samplePosition << 2 );
+            uint8_t nextWaveSample = *pWaveSample;
+            nextWaveSample >>= ( samplePosition % 2 ) * 4 + waveSampleVolumeShift;
+            nextWaveSample &= 0xF;
+
+            pApuState->waveChannel.currentSample  = nextWaveSample;
+            pApuState->waveChannel.samplePosition = samplePosition;
+        }
+    }
 }
 
 void push16BitValueToStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint16_t value )
@@ -3164,36 +3285,29 @@ GBEmulatorJoypadState fixJoypadState( GBEmulatorJoypadState joypadState )
     return joypadState;
 }
 
-bool handleInput( GBMemoryMapper* pMemoryMapper, GBEmulatorJoypadState joypadState )
+uint8_t handleInput( const uint8_t queryJoypadValue, GBEmulatorJoypadState joyPadState )
 {
-    if( pMemoryMapper->lastAddressWrittenTo == 0xFF00 )
+    joyPadState = fixJoypadState( joyPadState );
+
+    //FK: bit 7&6 aren't used so we'll set them (mimicing bgb)
+    const uint8_t selectActionButtons       = ( queryJoypadValue & (1 << 5) ) == 0;
+    const uint8_t selectDirectionButtons    = ( queryJoypadValue & (1 << 4) ) == 0;
+    const uint8_t prevJoypadState           = ( queryJoypadValue & 0x0F ); 
+    uint8_t newJoypadState                  = 0;
+    //FK: Write joypad values to 0xFF00
+    if( selectActionButtons )
     {
-        joypadState = fixJoypadState( joypadState );
-
-        //FK: bit 7&6 aren't used so we'll set them (mimicing bgb)
-        const uint8_t queryJoypadValue          = pMemoryMapper->pBaseAddress[0xFF00];
-        const uint8_t selectActionButtons       = ( queryJoypadValue & (1 << 5) ) == 0;
-        const uint8_t selectDirectionButtons    = ( queryJoypadValue & (1 << 4) ) == 0;
-        const uint8_t prevJoypadState           = ( queryJoypadValue & 0x0F ); 
-        uint8_t newJoypadState                  = 0;
-        //FK: Write joypad values to 0xFF00
-        if( selectActionButtons )
-        {
-            //FK: Flip button mask since in our world bit set = input pressed. It's reversed in the gameboy world, though
-            newJoypadState = ~joypadState.actionButtonMask & 0x0F;
-        }
-        else if( selectDirectionButtons )
-        {
-            //FK: Flip button mask since in our world bit set = input pressed. It's reversed in the gameboy world, though
-            newJoypadState = ~joypadState.dpadButtonMask & 0x0F;
-        }
-
-        pMemoryMapper->pBaseAddress[0xFF00] = 0xC0 | ( queryJoypadValue & 0x30 ) | newJoypadState;
-
-        return prevJoypadState != newJoypadState;
+        //FK: Flip button mask since in our world bit set = input pressed. It's reversed in the gameboy world, though
+        newJoypadState = ~joyPadState.actionButtonMask & 0x0F;
+    }
+    else if( selectDirectionButtons )
+    {
+        //FK: Flip button mask since in our world bit set = input pressed. It's reversed in the gameboy world, though
+        newJoypadState = ~joyPadState.dpadButtonMask & 0x0F;
     }
 
-    return 0;
+    const uint8_t registerValue = 0xC0 | ( queryJoypadValue & 0x30 ) | newJoypadState;
+    return registerValue;
 }
 
 uint8_t isLargeRamCartridge( uint32_t ramSizeInBytes )
@@ -3443,11 +3557,155 @@ void addOpcodeToOpcodeHistory( GBEmulatorInstance* pEmulatorInstance, uint16_t a
 #endif
 }
 
+void handleCartridgeWrites( GBEmulatorInstance* pEmulatorInstance )
+{
+    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
+    GBCartridge* pCartridge         = pEmulatorInstance->pCartridge;
+
+    if( isInCartridgeRomAddressRange( pMemoryMapper->lastAddressWrittenTo ) )
+    {
+        handleCartridgeRomWrite( pCartridge, pMemoryMapper );
+    }
+
+    if( isInExternalRamRange( pMemoryMapper->lastAddressWrittenTo ) && pCartridge->ramEnabled )
+    {
+        //FK: mirror writes to ram area to emulator ram memory
+        const uint16_t baseAddressOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xA000 ) + pCartridge->mappedRamBankNumber * gbRamBankSizeInBytes;
+        if( baseAddressOffset < pCartridge->ramSizeInBytes )
+        {
+            pCartridge->pRamBaseAddress[ baseAddressOffset ] = pMemoryMapper->lastValueWritten;
+            pEmulatorInstance->flags.ramAccessed = 1;
+        }
+    }
+}
+
+void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
+{
+    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
+    GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
+    GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
+    GBApuState* pApuState           = pEmulatorInstance->pApuState;
+    GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
+    GBSerialState* pSerialState     = pEmulatorInstance->pSerialState;
+    GBCartridge* pCartridge         = pEmulatorInstance->pCartridge;
+
+    uint8_t writeMemoryValue    = 1;
+    uint8_t memoryValueBitMask  = 0xFF;
+    uint8_t memoryValue         = pMemoryMapper->lastValueWritten;
+
+    switch( pMemoryMapper->lastAddressWrittenTo )
+    {
+        case 0xFF00:
+        {
+            memoryValue = handleInput( memoryValue, pEmulatorInstance->joypadState );
+            triggerInterrupt( pCpuState, JoypadInterrupt );
+            break;
+        }
+        case 0xFF02:
+        {
+            memoryValueBitMask = 0b10000011;
+            pSerialState->transferInProgress = ( pMemoryMapper->lastValueWritten & 0x80 ) > 0u;
+            break;
+        }
+        case 0xFF04:
+        {
+            memoryValue = 0x00;
+            pTimerState->dividerCounter = 0;
+            break;
+        }
+        case 0xFF07:
+        {
+            const uint8_t timerControlValue = pMemoryMapper->lastValueWritten;
+            pTimerState->enableCounter = (timerControlValue >> 2) & 0x1;
+            pTimerState->counterTarget = readTimerControlFrequency( timerControlValue );
+            break;
+        }
+        case 0xFF1A:
+        {
+            pApuState->waveChannel.channelEnabled = pMemoryMapper->lastValueWritten & 0x80;
+            break;
+        }
+        case 0xFF1B:
+        {
+            pApuState->waveChannel.lengthTimer = pMemoryMapper->lastValueWritten & 0x1F;
+            break;
+        }
+        case 0xFF1C:
+        {
+            const uint8_t outputLevel = ( pMemoryMapper->lastValueWritten >> 4 ) & 0x3;
+            pApuState->waveChannel.volumeShift = convertOutputLevelToVolumeShift( outputLevel );
+            break;
+        }
+        case 0xFF1D:
+        {
+            //FK: Clear and set lower 8 bits of frequency
+            pApuState->waveChannel.frequencyCycleCountTarget &= 0xFF;
+            pApuState->waveChannel.frequencyCycleCountTarget |= pMemoryMapper->lastValueWritten;
+            break;
+        }
+        case 0xFF1E:
+        {
+            //FK: clear an set higher 3 bits of frequency
+            pApuState->waveChannel.frequencyCycleCountTarget &= 0x700;
+            pApuState->waveChannel.frequencyCycleCountTarget |= ( pMemoryMapper->lastValueWritten & 0x3 ) << 8;
+            break;
+        }
+        case 0xFF40:
+        {
+            GBLcdControl lcdControlValue;
+            memcpy(&lcdControlValue, &pMemoryMapper->lastValueWritten, sizeof(GBLcdControl) );
+            updatePPULcdControl( pPpuState, lcdControlValue );
+            break;
+        }
+        case 0xFF41:
+        {
+            //FK: LCD Status - only bit 3:6 are writeable
+            memoryValueBitMask = 0x78;
+            break;
+        }
+        case 0xFF44:
+        {
+            //FK: Read only
+            writeMemoryValue = 0;
+            break;
+        }
+        case 0xFF46:
+        {
+            //FK: Cpu can only write to HRAM during DMA transfer
+            pCpuState->flags.dma = 1;
+            pCpuState->dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
+            //FK: Count up to 160 cycles for the dma flag to be reset
+            pCpuState->dmaCycleCounter = 0;
+            break;
+        }
+        case 0xFF47:
+        {
+            extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, pMemoryMapper->lastValueWritten );
+            break;
+        }
+        case 0xFF48:
+        case 0xFF49:
+        {
+            const uint8_t paletteOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xFF48 ) * 4;
+            extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
+            break;
+        }
+    }
+
+    if( !writeMemoryValue )
+    {
+        return;
+    }
+
+    pMemoryMapper->pBaseAddress[ pMemoryMapper->lastAddressWrittenTo ] = memoryValue & memoryValueBitMask;
+}
+
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
     GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
     GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
+    GBApuState* pApuState           = pEmulatorInstance->pApuState;
     GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
     GBSerialState* pSerialState     = pEmulatorInstance->pSerialState;
     GBCartridge* pCartridge         = pEmulatorInstance->pCartridge;
@@ -3477,67 +3735,19 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     updateDmaState( pCpuState, pMemoryMapper, cycleCost ); 
 
     updatePPU( pCpuState, pPpuState, cycleCost );
+    updateAPU( pApuState, cycleCost );
     updateTimer( pCpuState, pTimerState, cycleCost );
     updateSerial( pCpuState, pSerialState, cycleCost );
-    //FK: LCD Control
+
     if( pMemoryMapper->memoryAccess == GBMemoryAccess_Written )
     {
-        if( pMemoryMapper->lastAddressWrittenTo == 0xFF02 )
+        if( isInIORegisterRange( pMemoryMapper->lastAddressWrittenTo ) )
         {
-            pSerialState->transferInProgress = ( pMemoryMapper->lastValueWritten & 0x80 ) > 0u;
+            handleMappedIORegisterWrite( pEmulatorInstance );
         }
-        if( handleInput( pMemoryMapper, pEmulatorInstance->joypadState ) )
+        else
         {
-            triggerInterrupt( pCpuState, JoypadInterrupt );
-        }
-
-        updateTimerRegisters( pMemoryMapper, pTimerState );
-
-        if( pMemoryMapper->lastAddressWrittenTo == 0xFF46 )
-        {
-            //FK: Cpu can only write to HRAM during DMA transfer
-            pCpuState->flags.dma = 1;
-
-            pCpuState->dmaAddress = ( pMemoryMapper->lastValueWritten << 8 );
-
-            //FK: Count up to 160 cycles for the dma flag to be reset
-            pCpuState->dmaCycleCounter = 0;
-        }
-
-        if( pMemoryMapper->lastAddressWrittenTo == 0xFF40 )
-        {
-            GBLcdControl lcdControlValue;
-            memcpy(&lcdControlValue, &pMemoryMapper->lastValueWritten, sizeof(GBLcdControl) );
-            updatePPULcdControl( pPpuState, lcdControlValue );
-        }
-
-        //FK: LCD Monochrome palette - Background
-        if( pMemoryMapper->lastAddressWrittenTo == 0xFF47 )
-        {
-            extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, pMemoryMapper->lastValueWritten );
-        }
-
-        //FK: LCD Monochrome palette - Object
-        if( pMemoryMapper->lastAddressWrittenTo == 0xFF48 || pMemoryMapper->lastAddressWrittenTo == 0xFF49 )
-        {
-            const uint8_t paletteOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xFF48 ) * 4;
-            extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, pMemoryMapper->lastValueWritten );
-        }
-
-        if( isInCartridgeRomAddressRange( pMemoryMapper->lastAddressWrittenTo ) )
-        {
-            handleCartridgeRomWrite( pCartridge, pMemoryMapper );
-        }
-
-        if( isInExternalRamRange( pMemoryMapper->lastAddressWrittenTo ) && pCartridge->ramEnabled )
-        {
-            //FK: mirror writes to ram area to emulator ram memory
-            const uint16_t baseAddressOffset = ( pMemoryMapper->lastAddressWrittenTo - 0xA000 ) + pCartridge->mappedRamBankNumber * gbRamBankSizeInBytes;
-            if( baseAddressOffset < pCartridge->ramSizeInBytes )
-            {
-                pCartridge->pRamBaseAddress[ baseAddressOffset ] = pMemoryMapper->lastValueWritten;
-                pEmulatorInstance->flags.ramAccessed = 1;
-            }
+            handleCartridgeWrites( pEmulatorInstance );
         }
     }
     
