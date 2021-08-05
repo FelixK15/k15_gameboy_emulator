@@ -78,6 +78,14 @@ enum
     K15_GB_STATE_LOADED_EVENT_FLAG  = 0x04,
 };
 
+enum 
+{
+    K15_GB_COUNTER_FREQUENCY_BIT_00   = 9,
+    K15_GB_COUNTER_FREQUENCY_BIT_01   = 3,
+    K15_GB_COUNTER_FREQUENCY_BIT_10   = 5,
+    K15_GB_COUNTER_FREQUENCY_BIT_11   = 7,
+};
+
 enum GBStateLoadResult
 {
     K15_GB_STATE_LOAD_SUCCESS = 0,
@@ -90,6 +98,54 @@ enum GBMapCartridgeResult
 {
     K15_GB_CARTRIDGE_MAPPED_SUCCESSFULLY = 0,
     K15_GB_CARTRIDGE_TYPE_UNSUPPORTED
+};
+
+enum GBMappedIOAdresses
+{
+    K15_GB_MAPPED_IO_ADDRESS_JOYP   = 0xFF00,
+    K15_GB_MAPPED_IO_ADDRESS_SC     = 0xFF02,
+    K15_GB_MAPPED_IO_ADDRESS_DIV    = 0xFF04,
+    K15_GB_MAPPED_IO_ADDRESS_TIMA   = 0xFF05,
+    K15_GB_MAPPED_IO_ADDRESS_TMA    = 0xFF06,
+    K15_GB_MAPPED_IO_ADDRESS_TAC    = 0xFF07,
+
+    K15_GB_MAPPED_IO_ADDRESS_NR10   = 0xFF10,
+    K15_GB_MAPPED_IO_ADDRESS_NR11   = 0xFF11,
+    K15_GB_MAPPED_IO_ADDRESS_NR12   = 0xFF12,
+    K15_GB_MAPPED_IO_ADDRESS_NR13   = 0xFF13,
+    K15_GB_MAPPED_IO_ADDRESS_NR14   = 0xFF14,
+    
+    K15_GB_MAPPED_IO_ADDRESS_NR21   = 0xFF16,
+    K15_GB_MAPPED_IO_ADDRESS_NR22   = 0xFF17,
+    K15_GB_MAPPED_IO_ADDRESS_NR23   = 0xFF18,
+    K15_GB_MAPPED_IO_ADDRESS_NR24   = 0xFF19,
+    
+    K15_GB_MAPPED_IO_ADDRESS_NR30   = 0xFF1A,
+    K15_GB_MAPPED_IO_ADDRESS_NR31   = 0xFF1B,
+    K15_GB_MAPPED_IO_ADDRESS_NR32   = 0xFF1C,
+    K15_GB_MAPPED_IO_ADDRESS_NR33   = 0xFF1D,
+    K15_GB_MAPPED_IO_ADDRESS_NR34   = 0xFF1E,
+
+    K15_GB_MAPPED_IO_ADDRESS_NR41   = 0xFF20,
+    K15_GB_MAPPED_IO_ADDRESS_NR42   = 0xFF21,
+    K15_GB_MAPPED_IO_ADDRESS_NR43   = 0xFF22,
+    K15_GB_MAPPED_IO_ADDRESS_NR44   = 0xFF23,
+
+    K15_GB_MAPPED_IO_ADDRESS_NR50   = 0xFF24,
+    K15_GB_MAPPED_IO_ADDRESS_NR51   = 0xFF25,
+    K15_GB_MAPPED_IO_ADDRESS_NR52   = 0xFF26,
+
+    K15_GB_MAPPED_IO_ADDRESS_LCDC   = 0xFF40,
+    K15_GB_MAPPED_IO_ADDRESS_STAT   = 0xFF41,
+
+    K15_GB_MAPPED_IO_ADDRESS_DMA    = 0xFF46,
+
+    K15_GB_MAPPED_IO_ADDRESS_BGP    = 0xFF47,
+    K15_GB_MAPPED_IO_ADDRESS_OBP0   = 0xFF48,
+    K15_GB_MAPPED_IO_ADDRESS_OBP1   = 0xFF49,
+
+    K15_GB_MAPPED_IO_ADDRESS_IF     = 0xFF0F,
+    K15_GB_MAPPED_IO_ADDRESS_IE     = 0xFFFF
 };
 
 struct GBEmulatorJoypadState
@@ -257,7 +313,7 @@ enum GBCartridgeType : uint8_t
     HUDSON_HUC_3                = 0xFE,
 };
 
-enum GBInterruptFlags : uint8_t
+enum GBCpuInterrupt : uint8_t
 {
     VBlankInterrupt     = (1<<0),
     LCDStatInterrupt    = (1<<1),
@@ -445,14 +501,17 @@ struct GBEmulatorInstanceFlags
 
 struct GBTimerState
 {
-    uint16_t    dividerCounter;     //FK: overflow = increment divider
-    uint16_t    counterValue;       //FK: how many cpu cycles until TIMA is increased?
-    uint16_t    counterTarget;
-    uint8_t     enableCounter;
     uint8_t*    pDivider;
     uint8_t*    pCounter;
     uint8_t*    pModulo;
     uint8_t*    pControl;
+
+    uint16_t    internalDivCounter;
+
+    uint8_t     counterFrequencyBit     : 4;
+    uint8_t     enableCounter           : 1;
+    uint8_t     timerOverflow           : 1;
+    uint8_t     timerLoading            : 1;
 };
 
 struct GBCartridge
@@ -1274,6 +1333,9 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->dmaCycleCounter         = 0;
     pState->cycleCounter            = 0;
 
+    *pState->pIE = 0xF0;
+    *pState->pIF = 0xE0;
+
     pState->flags.dma               = 0;
     pState->flags.IME               = 1;
     pState->flags.stop              = 0;
@@ -1306,16 +1368,16 @@ void initMemoryMapper( GBMemoryMapper* pMapper, uint8_t* pMemory )
 void initTimerState( GBMemoryMapper* pMemoryMapper, GBTimerState* pTimerState )
 {
     patchIOTimerMappedMemoryPointer( pMemoryMapper, pTimerState );
-
-    pTimerState->dividerCounter = 0xAB;
-    pTimerState->counterValue   = 0;
-    pTimerState->counterTarget  = 1024u;
-    pTimerState->enableCounter  = 0;
+    
+    pTimerState->counterFrequencyBit    = K15_GB_COUNTER_FREQUENCY_BIT_00;
+    pTimerState->internalDivCounter     = 0u;
+    pTimerState->enableCounter          = 0u;
+    pTimerState->timerOverflow          = 0u;
 
     *pTimerState->pDivider      = 0xAB;
     *pTimerState->pCounter      = 0;
     *pTimerState->pModulo       = 0;
-    *pTimerState->pControl      = 0xFB;
+    *pTimerState->pControl      = 0xF8;
 }
 
 void initSerialState( GBMemoryMapper* pMemoryMapper, GBSerialState* pSerialState )
@@ -1884,9 +1946,9 @@ void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
     }
 }
 
-void triggerInterrupt( GBCpuState* pCpuState, uint8_t interruptFlag )
+void triggerInterrupt( GBCpuState* pCpuState, GBCpuInterrupt interruptFlag )
 {
-    *pCpuState->pIF |= interruptFlag;
+    *pCpuState->pIF |= (uint8_t)interruptFlag;
 }
 
 void updatePPULcdControl( GBPpuState* pPpuState, GBLcdControl lcdControlValue )
@@ -1905,19 +1967,19 @@ void updatePPULcdControl( GBPpuState* pPpuState, GBLcdControl lcdControlValue )
     *pPpuState->pLcdControl = lcdControlValue;
 }
 
-uint16_t readTimerControlFrequency( const uint8_t timerControlValue )
+uint8_t convertTimerControlFrequencyBit( const uint8_t timerControlValue )
 {
     const uint8_t frequency = timerControlValue & 0x3;
     switch( frequency )
     {
-        case 0x0:
-            return 1024u;
-        case 0x1:
-            return 16u;
-        case 0x2:
-            return 64u;
-        case 0x3:
-            return 256u;
+        case 0b00:
+            return K15_GB_COUNTER_FREQUENCY_BIT_00;
+        case 0b01:
+            return K15_GB_COUNTER_FREQUENCY_BIT_01;
+        case 0b10:
+            return K15_GB_COUNTER_FREQUENCY_BIT_10;
+        case 0b11:
+            return K15_GB_COUNTER_FREQUENCY_BIT_11;
     }
 
     IllegalCodePath();
@@ -1952,38 +2014,57 @@ void updateSerial( GBCpuState* pCpuState, GBSerialState* pSerial, const uint8_t 
     }
 }
 
-void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cycleCount )
+void incrementTimerCounter( GBTimerState* pTimer )
 {
-    if( pCpuState->flags.stop )
+    *pTimer->pCounter += 1;
+    if( *pTimer->pCounter == 0 )
     {
-        return;
+        //FK: Delay interrupt triggering due to obscure timer behavior
+        //    https://gbdev.gg8.se/wiki/articles/Timer_Obscure_Behaviour
+        pTimer->timerOverflow  = 1;
     }
+}
 
-    //FK: timer divier runs at 16384hz (update counter every 256 cpu cycles to be accurate)
-    pTimer->dividerCounter += cycleCount;
-    while( pTimer->dividerCounter >= 256 )
-    {
-        pTimer->dividerCounter -= 256;
-        *pTimer->pDivider += 1;
-    }
+void updateTimerInternalDivCounterValue( GBTimerState* pTimer, const uint16_t internalDivCounter )
+{
+    const uint16_t newInternalDivCounter = internalDivCounter;
+    const uint16_t oldInternalDivCounter = pTimer->internalDivCounter;
+    pTimer->internalDivCounter = newInternalDivCounter;
 
     if( !pTimer->enableCounter )
     {
         return;
     }
 
-    pTimer->counterValue += cycleCount;
-    while( pTimer->counterValue > pTimer->counterTarget )
-    {
-        pTimer->counterValue -= pTimer->counterTarget;
-        if( *pTimer->pCounter == 0xFF )
-        {
-            *pTimer->pCounter = *pTimer->pModulo;
-            triggerInterrupt( pCpuState, TimerInterrupt );
-        }
+    const uint16_t counterFrequencyMask = 1u << pTimer->counterFrequencyBit;
+    const uint8_t fallingEdge = ( ( counterFrequencyMask & oldInternalDivCounter ) > 0 ) && 
+                                ( ( counterFrequencyMask & newInternalDivCounter ) == 0 );
 
-        *pTimer->pCounter += 1;
+    if( fallingEdge )
+    {
+        incrementTimerCounter( pTimer );
     }
+}
+
+void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cycleCount )
+{
+    pTimer->timerLoading = 0;
+    if( pTimer->timerOverflow )
+    {
+        triggerInterrupt( pCpuState, TimerInterrupt );
+        pTimer->timerOverflow = 0;
+
+        *pTimer->pCounter = *pTimer->pModulo;
+        pTimer->timerLoading = 1;
+    }
+
+    if( pCpuState->flags.stop )
+    {
+        return;
+    }
+
+    const uint16_t newInternalDivCounter = pTimer->internalDivCounter + cycleCount;
+    updateTimerInternalDivCounterValue( pTimer, newInternalDivCounter );
 }
 
 void incrementLy( GBLcdRegisters* pLcdRegisters, uint8_t* pLy )
@@ -2190,6 +2271,10 @@ void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
                 const uint8_t interruptFlag = ( 1 << interruptIndex );
                 if( interruptHandleMask & interruptFlag )
                 {
+                    if( interruptFlag == TimerInterrupt )
+                    {
+                        BreakPointHook();
+                    }
                     push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
                     pCpuState->registers.PC = 0x40 + 0x08 * interruptIndex;
 
@@ -3624,81 +3709,109 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         return;
     }
 
+    if( pTimerState->timerLoading && address == K15_GB_MAPPED_IO_ADDRESS_TIMA )
+    {
+        //FK: Don't allow writes to TIMA during timer loading
+        return;
+    }
+
     uint8_t memoryValueBitMask      = 0xFF;
     uint8_t newMemoryValue          = pMemoryMapper->lastValueWritten;
     const uint8_t oldMemoryValue    = pMemoryMapper->pBaseAddress[ address ];
 
     switch( address )
     {
-        case 0xFF00:
+        case K15_GB_MAPPED_IO_ADDRESS_JOYP:
         {
             newMemoryValue = handleInput( newMemoryValue, pEmulatorInstance->joypadState );
             triggerInterrupt( pCpuState, JoypadInterrupt );
             break;
         }
-        case 0xFF02:
+        case K15_GB_MAPPED_IO_ADDRESS_SC:
         {
             memoryValueBitMask = 0b10000001;
             pSerialState->transferInProgress = ( newMemoryValue & 0x80 ) > 0u;
             break;
         }
-        case 0xFF04:
+        case K15_GB_MAPPED_IO_ADDRESS_DIV:
         {
             newMemoryValue = 0x00;
-            pTimerState->dividerCounter = 0;
+            updateTimerInternalDivCounterValue( pTimerState, 0u );
             break;
         }
-        case 0xFF07:
+        case K15_GB_MAPPED_IO_ADDRESS_TIMA:
+        {
+            //FK: Reset overflow flag if TIMA gets written directly after an overflow
+            //    This will effectively prevent the timer interrupt flag from being set
+            pTimerState->timerOverflow = 0;
+            break;
+        }
+        case K15_GB_MAPPED_IO_ADDRESS_TMA:
+        {
+            if( pTimerState->timerLoading )
+            {
+                *pTimerState->pCounter = newMemoryValue;
+            }
+            break;
+        }
+        case K15_GB_MAPPED_IO_ADDRESS_TAC:
         {
             memoryValueBitMask = 0b00000111;
 
-            const uint8_t timerControlValue = newMemoryValue;
+            const uint8_t timerControlValue = newMemoryValue & memoryValueBitMask;
             pTimerState->enableCounter = (timerControlValue >> 2) & 0x1;
-            pTimerState->counterTarget = readTimerControlFrequency( timerControlValue );
+            
+            const uint16_t oldCounterFrequencyBit = pTimerState->counterFrequencyBit;
+            const uint16_t newCounterFrequencyBit = convertTimerControlFrequencyBit( timerControlValue );
+
+            const uint8_t fallingEdge = ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) > 0 ) && 
+                                        ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) == 0 );
+
+            if( fallingEdge )
+            {
+                incrementTimerCounter( pTimerState );
+            }
+
+            pTimerState->counterFrequencyBit = newCounterFrequencyBit;
             break;
         }
-        case 0xFF0F:
-        {
-            memoryValueBitMask = 0b00011111;
-            break;
-        }
-        case 0xFF10:
+        case K15_GB_MAPPED_IO_ADDRESS_NR10:
         {
             memoryValueBitMask = 0b01111111;
             break;
         }
-        case 0xFF14:
-        case 0xFF19:
+        case K15_GB_MAPPED_IO_ADDRESS_NR14:
+        case K15_GB_MAPPED_IO_ADDRESS_NR24:
         {
             memoryValueBitMask = 0b11000111;
             break;
         }
-        case 0xFF1A:
+        case K15_GB_MAPPED_IO_ADDRESS_NR30:
         {
             memoryValueBitMask = 0b10000000;
             pApuState->waveChannel.channelEnabled = newMemoryValue & 0x80;
             break;
         }
-        case 0xFF1B:
+        case K15_GB_MAPPED_IO_ADDRESS_NR31:
         {
             pApuState->waveChannel.lengthTimer = newMemoryValue & 0x1F;
             break;
         }
-        case 0xFF1C:
+        case K15_GB_MAPPED_IO_ADDRESS_NR32:
         {
             memoryValueBitMask = 0b01100000;
             const uint8_t outputLevel = ( newMemoryValue >> 4 ) & 0x3;
             pApuState->waveChannel.volumeShift = convertOutputLevelToVolumeShift( outputLevel );
             break;
         }
-        case 0xFF1D:
+        case K15_GB_MAPPED_IO_ADDRESS_NR33:
         {
             //FK: Clear and set lower 8 bits of frequency
             pApuState->waveChannel.frequencyCycleCountTarget &= 0xFF;
             pApuState->waveChannel.frequencyCycleCountTarget |= newMemoryValue;
             break;
         }
-        case 0xFF1E:
+        case K15_GB_MAPPED_IO_ADDRESS_NR34:
         {
             memoryValueBitMask = 0b1100111;
 
@@ -3707,35 +3820,35 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             pApuState->waveChannel.frequencyCycleCountTarget |= ( newMemoryValue & 0x3 ) << 8;
             break;
         }
-        case 0xFF20:
+        case K15_GB_MAPPED_IO_ADDRESS_NR41:
         {
             memoryValueBitMask = 0b00111111;
             break;
         }
-        case 0xFF23:
+        case K15_GB_MAPPED_IO_ADDRESS_NR42:
         {
             memoryValueBitMask = 0b11000000;
             break;
         }
-        case 0xFF26:
+        case K15_GB_MAPPED_IO_ADDRESS_NR52:
         {
             memoryValueBitMask = 0b10001111;
             break;
         }
-        case 0xFF40:
+        case K15_GB_MAPPED_IO_ADDRESS_LCDC:
         {
             GBLcdControl lcdControlValue;
             memcpy(&lcdControlValue, &newMemoryValue, sizeof(GBLcdControl) );
             updatePPULcdControl( pPpuState, lcdControlValue );
             break;
         }
-        case 0xFF41:
+        case K15_GB_MAPPED_IO_ADDRESS_STAT:
         {
             //FK: LCD Status - only bit 3:6 are writeable
             memoryValueBitMask = 0x78;
             break;
         }
-        case 0xFF46:
+        case K15_GB_MAPPED_IO_ADDRESS_DMA:
         {
             //FK: Cpu can only write to HRAM during DMA transfer
             pCpuState->flags.dma = 1;
@@ -3744,16 +3857,22 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             pCpuState->dmaCycleCounter = 0;
             break;
         }
-        case 0xFF47:
+        case K15_GB_MAPPED_IO_ADDRESS_BGP:
         {
             extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, newMemoryValue );
             break;
         }
-        case 0xFF48:
-        case 0xFF49:
+        case K15_GB_MAPPED_IO_ADDRESS_OBP0:
+        case K15_GB_MAPPED_IO_ADDRESS_OBP1:
         {
-            const uint8_t paletteOffset = ( address - 0xFF48 ) * 4;
+            const uint8_t paletteOffset = ( address - K15_GB_MAPPED_IO_ADDRESS_OBP0 ) * 4;
             extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, newMemoryValue );
+            break;
+        }
+        case K15_GB_MAPPED_IO_ADDRESS_IF:
+        case K15_GB_MAPPED_IO_ADDRESS_IE:
+        {
+            memoryValueBitMask = 0b00011111;
             break;
         }
     }
@@ -3791,14 +3910,12 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         {
             pCpuState->registers.PC -= opcodeByteCount;
         }
+
+        if( opcode == 0x10 && pCpuState->flags.stop )
+        {
+            updateTimerInternalDivCounterValue( pTimerState, 0u );
+        }
     }
-
-    updateDmaState( pCpuState, pMemoryMapper, cycleCost ); 
-
-    updatePPU( pCpuState, pPpuState, cycleCost );
-    updateAPU( pApuState, cycleCost );
-    updateTimer( pCpuState, pTimerState, cycleCost );
-    updateSerial( pCpuState, pSerialState, cycleCost );
 
     if( pMemoryMapper->memoryAccess == GBMemoryAccess_Written )
     {
@@ -3811,7 +3928,13 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
             handleCartridgeWrites( pEmulatorInstance );
         }
     }
-    
+
+    updateDmaState( pCpuState, pMemoryMapper, cycleCost ); 
+    updatePPU( pCpuState, pPpuState, cycleCost );
+    updateAPU( pApuState, cycleCost );
+    updateTimer( pCpuState, pTimerState, cycleCost );
+    updateSerial( pCpuState, pSerialState, cycleCost );
+
     pMemoryMapper->memoryAccess         = GBMemoryAccess_None;
     pMemoryMapper->lcdStatus            = *pPpuState->lcdRegisters.pStatus;
     pMemoryMapper->lcdEnabled           = pPpuState->pLcdControl->enable;
