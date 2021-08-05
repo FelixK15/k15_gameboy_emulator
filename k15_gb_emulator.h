@@ -1325,16 +1325,16 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     //FK: defualt values from BGB
     //FK: A value of 11h indicates CGB (or GBA) hardware
     //pState->registers.A             = 0x11B0;
-    pState->registers.AF            = 0x01B0;
-    pState->registers.BC            = 0x0013;
-    pState->registers.DE            = 0x00D8;
-    pState->registers.HL            = 0x014D;
+    pState->registers.AF            = 0x0100;
+    pState->registers.BC            = 0xFF13;
+    pState->registers.DE            = 0x00C1;
+    pState->registers.HL            = 0x8403;
 
     pState->dmaCycleCounter         = 0;
     pState->cycleCounter            = 0;
 
     *pState->pIE = 0xF0;
-    *pState->pIF = 0xE0;
+    *pState->pIF = 0xE1;
 
     pState->flags.dma               = 0;
     pState->flags.IME               = 1;
@@ -1420,9 +1420,7 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
 
     //FK: set default state of LCDC (taken from bgb)
     pMemoryMapper->pBaseAddress[ 0xFF40 ] = 0x91;
-
-    //FK: set default state of STAT (taken from bgb)
-    pMemoryMapper->pBaseAddress[ 0xFF41 ] = 0x85;
+    pMemoryMapper->pBaseAddress[ 0xFF41 ] = 0x80;
 
     *pPpuState->lcdRegisters.pLy  = 0;
     *pPpuState->lcdRegisters.pLyc = 0;
@@ -1431,8 +1429,6 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     *pPpuState->lcdRegisters.pScx = 0;
     *pPpuState->lcdRegisters.pScy = 0;
 
-    //pPpuState->pLcdControl->enable = 1;
-    
     //FK: set default state of palettes (taken from bgb)
     extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, 0b11100100 );
     extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 0,  0b11100100 );
@@ -1450,7 +1446,7 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     clearGBFrameBuffer( pPpuState->pGBFrameBuffers[ pPpuState->activeFrameBufferIndex ] );
 }
 
-void initApuState( GBMemoryMapper* pMemoryMapper, GBApuState* pApuState)
+void initApuState( GBMemoryMapper* pMemoryMapper, GBApuState* pApuState )
 {
     patchIOApuMappedMemoryPointer( pMemoryMapper, pApuState );
     pApuState->frameSequencer.clockCounter = 0u;
@@ -1461,11 +1457,28 @@ void initApuState( GBMemoryMapper* pMemoryMapper, GBApuState* pApuState)
     pApuState->noiseChannel.lengthTimer = 0u;
 
     pApuState->waveChannel.cycleCount                   = 0u;
-    pApuState->waveChannel.frequencyCycleCountTarget    = 0u;    
+    pApuState->waveChannel.frequencyCycleCountTarget    = 0u;
     pApuState->waveChannel.channelEnabled               = 0u;
     pApuState->waveChannel.currentSample                = 0u;
     pApuState->waveChannel.samplePosition               = 0u;
     pApuState->waveChannel.lengthTimer                  = 0u;
+
+    pMemoryMapper->pBaseAddress[ 0xFF10 ] = 0x80;
+    pMemoryMapper->pBaseAddress[ 0xFF11 ] = 0xBF;
+    pMemoryMapper->pBaseAddress[ 0xFF12 ] = 0xF3;
+    pMemoryMapper->pBaseAddress[ 0xFF14 ] = 0xBF;
+    pMemoryMapper->pBaseAddress[ 0xFF16 ] = 0x3F;
+    pMemoryMapper->pBaseAddress[ 0xFF17 ] = 0x00;
+    pMemoryMapper->pBaseAddress[ 0xFF19 ] = 0xBF;
+    pMemoryMapper->pBaseAddress[ 0xFF1A ] = 0x7F;
+    pMemoryMapper->pBaseAddress[ 0xFF1C ] = 0x9F;
+    pMemoryMapper->pBaseAddress[ 0xFF1E ] = 0xBF;
+    pMemoryMapper->pBaseAddress[ 0xFF21 ] = 0x00;
+    pMemoryMapper->pBaseAddress[ 0xFF22 ] = 0x00;
+    pMemoryMapper->pBaseAddress[ 0xFF23 ] = 0xBF;
+    pMemoryMapper->pBaseAddress[ 0xFF24 ] = 0x77;
+    pMemoryMapper->pBaseAddress[ 0xFF25 ] = 0xF3;
+    pMemoryMapper->pBaseAddress[ 0xFF26 ] = 0xF1;
 }
 
 size_t calculateGBEmulatorMemoryRequirementsInBytes()
@@ -1503,7 +1516,8 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
     pEmulatorInstance->joypadState.dpadButtonMask    = 0;
 
     //FK: Reset joypad value
-    pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF00] = 0x0F;
+    pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF00] = 0xCF;
+    pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF04] = 0x19;
 }
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES
@@ -3750,7 +3764,9 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         {
             if( pTimerState->timerLoading )
             {
+                //If you write to TIMA during the cycle that TMA is being loaded to it [B], the write will be ignored and TMA value will be written to TIMA instead.
                 *pTimerState->pCounter = newMemoryValue;
+                return;
             }
             break;
         }
@@ -3909,11 +3925,6 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         if( haltBug )
         {
             pCpuState->registers.PC -= opcodeByteCount;
-        }
-
-        if( opcode == 0x10 && pCpuState->flags.stop )
-        {
-            updateTimerInternalDivCounterValue( pTimerState, 0u );
         }
     }
 
