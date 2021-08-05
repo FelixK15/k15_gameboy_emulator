@@ -3581,6 +3581,32 @@ void handleCartridgeWrites( GBEmulatorInstance* pEmulatorInstance )
     }
 }
 
+uint8_t isUnmappedIORegisterAddress( const uint16_t address )
+{
+    switch( address )
+    {
+        case 0xFF03:
+        case 0xFF08:
+        case 0xFF09:
+        case 0xFF0A:
+        case 0xFF0B:
+        case 0xFF0C:
+        case 0xFF0D:
+        case 0xFF0E:
+        case 0xFF15:
+        case 0xFF1F:
+        case 0xFF27:
+        case 0xFF28:
+        case 0xFF29:
+        {
+            return 1;
+            break;
+        }
+    }
+
+    return address >= 0xFF4C && address < 0xFF80;
+}
+
 void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
 {
     GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
@@ -3591,51 +3617,77 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
     GBSerialState* pSerialState     = pEmulatorInstance->pSerialState;
     GBCartridge* pCartridge         = pEmulatorInstance->pCartridge;
 
-    uint8_t writeMemoryValue    = 1;
-    uint8_t memoryValueBitMask  = 0xFF;
-    uint8_t memoryValue         = pMemoryMapper->lastValueWritten;
-    const uint16_t address      = pMemoryMapper->lastAddressWrittenTo;
+    const uint16_t address = pMemoryMapper->lastAddressWrittenTo;
+    if( isUnmappedIORegisterAddress( address ) )
+    {
+        //FK: Don't allow writes to unmapped IO registers
+        return;
+    }
+
+    uint8_t memoryValueBitMask      = 0xFF;
+    uint8_t newMemoryValue          = pMemoryMapper->lastValueWritten;
+    const uint8_t oldMemoryValue    = pMemoryMapper->pBaseAddress[ address ];
 
     switch( address )
     {
         case 0xFF00:
         {
-            memoryValue = handleInput( memoryValue, pEmulatorInstance->joypadState );
+            newMemoryValue = handleInput( newMemoryValue, pEmulatorInstance->joypadState );
             triggerInterrupt( pCpuState, JoypadInterrupt );
             break;
         }
         case 0xFF02:
         {
-            memoryValueBitMask = 0b10000011;
-            pSerialState->transferInProgress = ( memoryValue & 0x80 ) > 0u;
+            memoryValueBitMask = 0b10000001;
+            pSerialState->transferInProgress = ( newMemoryValue & 0x80 ) > 0u;
             break;
         }
         case 0xFF04:
         {
-            memoryValue = 0x00;
+            newMemoryValue = 0x00;
             pTimerState->dividerCounter = 0;
             break;
         }
         case 0xFF07:
         {
-            const uint8_t timerControlValue = memoryValue;
+            memoryValueBitMask = 0b00000111;
+
+            const uint8_t timerControlValue = newMemoryValue;
             pTimerState->enableCounter = (timerControlValue >> 2) & 0x1;
             pTimerState->counterTarget = readTimerControlFrequency( timerControlValue );
             break;
         }
+        case 0xFF0F:
+        {
+            memoryValueBitMask = 0b00011111;
+            break;
+        }
+        case 0xFF10:
+        {
+            memoryValueBitMask = 0b01111111;
+            break;
+        }
+        case 0xFF14:
+        case 0xFF19:
+        {
+            memoryValueBitMask = 0b11000111;
+            break;
+        }
         case 0xFF1A:
         {
-            pApuState->waveChannel.channelEnabled = memoryValue & 0x80;
+            memoryValueBitMask = 0b10000000;
+            pApuState->waveChannel.channelEnabled = newMemoryValue & 0x80;
             break;
         }
         case 0xFF1B:
         {
-            pApuState->waveChannel.lengthTimer = memoryValue & 0x1F;
+            pApuState->waveChannel.lengthTimer = newMemoryValue & 0x1F;
             break;
         }
         case 0xFF1C:
         {
-            const uint8_t outputLevel = ( memoryValue >> 4 ) & 0x3;
+            memoryValueBitMask = 0b01100000;
+            const uint8_t outputLevel = ( newMemoryValue >> 4 ) & 0x3;
             pApuState->waveChannel.volumeShift = convertOutputLevelToVolumeShift( outputLevel );
             break;
         }
@@ -3643,20 +3695,37 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         {
             //FK: Clear and set lower 8 bits of frequency
             pApuState->waveChannel.frequencyCycleCountTarget &= 0xFF;
-            pApuState->waveChannel.frequencyCycleCountTarget |= memoryValue;
+            pApuState->waveChannel.frequencyCycleCountTarget |= newMemoryValue;
             break;
         }
         case 0xFF1E:
         {
+            memoryValueBitMask = 0b1100111;
+
             //FK: clear an set higher 3 bits of frequency
             pApuState->waveChannel.frequencyCycleCountTarget &= 0x700;
-            pApuState->waveChannel.frequencyCycleCountTarget |= ( memoryValue & 0x3 ) << 8;
+            pApuState->waveChannel.frequencyCycleCountTarget |= ( newMemoryValue & 0x3 ) << 8;
+            break;
+        }
+        case 0xFF20:
+        {
+            memoryValueBitMask = 0b00111111;
+            break;
+        }
+        case 0xFF23:
+        {
+            memoryValueBitMask = 0b11000000;
+            break;
+        }
+        case 0xFF26:
+        {
+            memoryValueBitMask = 0b10001111;
             break;
         }
         case 0xFF40:
         {
             GBLcdControl lcdControlValue;
-            memcpy(&lcdControlValue, &memoryValue, sizeof(GBLcdControl) );
+            memcpy(&lcdControlValue, &newMemoryValue, sizeof(GBLcdControl) );
             updatePPULcdControl( pPpuState, lcdControlValue );
             break;
         }
@@ -3666,41 +3735,30 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             memoryValueBitMask = 0x78;
             break;
         }
-        case 0xFF44:
-        {
-            //FK: Read only
-            writeMemoryValue = 0;
-            break;
-        }
         case 0xFF46:
         {
             //FK: Cpu can only write to HRAM during DMA transfer
             pCpuState->flags.dma = 1;
-            pCpuState->dmaAddress = ( memoryValue << 8 );
+            pCpuState->dmaAddress = ( newMemoryValue << 8 );
             //FK: Count up to 160 cycles for the dma flag to be reset
             pCpuState->dmaCycleCounter = 0;
             break;
         }
         case 0xFF47:
         {
-            extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, memoryValue );
+            extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, newMemoryValue );
             break;
         }
         case 0xFF48:
         case 0xFF49:
         {
             const uint8_t paletteOffset = ( address - 0xFF48 ) * 4;
-            extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, memoryValue );
+            extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, newMemoryValue );
             break;
         }
     }
 
-    if( !writeMemoryValue )
-    {
-        return;
-    }
-
-    pMemoryMapper->pBaseAddress[ address ] = memoryValue & memoryValueBitMask;
+    pMemoryMapper->pBaseAddress[ address ] = ( newMemoryValue & memoryValueBitMask ) | ( oldMemoryValue & ~memoryValueBitMask );
 }
 
 uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )

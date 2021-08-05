@@ -33,7 +33,7 @@
             //## BITS ACCEPTANCE
             //"args": [ "-r", "testroms/acceptance/bits/mem_oam.gb"],                           //PASS
             //"args": [ "-r", "testroms/acceptance/bits/reg_f.gb"],                             //PASS
-            "args": [ "-r", "testroms/acceptance/bits/unused_hwio-GS.gb"],                    //FAIL
+            //"args": [ "-r", "testroms/acceptance/bits/unused_hwio-GS.gb"],                    //PASS
             
             //## INSTR ACCEPTANCE
             //"args": [ "-r", "testroms/acceptance/instr/daa.gb"],                              //PASS
@@ -127,6 +127,14 @@
             "type": "python",
             "request":"launch",
             "program": "convert_title_screen.py",
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "name": "convert bitmap font to c array",
+            "type": "python",
+            "request":"launch",
+            "program": "convert_bitmap_font_to_c_array.py",
+            "args": [ "-gw", "10", "-gh", "10", "-gr", "16", "-i", "gb_font.bmp", "-o", "k15_gb_font.h"],
             "cwd": "${workspaceFolder}",
         }
     ]
