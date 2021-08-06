@@ -2044,6 +2044,7 @@ void updateTimerInternalDivCounterValue( GBTimerState* pTimer, const uint16_t in
     const uint16_t newInternalDivCounter = internalDivCounter;
     const uint16_t oldInternalDivCounter = pTimer->internalDivCounter;
     pTimer->internalDivCounter = newInternalDivCounter;
+    *pTimer->pDivider = pTimer->internalDivCounter >> 8;
 
     if( !pTimer->enableCounter )
     {
@@ -2057,6 +2058,15 @@ void updateTimerInternalDivCounterValue( GBTimerState* pTimer, const uint16_t in
     if( fallingEdge )
     {
         incrementTimerCounter( pTimer );
+    }
+}
+
+void clockTimerInternalDivCounterForCycles( GBTimerState* pTimerState, uint8_t cycleCount )
+{
+    while( cycleCount > 0 )
+    {
+        --cycleCount;
+        updateTimerInternalDivCounterValue( pTimerState, pTimerState->internalDivCounter + 1 );
     }
 }
 
@@ -2077,8 +2087,7 @@ void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cyc
         return;
     }
 
-    const uint16_t newInternalDivCounter = pTimer->internalDivCounter + cycleCount;
-    updateTimerInternalDivCounterValue( pTimer, newInternalDivCounter );
+    clockTimerInternalDivCounterForCycles( pTimer, cycleCount );
 }
 
 void incrementLy( GBLcdRegisters* pLcdRegisters, uint8_t* pLy )
@@ -3755,6 +3764,11 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         }
         case K15_GB_MAPPED_IO_ADDRESS_TIMA:
         {
+            if( pTimerState->timerLoading )
+            {
+                return;
+            }
+
             //FK: Reset overflow flag if TIMA gets written directly after an overflow
             //    This will effectively prevent the timer interrupt flag from being set
             pTimerState->timerOverflow = 0;
@@ -3764,7 +3778,8 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         {
             if( pTimerState->timerLoading )
             {
-                //If you write to TIMA during the cycle that TMA is being loaded to it [B], the write will be ignored and TMA value will be written to TIMA instead.
+                //FK: If you write to TIMA during the cycle that TMA is being loaded to it, 
+                //    the write will be ignored and TMA value will be written to TIMA instead.
                 *pTimerState->pCounter = newMemoryValue;
                 return;
             }
@@ -3775,10 +3790,16 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             memoryValueBitMask = 0b00000111;
 
             const uint8_t timerControlValue = newMemoryValue & memoryValueBitMask;
-            pTimerState->enableCounter = (timerControlValue >> 2) & 0x1;
+            pTimerState->enableCounter = ( timerControlValue & 0x4 ) > 0;
             
             const uint16_t oldCounterFrequencyBit = pTimerState->counterFrequencyBit;
             const uint16_t newCounterFrequencyBit = convertTimerControlFrequencyBit( timerControlValue );
+            pTimerState->counterFrequencyBit = newCounterFrequencyBit;
+
+            if( !pTimerState->enableCounter )
+            {
+                break;
+            }
 
             const uint8_t fallingEdge = ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) > 0 ) && 
                                         ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) == 0 );
@@ -3787,8 +3808,6 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             {
                 incrementTimerCounter( pTimerState );
             }
-
-            pTimerState->counterFrequencyBit = newCounterFrequencyBit;
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_NR10:
