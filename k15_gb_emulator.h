@@ -3801,6 +3801,7 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
                 break;
             }
 
+            //FK: Check for falling edge with new frequency - a falling edge results in a timer increment!
             const uint8_t fallingEdge = ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) > 0 ) && 
                                         ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) == 0 );
 
@@ -3934,17 +3935,13 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         const uint8_t haltBug = pCpuState->flags.haltBug;
         pCpuState->flags.haltBug = 0;
 
-        const uint16_t opcodeAddress    = pCpuState->registers.PC++;
+        //FK: Don't increment PC if entered halt bug state as part of the halt bug emulation
+        const uint16_t opcodeAddress    = haltBug ? pCpuState->registers.PC : pCpuState->registers.PC++;
         const uint8_t opcode            = read8BitValueFromMappedMemory( pMemoryMapper, opcodeAddress );
         const uint8_t opcodeByteCount   = opcode == 0xCB ? cbPrefixedOpcodes[opcode].byteCount : unprefixedOpcodes[opcode].byteCount;
 
         addOpcodeToOpcodeHistory( pEmulatorInstance, opcodeAddress, opcode );
         cycleCost = executeInstruction( pCpuState, pMemoryMapper, opcode );
-
-        if( haltBug )
-        {
-            pCpuState->registers.PC -= opcodeByteCount;
-        }
     }
 
     if( pMemoryMapper->memoryAccess == GBMemoryAccess_Written )
