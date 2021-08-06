@@ -399,13 +399,16 @@ struct GBPpuState
     uint8_t*            pTileBlocks[ 3 ];
     uint8_t*            pGBFrameBuffers[ gbFrameBufferCount ];
 
+    uint32_t            cycleCounter;
+    uint32_t            dotCounter;
+
     GBObjectAttributes  scanlineSprites[ gbSpritesPerScanline ];
+    
+    uint8_t             objectMonochromePlatte[ 8 ];
+    uint8_t             backgroundMonochromePalette[ 4 ];
+
     uint8_t             scanlineSpriteCounter;
     uint8_t             activeFrameBufferIndex;
-    uint8_t             objectMonochromePlatte[ 8 ];
-    uint32_t            dotCounter;
-    uint32_t            cycleCounter;
-    uint8_t             backgroundMonochromePalette[ 4 ];
 };
 
 enum GBMemoryAccess
@@ -2061,12 +2064,36 @@ void updateTimerInternalDivCounterValue( GBTimerState* pTimer, const uint16_t in
     }
 }
 
-void clockTimerInternalDivCounterForCycles( GBTimerState* pTimerState, uint8_t cycleCount )
+void tickTimerInternalDivCounterForCycles( GBTimerState* pTimerState, uint8_t cycleCount )
 {
+    const uint16_t oldInternalDivCounter = pTimerState->internalDivCounter;
+    const uint16_t newInternalDivCounter = oldInternalDivCounter + cycleCount;
+    pTimerState->internalDivCounter = newInternalDivCounter;
+    *pTimerState->pDivider = newInternalDivCounter >> 8;
+
+    if( !pTimerState->enableCounter )
+    {
+        return;
+    }
+
+    const uint16_t counterFrequencyMask = 1u << pTimerState->counterFrequencyBit;
+
+    //FK: check for falling edge for each cycle since the timer can be incremented multiple times per instruction
+    uint16_t currentInternalDivCounter  = oldInternalDivCounter;
+    uint16_t nextInternalDivCounter     = currentInternalDivCounter + 1;
     while( cycleCount > 0 )
     {
+        const uint8_t fallingEdge = ( ( counterFrequencyMask & currentInternalDivCounter ) > 0 ) && 
+                                    ( ( counterFrequencyMask & nextInternalDivCounter ) == 0 );
+
+        currentInternalDivCounter = nextInternalDivCounter++;
+
+        if( fallingEdge )
+        {
+            incrementTimerCounter( pTimerState );
+        }
+
         --cycleCount;
-        updateTimerInternalDivCounterValue( pTimerState, pTimerState->internalDivCounter + 1 );
     }
 }
 
@@ -2087,7 +2114,7 @@ void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cyc
         return;
     }
 
-    clockTimerInternalDivCounterForCycles( pTimer, cycleCount );
+    tickTimerInternalDivCounterForCycles( pTimer, cycleCount );
 }
 
 void incrementLy( GBLcdRegisters* pLcdRegisters, uint8_t* pLy )
