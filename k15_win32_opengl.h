@@ -164,6 +164,7 @@ typedef GLenum          (APIENTRY *PFNGLGETERRORPROC) (void);
 typedef GLvoid 			(APIENTRY *PFNGLBUFFERSTORAGEPROC) (GLenum target, GLsizeiptr size, const void *data, GLbitfield flags);
 typedef GLvoid*			(APIENTRY *PFNGLMAPBUFFERPROC) (GLenum target, GLenum access);
 typedef GLboolean 		(APIENTRY *PFNGLUNMAPBUFFERPROC) (GLenum target);
+typedef GLvoid 			(APIENTRY *PFNGLCLEARCOLORPROC) (GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 
 PFNWGLSWAPINTERVALEXTPROC 			w32glSwapIntervalEXT 			= nullptr;
 PFNWGLGETSWAPINTERVALEXTPROC		w32glGetSwapIntervalEXT			= nullptr;
@@ -176,6 +177,7 @@ PFNWGLGETPROCADDRESSPROC            w32glGetProcAddress             = nullptr;
 PFNWGLMAKECURRENTPROC               w32glMakeCurrent                = nullptr;
 
 PFNGLGENTEXTURESPROC				glGenTextures					= nullptr;
+PFNGLCLEARCOLORPROC					glClearColor					= nullptr;
 PFNGLBINDTEXTUREPROC				glBindTexture					= nullptr;
 PFNGLTEXPARAMETERIPROC				glTexParameteri					= nullptr;
 PFNGLVIEWPORTPROC					glViewport						= nullptr;
@@ -241,6 +243,7 @@ void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
 
 	//FK: the following gl functions are part of the opengl32.dll and can not be loaded by wglGetProcAddress
 	glGenTextures 			= (PFNGLGENTEXTURESPROC)GetProcAddress(pOpenGL32Module, "glGenTextures");
+	glClearColor 			= (PFNGLCLEARCOLORPROC)GetProcAddress(pOpenGL32Module, "glClearColor");
 	glBindTexture 			= (PFNGLBINDTEXTUREPROC)GetProcAddress(pOpenGL32Module, "glBindTexture");
 	glTexParameteri			= (PFNGLTEXPARAMETERIPROC)GetProcAddress(pOpenGL32Module, "glTexParameteri");
 	glViewport				= (PFNGLVIEWPORTPROC)GetProcAddress(pOpenGL32Module, "glViewport");
