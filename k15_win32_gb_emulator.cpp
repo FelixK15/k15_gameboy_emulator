@@ -1197,6 +1197,7 @@ void handleMouseMove( Win32ApplicationContext* pContext, LPARAM lparam )
 
 void drawGBFrameBuffer( HDC pDeviceContext )
 {
+	glClear( GL_COLOR_BUFFER_BIT );
 	//FK: Draw gb frame to backbuffer
 	glDrawArrays( GL_TRIANGLES, 0, 6 );
 }
@@ -1576,6 +1577,7 @@ void setupOpenGL( Win32ApplicationContext* pContext )
 
 	constexpr size_t gameboyFrameVertexBufferSizeInBytes = sizeof(float) * 4 * 6;
 
+	glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
 	glGenBuffers( 1, &pContext->gameboyFrameVertexBuffer );
 	glBindBuffer( GL_ARRAY_BUFFER, pContext->gameboyFrameVertexBuffer );
 	glBufferStorage( GL_ARRAY_BUFFER, gameboyFrameVertexBufferSizeInBytes, nullptr, GL_MAP_WRITE_BIT );
