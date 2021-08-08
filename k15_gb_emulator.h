@@ -86,21 +86,7 @@ enum
     K15_GB_COUNTER_FREQUENCY_BIT_11   = 7,
 };
 
-enum GBStateLoadResult
-{
-    K15_GB_STATE_LOAD_SUCCESS = 0,
-    K15_GB_STATE_LOAD_FAILED_OLD_VERSION,
-    K15_GB_STATE_LOAD_FAILED_INCOMPATIBLE_DATA,
-    K15_GB_STATE_LOAD_FAILED_WRONG_ROM
-};
-
-enum GBMapCartridgeResult
-{
-    K15_GB_CARTRIDGE_MAPPED_SUCCESSFULLY = 0,
-    K15_GB_CARTRIDGE_TYPE_UNSUPPORTED
-};
-
-enum GBMappedIOAdresses
+enum
 {
     K15_GB_MAPPED_IO_ADDRESS_JOYP   = 0xFF00,
     K15_GB_MAPPED_IO_ADDRESS_SC     = 0xFF02,
@@ -137,15 +123,41 @@ enum GBMappedIOAdresses
 
     K15_GB_MAPPED_IO_ADDRESS_LCDC   = 0xFF40,
     K15_GB_MAPPED_IO_ADDRESS_STAT   = 0xFF41,
-
+    K15_GB_MAPPED_IO_ADDRESS_SCY    = 0xFF42,
+    K15_GB_MAPPED_IO_ADDRESS_SCX    = 0xFF43,
+    K15_GB_MAPPED_IO_ADDRESS_LY     = 0xFF44,
+    K15_GB_MAPPED_IO_ADDRESS_LYC    = 0xFF45,
     K15_GB_MAPPED_IO_ADDRESS_DMA    = 0xFF46,
-
     K15_GB_MAPPED_IO_ADDRESS_BGP    = 0xFF47,
     K15_GB_MAPPED_IO_ADDRESS_OBP0   = 0xFF48,
     K15_GB_MAPPED_IO_ADDRESS_OBP1   = 0xFF49,
+    K15_GB_MAPPED_IO_ADDRESS_WY     = 0xFF4A,
+    K15_GB_MAPPED_IO_ADDRESS_WX     = 0xFF4B,
 
     K15_GB_MAPPED_IO_ADDRESS_IF     = 0xFF0F,
-    K15_GB_MAPPED_IO_ADDRESS_IE     = 0xFFFF
+};
+
+enum class GBPixelFetcherState
+{
+    GetTile,
+    GetTileDataLow,
+    GetTileDataHigh,
+    Sleep,
+    PushPixelRowToFifo
+};
+
+enum class GBStateLoadResult
+{
+    Success,
+    OldVersion,
+    IncompatibleData,
+    WrongRom
+};
+
+enum class GBLoadRomResult
+{
+    Success,
+    RomTypeUnsupported
 };
 
 struct GBEmulatorJoypadState
@@ -363,50 +375,79 @@ struct GBPalette
 struct GBLcdStatus
 {
     uint8_t mode                        : 2;
-    uint8_t LycEqLyFlag                 : 1;
+    uint8_t lycEqLyFlag                 : 1;
     uint8_t enableMode0HBlankInterrupt  : 1;
     uint8_t enableMode1VBlankInterrupt  : 1;
     uint8_t enableMode2OAMInterrupt     : 1;
     uint8_t enableLycEqLyInterrupt      : 1;
 };
 
-struct GBLcdRegisters
-{
-    GBLcdStatus*    pStatus;
-    uint8_t*        pScy;
-    uint8_t*        pScx;
-    uint8_t*        pLy;
-    uint8_t*        pLyc;
-    uint8_t*        pWy;
-    uint8_t*        pWx;
-};
-
 struct GBPpuFlags
 {
-    uint8_t drawObjects     : 1;
-    uint8_t drawBackground  : 1;
-    uint8_t drawWindow      : 1;
+    uint8_t oamSearched                     : 1;
+    uint8_t lcdEnabled                      : 1;
+    uint8_t windowEnabled                   : 1;
+    uint8_t windowTileMapArea               : 1;
+    uint8_t bgAndWindowTileDataArea         : 1;
+    uint8_t bgTileMapArea                   : 1;
+    uint8_t tallSprites                     : 1;
+    uint8_t spritesEnabled                  : 1;
+    uint8_t bgAndWindowPriority             : 1;
+    uint8_t triggerLcdStatInterruptOnMode0  : 1;
+    uint8_t triggerLcdStatInterruptOnMode1  : 1;
+    uint8_t triggerLcdStatInterruptOnMode2  : 1;
+    uint8_t triggerLcdStatInterruptLycEqLy  : 1;
+    uint8_t statInterruptLine               : 1;
+};
+
+struct GBPpuPixelFetcher
+{
+    uint16_t cycleCounter;
+    uint16_t tileData;
+    
+    GBPixelFetcherState state;
+    uint8_t             posX;
+    uint8_t             tileIndex;
+};
+
+struct GBPpuPixelFifo
+{
+    GBPalette   palette;
+
+    uint8_t     pixelCount;
+    uint32_t    pixelData; //FK: holds 16 pixel with 2 bits per pixel
 };
 
 struct GBPpuState
 {
-    GBPpuFlags          flags;
-    GBLcdRegisters      lcdRegisters;
     GBObjectAttributes* pOAM;
-    GBLcdControl*       pLcdControl;
-    GBPalette*          pPalettes;
+
+    GBLcdStatus*        pLcdStatus;
+    uint8_t*            pLyc;
     uint8_t*            pBackgroundOrWindowTileIds[ 2 ];
     uint8_t*            pTileBlocks[ 3 ];
     uint8_t*            pGBFrameBuffers[ gbFrameBufferCount ];
 
     uint32_t            cycleCounter;
-    uint32_t            dotCounter;
 
+    GBPpuPixelFetcher   backgroundPixelFetcher;
+    GBPpuPixelFetcher   spritePixelFetcher;
+    GBPpuPixelFifo      backgroundPixelFifo;
+    GBPpuPixelFifo      spritePixelFifo;
     GBObjectAttributes  scanlineSprites[ gbSpritesPerScanline ];
     
-    uint8_t             objectMonochromePlatte[ 8 ];
-    uint8_t             backgroundMonochromePalette[ 4 ];
+    GBPalette           objectMonochromePalettes[ 2 ];
+    GBPalette           backgroundMonochromePalette;
 
+    GBPpuFlags          flags;
+    uint8_t             lcdMode;
+    uint8_t             screenPosX;
+    uint8_t             screenPosY;
+    uint8_t             windowPosX;
+    uint8_t             windowPosY;
+    uint8_t             pixelFetcherX;
+    uint8_t             scanlineIndexCompare;
+    uint8_t             scanlineIndex;
     uint8_t             scanlineSpriteCounter;
     uint8_t             activeFrameBufferIndex;
 };
@@ -727,23 +768,14 @@ void patchIOSerialMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBSerialSt
 void patchIOPpuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
 {
     pPpuState->pOAM                             = (GBObjectAttributes*)(pMemoryMapper->pBaseAddress + 0xFE00);
-    pPpuState->pLcdControl                      = (GBLcdControl*)(pMemoryMapper->pBaseAddress + 0xFF40);
-    pPpuState->pPalettes                        = (GBPalette*)(pMemoryMapper->pBaseAddress + 0xFF47);
     pPpuState->pTileBlocks[0]                   = pMemoryMapper->pBaseAddress + 0x8000;
     pPpuState->pTileBlocks[1]                   = pMemoryMapper->pBaseAddress + 0x8080;
     pPpuState->pTileBlocks[2]                   = pMemoryMapper->pBaseAddress + 0x9000;
     pPpuState->pBackgroundOrWindowTileIds[0]    = pMemoryMapper->pBaseAddress + 0x9800;
     pPpuState->pBackgroundOrWindowTileIds[1]    = pMemoryMapper->pBaseAddress + 0x9C00;
-    pPpuState->dotCounter                       = 0;
     pPpuState->cycleCounter                     = 0;
 
-    pPpuState->lcdRegisters.pStatus = (GBLcdStatus*)(pMemoryMapper->pBaseAddress + 0xFF41);
-    pPpuState->lcdRegisters.pScy    = pMemoryMapper->pBaseAddress + 0xFF42;
-    pPpuState->lcdRegisters.pScx    = pMemoryMapper->pBaseAddress + 0xFF43;
-    pPpuState->lcdRegisters.pLy     = pMemoryMapper->pBaseAddress + 0xFF44;
-    pPpuState->lcdRegisters.pLyc    = pMemoryMapper->pBaseAddress + 0xFF45;
-    pPpuState->lcdRegisters.pWy     = pMemoryMapper->pBaseAddress + 0xFF4A;
-    pPpuState->lcdRegisters.pWx     = pMemoryMapper->pBaseAddress + 0xFF4B;
+    pPpuState->pLcdStatus = (GBLcdStatus*)(pMemoryMapper->pBaseAddress + 0xFF41);
 }
 
 void patchIOApuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBApuState* pApuState )
@@ -1018,7 +1050,7 @@ GBStateLoadResult loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, co
 
     if( fourCC != gbStateFourCC )
     {
-        return K15_GB_STATE_LOAD_FAILED_INCOMPATIBLE_DATA;
+        return GBStateLoadResult::IncompatibleData;
     }
 
     const uint16_t stateCartridgeChecksum = *(uint16_t*)pStateMemory;
@@ -1029,7 +1061,7 @@ GBStateLoadResult loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, co
     const uint16_t cartridgeChecksum = cartridgeHeader.checksumHigher << 8 | cartridgeHeader.checksumLower;
     if( cartridgeChecksum != stateCartridgeChecksum )
     {
-        return K15_GB_STATE_LOAD_FAILED_WRONG_ROM;
+        return GBStateLoadResult::WrongRom;
     }
 
     const uint8_t stateVersion = *pStateMemory;
@@ -1037,7 +1069,7 @@ GBStateLoadResult loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, co
 
     if( stateVersion != gbStateVersion )
     {
-        return K15_GB_STATE_LOAD_FAILED_OLD_VERSION;
+        return GBStateLoadResult::OldVersion;
     }
 
     GBMemoryMapper* pMemoryMapper = pEmulatorInstance->pMemoryMapper;
@@ -1088,14 +1120,14 @@ GBStateLoadResult loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, co
     pEmulatorInstance->pPpuState->pGBFrameBuffers[ 0 ] = pGBFrameBuffers[ 0 ];
     pEmulatorInstance->pPpuState->pGBFrameBuffers[ 1 ] = pGBFrameBuffers[ 1 ];
 
-    pMemoryMapper->lcdStatus  = *pEmulatorInstance->pPpuState->lcdRegisters.pStatus;
+    pMemoryMapper->lcdStatus  = *pEmulatorInstance->pPpuState->pLcdStatus;
     pMemoryMapper->dmaActive  = pEmulatorInstance->pCpuState->flags.dma;
-    pMemoryMapper->lcdEnabled = pEmulatorInstance->pPpuState->pLcdControl->enable;
+    pMemoryMapper->lcdEnabled = pEmulatorInstance->pPpuState->flags.lcdEnabled;
     pMemoryMapper->ramEnabled = pEmulatorInstance->pCartridge->ramEnabled;
 
     const uint8_t* pCompressedMemory = pStateMemory;
     uncompressMemoryBlockRLE( pMemoryMapper->pBaseAddress + 0x8000, pCompressedMemory );
-    return K15_GB_STATE_LOAD_SUCCESS;
+    return GBStateLoadResult::Success;
 }
 
 uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
@@ -1274,12 +1306,12 @@ uint8_t isCartridgeTypeSupported( const GBCartridgeType cartridgeType )
     return 0;
 }
 
-GBMapCartridgeResult mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory, uint8_t* pRamMemory )
+GBLoadRomResult mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper, const uint8_t* pRomMemory, uint8_t* pRamMemory )
 {
     const GBCartridgeHeader header = getGBCartridgeHeader( pRomMemory );
     if( !isCartridgeTypeSupported( header.cartridgeType ) )
     {
-        return K15_GB_CARTRIDGE_TYPE_UNSUPPORTED;
+        return GBLoadRomResult::RomTypeUnsupported;
     }
 
     const uint32_t romSizeInBytes = mapRomSizeToByteSize( header.romSize );
@@ -1303,7 +1335,7 @@ GBMapCartridgeResult mapCartridgeMemory( GBCartridge* pCartridge, GBMemoryMapper
         mapCartridgeRamBank( pCartridge, pMemoryMapper, 0 );
     }
 
-    return K15_GB_CARTRIDGE_MAPPED_SUCCESSFULLY;
+    return GBLoadRomResult::Success;
 }
 
 void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
@@ -1401,12 +1433,12 @@ void clearGBFrameBuffer( uint8_t* pGBFrameBuffer )
     memset( pGBFrameBuffer, 0, gbFrameBufferSizeInBytes );
 }
 
-void extractMonochromePaletteFrom8BitValue( uint8_t* pMonochromePalette, uint8_t value )
+void extractMonochromePaletteFrom8BitValue( GBPalette* pMonochromePalette, uint8_t value )
 {
-    pMonochromePalette[0] = ( value >> 0 ) & 0x3;
-    pMonochromePalette[1] = ( value >> 2 ) & 0x3;
-    pMonochromePalette[2] = ( value >> 4 ) & 0x3;
-    pMonochromePalette[3] = ( value >> 6 ) & 0x3;
+    pMonochromePalette->color0 = ( value >> 0 ) & 0x3;
+    pMonochromePalette->color1 = ( value >> 2 ) & 0x3;
+    pMonochromePalette->color2 = ( value >> 4 ) & 0x3;
+    pMonochromePalette->color3 = ( value >> 6 ) & 0x3;
 }
 
 void initPpuFrameBuffers( GBPpuState* pPpuState, uint8_t* pMemory )
@@ -1425,24 +1457,25 @@ void initPpuState( GBMemoryMapper* pMemoryMapper, GBPpuState* pPpuState )
     pMemoryMapper->pBaseAddress[ 0xFF40 ] = 0x91;
     pMemoryMapper->pBaseAddress[ 0xFF41 ] = 0x80;
 
-    *pPpuState->lcdRegisters.pLy  = 0;
-    *pPpuState->lcdRegisters.pLyc = 0;
-    *pPpuState->lcdRegisters.pWx  = 0;
-    *pPpuState->lcdRegisters.pWy  = 0;
-    *pPpuState->lcdRegisters.pScx = 0;
-    *pPpuState->lcdRegisters.pScy = 0;
-
     //FK: set default state of palettes (taken from bgb)
-    extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, 0b11100100 );
-    extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 0,  0b11100100 );
-    extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + 4,  0b11100100 );
+    extractMonochromePaletteFrom8BitValue( &pPpuState->backgroundMonochromePalette,   0b11100100 );
+    extractMonochromePaletteFrom8BitValue( &pPpuState->objectMonochromePalettes[ 0 ], 0b11100100 );
+    extractMonochromePaletteFrom8BitValue( &pPpuState->objectMonochromePalettes[ 1 ], 0b11100100 );
 
-    pPpuState->dotCounter = 0;
     pPpuState->scanlineSpriteCounter = 0;
 
-    pPpuState->flags.drawBackground = 1;
-    pPpuState->flags.drawWindow     = 1;
-    pPpuState->flags.drawObjects    = 1;
+    pPpuState->flags.lcdEnabled                     = 1;
+    pPpuState->flags.windowEnabled                  = 0;
+    pPpuState->flags.windowTileMapArea              = 0;
+    pPpuState->flags.bgAndWindowTileDataArea        = 1;
+    pPpuState->flags.bgTileMapArea                  = 0;
+    pPpuState->flags.tallSprites                    = 0;
+    pPpuState->flags.spritesEnabled                 = 0;
+    pPpuState->flags.bgAndWindowPriority            = 1;
+    pPpuState->flags.triggerLcdStatInterruptOnMode0 = 0;
+    pPpuState->flags.triggerLcdStatInterruptOnMode1 = 0;
+    pPpuState->flags.triggerLcdStatInterruptOnMode2 = 0;
+    pPpuState->flags.triggerLcdStatInterruptLycEqLy = 0;
 
     pPpuState->activeFrameBufferIndex = 0;
 
@@ -1586,7 +1619,7 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     return pEmulatorInstance;
 }
 
-GBMapCartridgeResult loadGBEmulatorRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory, uint8_t* pRamMemory )
+GBLoadRomResult loadGBEmulatorRom( GBEmulatorInstance* pEmulator, const uint8_t* pRomMemory, uint8_t* pRamMemory )
 {
     pEmulator->pCartridge->pRomBaseAddress = nullptr;
     pEmulator->pCartridge->mappedRom0BankNumber = 0xFFu;
@@ -1609,6 +1642,7 @@ uint8_t* getActiveFrameBuffer( GBPpuState* pPpuState )
     return pPpuState->pGBFrameBuffers[ pPpuState->activeFrameBufferIndex ];
 }
 
+#if 0
 void pushSpritePixelsToScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     if( pPpuState->scanlineSpriteCounter == 0 )
@@ -1876,6 +1910,7 @@ void pushBackgroundPixelsToScanline( GBPpuState* pPpuState, const uint8_t* pTile
         pFrameBufferPixelData[scanlineByteIndex] = frameBufferByte;
     }
 }
+#endif
 
 void clearGBFrameBufferScanline( uint8_t* pGBFrameBuffer, uint8_t scanlineYCoordinate )
 {
@@ -1884,7 +1919,7 @@ void clearGBFrameBufferScanline( uint8_t* pGBFrameBuffer, uint8_t scanlineYCoord
 
 void collectScanlineSprites( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
-    const uint8_t objHeight = pPpuState->pLcdControl->objSize == 0 ? 8 : 16;
+    const uint8_t objHeight = pPpuState->flags.tallSprites ? 16 : 8;
 
     uint8_t spriteCounter = 0;
     for( size_t spriteIndex = 0u; spriteIndex < gbObjectAttributeCapacity; ++spriteIndex )
@@ -1916,6 +1951,7 @@ void collectScanlineSprites( GBPpuState* pPpuState, uint8_t scanlineYCoordinate 
 #endif
 }
 
+#if 0
 void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
 {
     uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
@@ -1962,26 +1998,11 @@ void drawScanline( GBPpuState* pPpuState, uint8_t scanlineYCoordinate )
         pushSpritePixelsToScanline( pPpuState, scanlineYCoordinate );
     }
 }
+#endif
 
 void triggerInterrupt( GBCpuState* pCpuState, GBCpuInterrupt interruptFlag )
 {
     *pCpuState->pIF |= (uint8_t)interruptFlag;
-}
-
-void updatePPULcdControl( GBPpuState* pPpuState, GBLcdControl lcdControlValue )
-{
-    if( lcdControlValue.enable != pPpuState->pLcdControl->enable )
-    {
-        if( !lcdControlValue.enable )
-        {
-            clearGBFrameBuffer( pPpuState->pGBFrameBuffers[ pPpuState->activeFrameBufferIndex ] );
-            *pPpuState->lcdRegisters.pLy = 0;
-            pPpuState->lcdRegisters.pStatus->mode = 0;
-            pPpuState->dotCounter = 0;
-        }
-    }
-
-    *pPpuState->pLcdControl = lcdControlValue;
 }
 
 uint8_t convertTimerControlFrequencyBit( const uint8_t timerControlValue )
@@ -2117,17 +2138,293 @@ void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cyc
     tickTimerInternalDivCounterForCycles( pTimer, cycleCount );
 }
 
-void incrementLy( GBLcdRegisters* pLcdRegisters, uint8_t* pLy )
+void setLcdStatInterruptLine( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t lcdStatInterruptLine )
 {
-    GBLcdStatus* pLcdStatus = pLcdRegisters->pStatus;
-    const uint8_t lyc       = *pLcdRegisters->pLyc;
+    const uint8_t oldLcdStatInterruptLine = pPpuState->flags.statInterruptLine;
+    pPpuState->flags.statInterruptLine = lcdStatInterruptLine;
 
-    *pLy = *pLy + 1;
-    pLcdStatus->LycEqLyFlag = ( *pLy == lyc );
+    const uint8_t risingEdge = !oldLcdStatInterruptLine && lcdStatInterruptLine;
+    if( risingEdge )
+    {
+        triggerInterrupt( pCpuState, LCDStatInterrupt );
+    }
 }
 
-void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
+void incrementPpuScanlineIndex( GBCpuState* pCpuState, GBPpuState* pPpuState )
 {
+    RuntimeAssert( pPpuState->scanlineIndex == 153 );
+
+    const uint8_t nextScanlineIndex = pPpuState->scanlineIndex + 1;
+
+    pPpuState->scanlineIndex            = nextScanlineIndex;
+    pPpuState->pLcdStatus->lycEqLyFlag  = ( pPpuState->scanlineIndexCompare == nextScanlineIndex );
+    const uint8_t lcdStatInterruptLine = pPpuState->pLcdStatus->lycEqLyFlag && pPpuState->flags.triggerLcdStatInterruptLycEqLy;
+    setLcdStatInterruptLine( pCpuState, pPpuState, lcdStatInterruptLine );
+}
+
+void setPpuLcdMode( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t lcdMode )
+{
+    RuntimeAssert( lcdMode >= 0 && lcdMode <= 3 );
+
+    pPpuState->pLcdStatus->mode = lcdMode;
+    pPpuState->lcdMode = lcdMode;
+
+    uint8_t lcdStatInterruptLine = 0;
+    if( ( lcdMode == 2 && pPpuState->flags.triggerLcdStatInterruptOnMode2 ) ||
+        ( lcdMode == 1 && pPpuState->flags.triggerLcdStatInterruptOnMode1 ) ||
+        ( lcdMode == 0 && pPpuState->flags.triggerLcdStatInterruptOnMode0 ) )
+    {
+        lcdStatInterruptLine = 1;
+    }
+
+    setLcdStatInterruptLine( pCpuState, pPpuState, lcdStatInterruptLine );
+}
+
+const uint8_t fetchPpuPixelFifoTileIndex( GBPpuState* pPpuState )
+{
+    const uint8_t pixelFetcherX = ( ( pPpuState->screenPosX / gbTileResolutionInPixels ) + pPpuState->pixelFetcherX ) & 0x1F;
+    const uint8_t pixelFetcherY = ( pPpuState->scanlineIndex + pPpuState->screenPosY ) & 0xFF;
+
+    uint8_t tileMapIndex    = pPpuState->flags.bgTileMapArea;
+    uint8_t isInsideWindow  = 0;
+
+//FK: TODO: Window support
+#if 0 
+    if( pPpuState->flags.windowEnabled && ( pixelFetcherX >= pPpuState->windowPosX && pPpuState->flags.pixelFetcherYInWindow ) )
+    {
+        tileMapIndex    = pPpuState->flags.windowTileMapArea;
+        isInsideWindow  = 1;
+    }
+#endif
+    const uint8_t* pTileMapIds = pPpuState->pBackgroundOrWindowTileIds[ tileMapIndex ];
+    if( isInsideWindow )
+    {
+        //FK: TODO: If the current tile is a window tile, the x/y coordinate for the window tile is used - what does that mean?!
+    }
+
+    //FK: TODO: Check if we can access VRAM - should always be possible...?
+    const uint8_t tilePosX = pPpuState->pixelFetcherX;
+    const uint8_t tilePosY = pPpuState->scanlineIndex / gbTileResolutionInPixels;
+
+    pPpuState->pixelFetcherX = pixelFetcherX + 1;
+
+    const uint16_t tileIndex = tilePosX + tilePosY * gbBackgroundTileCount;
+    return pTileMapIds[ tileIndex ];
+}
+
+uint16_t fetchPpuTileData( GBPpuState* pPpuState, const uint8_t unsignedTileIndex )
+{
+    const uint8_t tileDataOffset = pPpuState->scanlineIndex % gbTileSizeInBytes;
+    if( pPpuState->flags.bgAndWindowTileDataArea )
+    {
+        const uint16_t* pTileData = (const uint16_t*)pPpuState->pTileBlocks[ 0 ];
+        return pTileData[ unsignedTileIndex + tileDataOffset ];
+    }
+
+    const uint16_t* pTileData    = (const uint16_t*)pPpuState->pTileBlocks[ 2 ];
+    const int8_t signedTileIndex = ( int8_t )unsignedTileIndex;
+    return pTileData[ signedTileIndex + tileDataOffset ];
+}
+
+void fillBackgroundPpuPixelFifo( GBPpuState* pPpuState, GBPpuPixelFetcher* pPixelFetcher, GBPpuPixelFifo* pPixelFifo, uint8_t cycleCount )
+{
+    while( cycleCount > 0 )
+    {
+        pPixelFetcher->cycleCounter += cycleCount;
+        switch( pPixelFetcher->state )
+        {
+            case GBPixelFetcherState::GetTile:
+            {
+                if( pPixelFetcher->cycleCounter < 2 )
+                {
+                    break;
+                }
+
+                cycleCount -= 2;
+                pPixelFetcher->tileIndex    = fetchPpuPixelFifoTileIndex( pPpuState );
+                pPixelFetcher->cycleCounter = 2u;
+                pPixelFetcher->state        = GBPixelFetcherState::GetTileDataLow;
+                pPixelFetcher->tileData     = 0u;
+                continue;
+            }
+            case GBPixelFetcherState::GetTileDataLow:
+            {
+                if( pPixelFetcher->cycleCounter < 4 )
+                {
+                    break;
+                }
+
+                const uint16_t tileData = fetchPpuTileData( pPpuState, pPixelFetcher->tileIndex );
+
+                cycleCount -= 2;
+                pPixelFetcher->tileData |= tileData & 0x00FF;
+
+                pPixelFetcher->cycleCounter = 4;
+                pPixelFetcher->state        = GBPixelFetcherState::GetTileDataHigh;
+                continue;
+            }
+            case GBPixelFetcherState::GetTileDataHigh:
+            {
+                if( pPixelFetcher->cycleCounter < 6 )
+                {
+                    break;
+                }
+
+                const uint16_t tileData = fetchPpuTileData( pPpuState, pPixelFetcher->tileIndex );
+
+                cycleCount -= 2;
+                pPixelFetcher->tileData |= tileData & 0xFF00;
+
+                pPixelFetcher->cycleCounter = 6;
+                pPixelFetcher->state        = GBPixelFetcherState::Sleep;
+                continue;
+            }
+            case GBPixelFetcherState::Sleep:
+            {
+                if( pPixelFetcher->cycleCounter < 8 )
+                {
+                    break;
+                }
+
+                cycleCount -= 2;
+                pPixelFetcher->state = GBPixelFetcherState::PushPixelRowToFifo;
+                continue;
+            }
+            case GBPixelFetcherState::PushPixelRowToFifo:
+            {
+                pPixelFifo->palette     = pPpuState->backgroundMonochromePalette;
+                pPixelFifo->pixelData   = pPixelFetcher->tileData; //FK: Todo: shift pixel data
+                pPixelFetcher->state    = GBPixelFetcherState::GetTile;
+                break;
+            }
+        }
+    }
+}
+
+void updatePpuFlagsFromLcdStatus( GBPpuFlags* pPpuFlags, GBLcdStatus lcdStatus )
+{
+    pPpuFlags->triggerLcdStatInterruptOnMode0 = lcdStatus.enableMode0HBlankInterrupt;
+    pPpuFlags->triggerLcdStatInterruptOnMode1 = lcdStatus.enableMode1VBlankInterrupt;
+    pPpuFlags->triggerLcdStatInterruptOnMode2 = lcdStatus.enableMode2OAMInterrupt;
+    pPpuFlags->triggerLcdStatInterruptLycEqLy = lcdStatus.enableLycEqLyInterrupt;
+}
+
+void updatePpuFlagsFromLcdControl( GBPpuFlags* pPpuFlags, GBLcdControl lcdControl )
+{
+    pPpuFlags->lcdEnabled                 = lcdControl.enable;
+    pPpuFlags->bgAndWindowTileDataArea    = lcdControl.bgAndWindowTileDataArea;
+    pPpuFlags->bgTileMapArea              = lcdControl.bgTileMapArea;
+    pPpuFlags->spritesEnabled             = lcdControl.objEnable;
+    pPpuFlags->tallSprites                = lcdControl.objSize;
+    pPpuFlags->windowEnabled              = lcdControl.windowEnable;
+    pPpuFlags->windowTileMapArea          = lcdControl.windowTileMapArea;
+    pPpuFlags->bgAndWindowPriority        = lcdControl.bgEnable;
+}
+
+void updatePpu( GBCpuState* pCpuState, GBPpuState* pPpuState, uint8_t cycleCount )
+{
+#if 1
+    if( !pPpuState->flags.lcdEnabled )
+    {
+        return;
+    }
+
+    while( cycleCount > 0 )
+    {
+        pPpuState->cycleCounter += cycleCount;
+
+        const uint8_t scanlineIndex = pPpuState->scanlineIndex;
+        switch( pPpuState->lcdMode )
+        {
+            case 0:
+            {
+                if( pPpuState->cycleCounter >= 456u )
+                {
+                    cycleCount = pPpuState->cycleCounter - 456u;
+                    pPpuState->cycleCounter = 0u;
+
+                    incrementPpuScanlineIndex( pCpuState, pPpuState );
+
+                    if( pPpuState->scanlineIndex == 144u )
+                    {
+                        setPpuLcdMode( pCpuState, pPpuState, 0u );
+                        triggerInterrupt( pCpuState, VBlankInterrupt );
+                        continue;
+                    }
+
+                    setPpuLcdMode( pCpuState, pPpuState, 2u );
+                    continue;
+                }
+                break;
+            }
+
+            case 1:
+            {
+                if( pPpuState->cycleCounter >= 4560u )
+                {
+                    cycleCount = pPpuState->cycleCounter - 4560u;
+                    pPpuState->cycleCounter = 0u;
+
+                    setPpuLcdMode( pCpuState, pPpuState, 2u );
+                    continue;
+                }
+                break;
+            }
+
+            case 2:
+            {
+                if( pPpuState->cycleCounter >= 80u )
+                {
+                    cycleCount = pPpuState->cycleCounter - 80u;
+                    pPpuState->cycleCounter = 80u;
+
+                    setPpuLcdMode( pCpuState, pPpuState, 3u );
+                    continue;
+                }
+
+                if( pPpuState->flags.oamSearched )
+                {
+                    break;
+                }
+
+                collectScanlineSprites( pPpuState, scanlineIndex );
+                pPpuState->flags.oamSearched = 1;
+                break;
+            }
+
+            case 3:
+            {
+                //FK: This runs parallel to the pixel output
+                //FK: if scx % 8 != 0 then the rest will be discarded from the fifo
+                //FK: when entering window, clear background fifo and fill again with window pixels
+                //https://www.youtube.com/watch?v=HyzD8pNlpwI&t=3194s
+                if( pPpuState->backgroundPixelFifo.pixelCount < 8 && pPpuState->backgroundPixelFetcher.pixelDataIndex < 18u )
+                {
+                    fillBackgroundPpuPixelFifo( pPpuState, &pPpuState->backgroundPixelFetcher, &pPpuState->backgroundPixelFifo, cycleCount );
+                }
+
+                //FK: TODO: Sprite pixel fifo handling
+                if( pPpuState->backgroundPixelFifo.pixelCount >= 8 )
+                {
+                    popPpuPixelFifoContentToLcd( pPpuState, &pPpuState->backgroundPixelFifo, cycleCount );
+                }
+
+                if( pPpuState->backgroundPixelFifo.pixelCount == 0 )
+                {
+                    setPpuLcdMode( pCpuState, pPpuState, 0 );
+                }
+                break;
+            }
+            
+            default:
+            {
+                IllegalCodePath();
+                break;
+            }
+        }
+    }
+    
+#else
     if( !pPpuState->pLcdControl->enable )
     {
         return;
@@ -2205,6 +2502,7 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
     //FK: update ppu state
     pPpuState->dotCounter = lcdDotCounter;
     pLcdStatus->mode = lcdMode;
+#endif
 }
 
 uint8_t convertOutputLevelToVolumeShift( const uint8_t outputLevel )
@@ -2225,7 +2523,7 @@ uint8_t convertOutputLevelToVolumeShift( const uint8_t outputLevel )
     return 0;
 }
 
-void updateAPU( GBApuState* pApuState, const uint8_t cycleCost )
+void updateApu( GBApuState* pApuState, const uint8_t cycleCost )
 {
     pApuState->frameSequencer.cycleCounter += cycleCost;
     if( pApuState->frameSequencer.cycleCounter >= 512 )
@@ -3902,13 +4200,17 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         {
             GBLcdControl lcdControlValue;
             memcpy(&lcdControlValue, &newMemoryValue, sizeof(GBLcdControl) );
-            updatePPULcdControl( pPpuState, lcdControlValue );
+            updatePpuFlagsFromLcdControl( &pPpuState->flags, lcdControlValue );
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_STAT:
         {
             //FK: LCD Status - only bit 3:6 are writeable
             memoryValueBitMask = 0x78;
+
+            GBLcdStatus lcdStatusValue;
+            memcpy(&lcdStatusValue, &newMemoryValue, sizeof(GBLcdStatus) );
+            updatePpuFlagsFromLcdStatus( &pPpuState->flags, lcdStatusValue );
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_DMA:
@@ -3920,20 +4222,44 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             pCpuState->dmaCycleCounter = 0;
             break;
         }
+        case K15_GB_MAPPED_IO_ADDRESS_SCX:
+        {
+            pPpuState->screenPosX = newMemoryValue;
+            break;
+        }
+        case K15_GB_MAPPED_IO_ADDRESS_SCY:
+        {
+            pPpuState->screenPosY = newMemoryValue;
+            break;
+        }
+        case K15_GB_MAPPED_IO_ADDRESS_LYC:
+        {
+            pPpuState->scanlineIndexCompare = newMemoryValue;
+            break;
+        }
+        case K15_GB_MAPPED_IO_ADDRESS_WX:
+        {
+            pPpuState->windowPosX = newMemoryValue;
+            break;
+        }
+        case K15_GB_MAPPED_IO_ADDRESS_WY:
+        {
+            pPpuState->windowPosY = newMemoryValue;
+            break;
+        }
         case K15_GB_MAPPED_IO_ADDRESS_BGP:
         {
-            extractMonochromePaletteFrom8BitValue( pPpuState->backgroundMonochromePalette, newMemoryValue );
+            extractMonochromePaletteFrom8BitValue( &pPpuState->backgroundMonochromePalette, newMemoryValue );
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_OBP0:
         case K15_GB_MAPPED_IO_ADDRESS_OBP1:
         {
-            const uint8_t paletteOffset = ( address - K15_GB_MAPPED_IO_ADDRESS_OBP0 ) * 4;
-            extractMonochromePaletteFrom8BitValue( pPpuState->objectMonochromePlatte + paletteOffset, newMemoryValue );
+            const uint8_t paletteIndex = ( address - K15_GB_MAPPED_IO_ADDRESS_OBP0 ) > 0;
+            extractMonochromePaletteFrom8BitValue( &pPpuState->objectMonochromePalettes[ paletteIndex ], newMemoryValue );
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_IF:
-        case K15_GB_MAPPED_IO_ADDRESS_IE:
         {
             memoryValueBitMask = 0b00011111;
             break;
@@ -3984,14 +4310,14 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     }
 
     updateDmaState( pCpuState, pMemoryMapper, cycleCost ); 
-    updatePPU( pCpuState, pPpuState, cycleCost );
-    updateAPU( pApuState, cycleCost );
+    updatePpu( pCpuState, pPpuState, cycleCost );
+    updateApu( pApuState, cycleCost );
     updateTimer( pCpuState, pTimerState, cycleCost );
     updateSerial( pCpuState, pSerialState, cycleCost );
 
     pMemoryMapper->memoryAccess         = GBMemoryAccess_None;
-    pMemoryMapper->lcdStatus            = *pPpuState->lcdRegisters.pStatus;
-    pMemoryMapper->lcdEnabled           = pPpuState->pLcdControl->enable;
+    pMemoryMapper->lcdStatus            = *pPpuState->pLcdStatus;
+    pMemoryMapper->lcdEnabled           = pPpuState->flags.lcdEnabled;
     pMemoryMapper->dmaActive            = pCpuState->flags.dma;
     pMemoryMapper->ramEnabled           = pEmulatorInstance->pCartridge->ramEnabled;
 

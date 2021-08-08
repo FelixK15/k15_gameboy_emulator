@@ -641,19 +641,19 @@ void loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	const GBStateLoadResult result = loadGBEmulatorState( pEmulatorInstance, stateFileMapping.pFileBaseAddress );
 	switch( result )
 	{
-		case K15_GB_STATE_LOAD_SUCCESS:
+		case GBStateLoadResult::Success:
 			pushUserMessage( pUserMessage, "State loaded!" );
 			break;
 
-		case K15_GB_STATE_LOAD_FAILED_INCOMPATIBLE_DATA:
+		case GBStateLoadResult::IncompatibleData:
 			pushUserMessage( pUserMessage, "Not a state file" );
 			break;
 		
-		case K15_GB_STATE_LOAD_FAILED_OLD_VERSION:
+		case GBStateLoadResult::OldVersion:
 			pushUserMessage( pUserMessage, "Old state version" );
 			break;
 
-		case K15_GB_STATE_LOAD_FAILED_WRONG_ROM:
+		case GBStateLoadResult::WrongRom:
 			pushUserMessage( pUserMessage, "State wrong rom" );
 			break;
 	}
@@ -797,8 +797,8 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 		pRamBaseAddress = ramFileMapping.pFileBaseAddress;
 	}
 
-	const GBMapCartridgeResult result = loadGBEmulatorRom( pEmulatorContext->pEmulatorInstance, pRomBaseAddress, pRamBaseAddress );
-	if( result == K15_GB_CARTRIDGE_TYPE_UNSUPPORTED )
+	const GBLoadRomResult result = loadGBEmulatorRom( pEmulatorContext->pEmulatorInstance, pRomBaseAddress, pRamBaseAddress );
+	if( result == GBLoadRomResult::RomTypeUnsupported )
 	{
 		unmapFileMapping( &romFileMapping );
 		unmapFileMapping( &ramFileMapping );
