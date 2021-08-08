@@ -4198,9 +4198,8 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         }
         case K15_GB_MAPPED_IO_ADDRESS_LCDC:
         {
-            GBLcdControl lcdControlValue;
-            memcpy(&lcdControlValue, &newMemoryValue, sizeof(GBLcdControl) );
-            updatePpuFlagsFromLcdControl( &pPpuState->flags, lcdControlValue );
+            GBLcdControl* pLcdControl = (GBLcdControl*)&newMemoryValue;
+            updatePpuFlagsFromLcdControl( &pPpuState->flags, *pLcdControl );
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_STAT:
@@ -4208,9 +4207,8 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             //FK: LCD Status - only bit 3:6 are writeable
             memoryValueBitMask = 0x78;
 
-            GBLcdStatus lcdStatusValue;
-            memcpy(&lcdStatusValue, &newMemoryValue, sizeof(GBLcdStatus) );
-            updatePpuFlagsFromLcdStatus( &pPpuState->flags, lcdStatusValue );
+            GBLcdStatus* pLcdStatus = (GBLcdStatus*)&newMemoryValue;
+            updatePpuFlagsFromLcdStatus( &pPpuState->flags, *pLcdStatus );
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_DMA:
