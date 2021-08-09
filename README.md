@@ -79,11 +79,11 @@ For an example of how to use the API please take a look at `k15_win32_gb_emulato
   - [ ] misc
     - [x] bits
     - [ ] ppu
-- [ ] verify correctness with Blargg's Gameboy hardware test ROMs
-  - [x] pass instr_timing
-  - [ ] pass interrupt_time
-  - [ ] pass mem_timing
-  - [x] pass cpu_instrs
+- [ ] pass blarggs test roms
+  - [x] instr_timing
+  - [x] cpu_instrs
+  - [ ] interrupt_time
+  - [ ] mem_timing
 - [ ] Implement Nintendo GameBoy Color features
 
 Currently the emulator is purely run on the CPU, meaning that the Nintendo GameBoy CPU as well as the PPU are being emulated purely on the host CPU.
