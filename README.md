@@ -61,25 +61,30 @@ For an example of how to use the API please take a look at `k15_win32_gb_emulato
 ## Current State and Goals
 
 - [x] Emulate correct frame timings independend of monitor refresh rate
-- [ ] Implement rom-switching
-  - [x] MBC1
-  - [ ] MBC3
-  - [x] MBC5
-- [x] implement window support
-- [x] implement background scrolling
-- [x] complete sprite features
-  - [x] 10 sprite per line limit
-  - [x] x flip 
-  - [x] y flip
-  - [x] support for different palettes
-  - [ ] corrct 16x8 sprite handling
+- [ ] implement proper pixel fifo emulation
+- [ ] implement custom apu emulation
+- [ ] pass mooneye-gb test roms
+  - [ ] acceptance
+    - [x] timer
+    - [x] instr
+    - [ ] interrupts
+    - [ ] oam_dma
+    - [ ] bits
+    - [ ] ppu
+  - [ ] emulator-only
+    - [x] mbc1
+    - [ ] mbc2
+    - [ ] mbc3
+    - [x] mbc5
+  - [ ] misc
+    - [x] bits
+    - [ ] ppu
 - [ ] verify correctness with Blargg's Gameboy hardware test ROMs
   - [x] pass instr_timing
   - [ ] pass interrupt_time
   - [ ] pass mem_timing
   - [x] pass cpu_instrs
 - [ ] Implement Nintendo GameBoy Color features
-- [ ] Implement sound
 
 Currently the emulator is purely run on the CPU, meaning that the Nintendo GameBoy CPU as well as the PPU are being emulated purely on the host CPU.
 The final image from the emulator will be blit to the screen by the GPU to utilize programmable scaling options and filters.
