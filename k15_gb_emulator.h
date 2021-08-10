@@ -31,6 +31,9 @@
 #define IllegalCodePath()       DebugBreak()
 #define CompiletimeAssert(x)    typedef char compile_time_assertion_##_LINE_[(x)?1:-1]
 
+#define GetMin(a, b) ((a)>(b)?(b):(a))
+#define GetMax(a, b) ((a)>(b)?(a):(b))
+
 #ifdef K15_RELEASE_BUILD
     #define RuntimeAssert(x)
 #else

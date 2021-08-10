@@ -121,6 +121,7 @@ scaleFactor=%hhu
 windowPosX=%d
 windowPosY=%d
 fullscreen=%hhu
+maximized=%hhu
 userMessage=%hhu)";
 
 const char* pSettingsPath = "k15_gb_emu_settings.ini";
@@ -144,6 +145,7 @@ struct Win32Settings
 	uint8_t scaleFactor;
 	uint8_t stateSlot;
 	uint8_t	fullscreen;
+	uint8_t maximized;
 	uint8_t showUserMessage;
 	int32_t	windowPosX;
 	int32_t	windowPosY;
@@ -238,8 +240,9 @@ struct Win32ApplicationContext
 
 	uint32_t 					emulatorDeltaTimeInMicroseconds 				= 0u;
 	uint8_t						frameBufferScale								= 1u;	
-	uint8_t						menuScale										= 1u; //FK: What has been selected in the menu
-	uint8_t						maxScale										= 1u;
+	uint8_t						menuFrameBufferScale							= 1u; //FK: What has been selected in the menu
+	uint8_t						maxWindowedFrameBufferScale						= 1u;
+	uint8_t						fullscreenFrameBufferScale						= 1u;
 
 	DWORD						windowStyle										= 0u;
 	DWORD						windowStyleEx									= 0u;
@@ -252,6 +255,7 @@ struct Win32ApplicationContext
 	uint8_t   					leftMouseDown									= 0u;
 	uint8_t						fullscreen										= 0u;
 	uint8_t						vsyncEnabled									= 0u;
+	uint8_t						windowMaximized									= 0u;
 	uint8_t						hasFocus										= 1u;
 	uint8_t						showUserMessage									= 1u;
 };
@@ -271,6 +275,7 @@ Win32Settings serializeSettings( Win32ApplicationContext* pContext )
 	settings.windowPosX 		= pContext->windowPosX;
 	settings.windowPosY 		= pContext->windowPosY;
 	settings.fullscreen 		= pContext->fullscreen;
+	settings.maximized			= pContext->windowMaximized;
 	settings.showUserMessage	= pContext->showUserMessage;
 
 	return settings;
@@ -323,7 +328,8 @@ uint8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
 	const int32_t charsWritten = sprintf_s( settingsBuffer, sizeof( settingsBuffer ), pSettingsFormatting, 
 		pSettings->stateSlot, pSettings->scaleFactor, 
 		pSettings->windowPosX, pSettings->windowPosY, 
-		pSettings->fullscreen, pSettings->showUserMessage );
+		pSettings->fullscreen, pSettings->maximized,
+		pSettings->showUserMessage );
 
 	DWORD bytesWritten = 0u;
 	const BOOL writeResult = WriteFile( pFileHandle, settingsBuffer, charsWritten, &bytesWritten, nullptr );
@@ -353,7 +359,8 @@ uint8_t loadSettingsFromFile( Win32Settings* pOutSettings, const char* pPath )
 	sscanf_s( settingsBuffer, pSettingsFormatting, 
 		&pOutSettings->stateSlot, &pOutSettings->scaleFactor, 
 		&pOutSettings->windowPosX, &pOutSettings->windowPosY, 
-		&pOutSettings->fullscreen, &pOutSettings->showUserMessage );
+		&pOutSettings->fullscreen, &pOutSettings->maximized,
+		&pOutSettings->showUserMessage );
 
 	return 1;
 }
@@ -698,8 +705,24 @@ void updateMonitorSettings( Win32ApplicationContext* pContext )
 	pContext->monitorPosY		 = ( uint32_t )monitorInfo.rcMonitor.top;
 	pContext->monitorRefreshRate = ( uint16_t )displayInfo.dmDisplayFrequency;
 
+	TITLEBARINFO titleBarInfo = {};
+	titleBarInfo.cbSize = sizeof( TITLEBARINFO );
+	GetTitleBarInfo( pContext->pWindowHandle, &titleBarInfo );
+
+	const uint32_t menuHeightInPixels		= ( uint32_t )GetSystemMetrics( SM_CYMENU );
+	const uint32_t titleBarHeightInPixels 	= ( uint32_t )( titleBarInfo.rcTitleBar.bottom - titleBarInfo.rcTitleBar.top );
+	const uint32_t maxWindowHeightInPixels	= ( uint32_t )( monitorInfo.rcWork.bottom - monitorInfo.rcWork.top ) - ( menuHeightInPixels + titleBarHeightInPixels );
+	const uint32_t maxWindowWidthInPixels 	= ( uint32_t )( monitorInfo.rcWork.right - monitorInfo.rcWork.left );
+	
+	const uint32_t windowMaxVerticalPixelScale		= maxWindowHeightInPixels / gbVerticalResolutionInPixels;
+	const uint32_t windowMaxHorizontalPixelScale	= maxWindowWidthInPixels / gbHorizontalResolutionInPixels;
+	pContext->maxWindowedFrameBufferScale 			= GetMin( windowMaxVerticalPixelScale, windowMaxHorizontalPixelScale );
+
+	const uint32_t monitorVerticalPixelScale	= pContext->monitorHeight / gbVerticalResolutionInPixels;
+	const uint32_t monitorHorizontalPixelScale	= pContext->monitorWidth / gbHorizontalResolutionInPixels;
+
 	//FK: max scale is directly tied to monitor resolution
-	pContext->maxScale = pContext->monitorHeight / gbVerticalResolutionInPixels;
+	pContext->fullscreenFrameBufferScale 	= GetMin( monitorVerticalPixelScale, monitorHorizontalPixelScale );
 
 	const float cyclesPerHostFrame = ( ( float )(gbCyclesPerFrame*60) / ( float )pContext->monitorRefreshRate );
 	const float cylcesPerHostFrameRest = ( ( cyclesPerHostFrame - ( uint32_t )cyclesPerHostFrame ) * ( float )pContext->monitorRefreshRate );
@@ -842,34 +865,45 @@ void openRomFile( Win32ApplicationContext* pContext )
 
 void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 {
-	RuntimeAssert( scale <= pContext->maxScale );
+	RuntimeAssert( scale <= pContext->fullscreenFrameBufferScale );
 
-	for( uint8_t scaleIndex = 1; scaleIndex <= pContext->maxScale; ++scaleIndex )
+	if( pContext->frameBufferScale == scale )
+	{
+		return;
+	}
+
+	for( uint8_t scaleIndex = 1; scaleIndex <= pContext->maxWindowedFrameBufferScale; ++scaleIndex )
 	{
 		CheckMenuItem( pContext->pScaleMenuItems, gbMenuScale0 + scaleIndex, scale == scaleIndex ? MF_CHECKED : MF_UNCHECKED );
 	}
 
 	pContext->frameBufferScale = scale;
 
-	RECT windowRect = {};
-	windowRect.right 	= gbHorizontalResolutionInPixels * pContext->frameBufferScale;
-	windowRect.bottom 	= gbVerticalResolutionInPixels 	 * pContext->frameBufferScale;
-	AdjustWindowRect( &windowRect, pContext->windowStyle, TRUE );
+	//FK: Don't set window pos when window is maximized
+	if( !pContext->windowMaximized )
+	{
+		RECT windowRect = {};
+		windowRect.right 	= gbHorizontalResolutionInPixels * pContext->frameBufferScale;
+		windowRect.bottom 	= gbVerticalResolutionInPixels 	 * pContext->frameBufferScale;
+		AdjustWindowRect( &windowRect, pContext->windowStyle, TRUE );
 
-	const int32_t windowWidth 	= windowRect.right - windowRect.left;
-	const int32_t windowHeight 	= windowRect.bottom - windowRect.top;
+		const uint32_t windowWidth 	= ( uint32_t )windowRect.right - windowRect.left;
+		const uint32_t windowHeight = ( uint32_t )windowRect.bottom - windowRect.top;
 
-	pContext->windowWidth = windowWidth;
-	pContext->windowHeight = windowHeight;
+		pContext->windowWidth  = windowWidth;
+		pContext->windowHeight = windowHeight;
+
+		SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, 
+			pContext->windowWidth, pContext->windowHeight, 0u );
+	}
 	
-	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
 	updateGameboyFrameVertexBuffer( pContext );
 }
 
 void enableFullscreen( Win32ApplicationContext* pContext )
 {
 	pContext->fullscreen = 1;
-	setFrameBufferScale( pContext, pContext->maxScale );
+	setFrameBufferScale( pContext, pContext->fullscreenFrameBufferScale );
 
 	const LONG fullscreenWindowStyle 	=  pContext->windowStyle & ~( WS_CAPTION | WS_THICKFRAME );
 	const LONG fullscreenWindowStyleEx 	=  pContext->windowStyleEx & ~( WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE ) ;
@@ -877,7 +911,7 @@ void enableFullscreen( Win32ApplicationContext* pContext )
 	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   fullscreenWindowStyle );
 	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, fullscreenWindowStyleEx );
 
-	//FK: Hide menu
+	//FK: Remove menu temporarily when entering fullscreen
 	SetMenu( pContext->pWindowHandle, nullptr );
 	SetWindowPos( pContext->pWindowHandle, HWND_TOP, pContext->monitorPosX, pContext->monitorPosY, 
 		pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING );
@@ -889,19 +923,12 @@ void disableFullscreen( Win32ApplicationContext* pContext )
 	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   pContext->windowStyle );
 	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, pContext->windowStyleEx );
 
-	SetMenu( pContext->pWindowHandle, pContext->pMenuBar );
-
-	RECT windowRect = {};
-	windowRect.right = gbHorizontalResolutionInPixels * pContext->frameBufferScale;
-	windowRect.bottom = gbVerticalResolutionInPixels * pContext->frameBufferScale;
-	AdjustWindowRect( &windowRect, pContext->windowStyle, TRUE );
-
-	const int32_t windowWidth 	= windowRect.right - windowRect.left;
-	const int32_t windowHeight 	= windowRect.bottom - windowRect.top;
-	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
-
-	setFrameBufferScale( pContext, pContext->menuScale );
+	//FK: Also clear maximized flag when leaving fullscreen for a better UX
+	pContext->windowMaximized = 0;
 	pContext->fullscreen = 0;
+
+	SetMenu( pContext->pWindowHandle, pContext->pMenuBar );
+	setFrameBufferScale( pContext, pContext->menuFrameBufferScale );
 }
 
 void hideUserMessage( Win32ApplicationContext* pContext )
@@ -1054,8 +1081,8 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 		default:
 			if( wparam > gbMenuScale0 && wparam < gbMenuFullscreen )
 			{
-				pContext->menuScale = (uint8_t)wparam - gbMenuScale0;
-				setFrameBufferScale( pContext, pContext->menuScale );
+				pContext->menuFrameBufferScale = (uint8_t)wparam - gbMenuScale0;
+				setFrameBufferScale( pContext, pContext->menuFrameBufferScale );
 				break;
 			}
 			else if( wparam >= gbMenuSpeed1x && wparam <= gbMenuSpeed16x )
@@ -1090,9 +1117,31 @@ void handleWindowResize( Win32ApplicationContext* pContext, WPARAM wparam )
 
 	pContext->windowWidth  = clientRect.right - clientRect.left;
 	pContext->windowHeight = clientRect.bottom - clientRect.top;
-	pContext->maxScale = pContext->windowHeight / gbVerticalResolutionInPixels;
 
 	updateMonitorSettings( pContext );
+
+	if( !pContext->fullscreen )
+	{
+		if( pContext->windowMaximized )
+		{
+			pContext->windowMaximized = 0;
+			
+			//FK: Leaving maximized state, we need to recalculate the window size
+			RECT windowRect = {};
+			windowRect.bottom = gbVerticalResolutionInPixels * pContext->menuFrameBufferScale;
+			windowRect.right  = gbHorizontalResolutionInPixels * pContext->menuFrameBufferScale;
+			AdjustWindowRect( &windowRect, pContext->windowStyle, TRUE );
+
+			const uint32_t windowWidth = windowRect.right - windowRect.left;
+			const uint32_t windowHeight = windowRect.bottom - windowRect.top;
+
+			SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
+		}
+		else if( wparam == SIZE_MAXIMIZED )
+		{
+			pContext->windowMaximized = 1;
+		}
+	}
 
 	if( pContext->pOpenGLContext != nullptr )
 	{
@@ -1152,7 +1201,7 @@ void handleLeftButtonDown( Win32ApplicationContext* pContext, LPARAM lparam )
 	pContext->leftMouseDownDeltaX = (int16_t)(windowRect.left - mousePos.x);
 	pContext->leftMouseDownDeltaY = (int16_t)(windowRect.top  - mousePos.y);
 
-	SetCapture(pContext->pWindowHandle);
+	SetCapture( pContext->pWindowHandle );
 }
 
 void handleRightButtonDown( Win32ApplicationContext* pContext, LPARAM lparam )
@@ -1168,7 +1217,13 @@ void handleRightButtonDown( Win32ApplicationContext* pContext, LPARAM lparam )
 void handleLeftButtonUp( Win32ApplicationContext* pContext )
 {
 	pContext->leftMouseDown = 0;
+
 	ReleaseCapture();
+}
+
+void handleLeftDoubleClick( Win32ApplicationContext* pContext )
+{
+	toggleFullscreen( pContext );
 }
 
 void handleMouseMove( Win32ApplicationContext* pContext, LPARAM lparam )
@@ -1254,6 +1309,10 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 		handleLeftButtonUp( pContext );
 		break;
 
+	case WM_LBUTTONDBLCLK:
+		handleLeftDoubleClick( pContext );
+		break;
+
 	case WM_MOUSEMOVE:
 		handleMouseMove( pContext, lparam );
 		break;
@@ -1302,6 +1361,7 @@ uint8_t setupWindow( Win32ApplicationContext* pContext )
 
 	pContext->windowWidth 	= windowRect.right  - windowRect.left;
 	pContext->windowHeight 	= windowRect.bottom - windowRect.top;
+	pContext->windowStyle	= windowStyle;
 
 	WNDCLASSA wndClass 		= {0};
 	wndClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW;
@@ -1385,7 +1445,7 @@ uint8_t setupMenu( Win32ApplicationContext* pContext )
 
 	//FK: Scale settings
 	char menuScaleText[] = "Scale 1x";
-	for( uint8_t scaleIndex = 1; scaleIndex <= pContext->maxScale; ++scaleIndex )
+	for( uint8_t scaleIndex = 1; scaleIndex <= pContext->maxWindowedFrameBufferScale; ++scaleIndex )
 	{
 		UINT flags = scaleIndex == 1 ? MF_CHECKED : MF_UNCHECKED;
 		flags |= MF_STRING;
@@ -1580,7 +1640,7 @@ void setupOpenGL( Win32ApplicationContext* pContext )
 
 	constexpr size_t gameboyFrameVertexBufferSizeInBytes = sizeof(float) * 4 * 6;
 
-	glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+	glClearColor( 0.0f, 0.0f, 0.0f , 0.0f );
 	glGenBuffers( 1, &pContext->gameboyFrameVertexBuffer );
 	glBindBuffer( GL_ARRAY_BUFFER, pContext->gameboyFrameVertexBuffer );
 	glBufferStorage( GL_ARRAY_BUFFER, gameboyFrameVertexBufferSizeInBytes, nullptr, GL_MAP_WRITE_BIT );
@@ -1828,10 +1888,18 @@ void applySettings( const Win32Settings* pSettings, Win32ApplicationContext* pCo
 {
 	changeStateSlot( pContext, pSettings->stateSlot );
 
-	pContext->menuScale = pSettings->scaleFactor;
+	pContext->menuFrameBufferScale = pSettings->scaleFactor;
+	pContext->windowPosX = pSettings->windowPosX;
+	pContext->windowPosY = pSettings->windowPosY;
 	setFrameBufferScale( pContext, pSettings->scaleFactor );
-	SetWindowPos( pContext->pWindowHandle, HWND_TOP, pSettings->windowPosX, pSettings->windowPosY, 0u, 0u, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_NOSIZE );
-	
+
+	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, 0u, 0u, SWP_NOSIZE );
+
+	if( pSettings->maximized )
+	{
+		ShowWindow( pContext->pWindowHandle, SW_MAXIMIZE );
+	}
+
 	if( pSettings->fullscreen )
 	{
 		enableFullscreen( pContext );
@@ -1850,17 +1918,7 @@ uint8_t verifySettings( const Win32Settings* pSettings, Win32ApplicationContext*
 		return 0;
 	}
 
-	if( pSettings->scaleFactor > pContext->maxScale && pSettings->scaleFactor > 0 )
-	{
-		return 0;
-	}
-
-	if( pSettings->windowPosX < 0 && ( uint32_t )pSettings->windowPosX > pContext->monitorWidth )
-	{
-		return 0;
-	}
-
-	if( pSettings->windowPosY < 0 && ( uint32_t )pSettings->windowPosY > pContext->monitorHeight )
+	if( pSettings->scaleFactor > pContext->fullscreenFrameBufferScale && pSettings->scaleFactor > 0 )
 	{
 		return 0;
 	}
