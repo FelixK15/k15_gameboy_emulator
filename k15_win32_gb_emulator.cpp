@@ -692,9 +692,11 @@ void updateMonitorSettings( Win32ApplicationContext* pContext )
 		pContext->monitorRefreshRate = 60u;
 	}
 
-	pContext->monitorWidth  	 = monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left;
-	pContext->monitorHeight 	 = monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top;
-	pContext->monitorRefreshRate = (uint16_t)displayInfo.dmDisplayFrequency;
+	pContext->monitorWidth  	 = ( uint32_t )( monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left );
+	pContext->monitorHeight 	 = ( uint32_t )( monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top );
+	pContext->monitorPosX		 = ( uint32_t )monitorInfo.rcMonitor.left;
+	pContext->monitorPosY		 = ( uint32_t )monitorInfo.rcMonitor.top;
+	pContext->monitorRefreshRate = ( uint16_t )displayInfo.dmDisplayFrequency;
 
 	//FK: max scale is directly tied to monitor resolution
 	pContext->maxScale = pContext->monitorHeight / gbVerticalResolutionInPixels;
@@ -877,7 +879,8 @@ void enableFullscreen( Win32ApplicationContext* pContext )
 
 	//FK: Hide menu
 	SetMenu( pContext->pWindowHandle, nullptr );
-	SetWindowPos( pContext->pWindowHandle, HWND_TOP, 0u, 0u, pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING );
+	SetWindowPos( pContext->pWindowHandle, HWND_TOP, pContext->monitorPosX, pContext->monitorPosY, 
+		pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING );
 	updateGameboyFrameVertexBuffer( pContext );
 }
 
