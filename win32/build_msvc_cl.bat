@@ -1,4 +1,7 @@
 @echo off
+setlocal enableextensions enabledelayedexpansion
+
+set PROJECT_NAME=k15_win32_cl_gb_emulator
 
 set BUILD_CONFIG=%1
 if [%1]==[] (
@@ -11,21 +14,26 @@ if not "%BUILD_CONFIG%"=="debug" if not "%BUILD_CONFIG%"=="release" (
 	set BUILD_CONFIG="release"
 )
 
-setlocal enableextensions enabledelayedexpansion
+set SOURCE_FOLDER=%~dp0
+set BUILD_FOLDER=%~dp0build_%BUILD_CONFIG%
+if not exist !BUILD_FOLDER! mkdir "!BUILD_FOLDER!"
 
-set PROJECT_NAME=k15_win32_gb_emulator_%BUILD_CONFIG%
-set C_FILE_NAME=k15_win32_gb_emulator.cpp
+set OBJ_OUTPUT_PATH="!BUILD_FOLDER!\!PROJECT_NAME!.obj"
+set EXE_OUTPUT_PATH="!BUILD_FOLDER!\!PROJECT_NAME!.exe"
+
+set C_FILE_NAME="!SOURCE_FOLDER!k15_win32_gb_emulator.cpp"
 
 ::FK: Add /Bt to get a compile performance profile
-set COMPILER_OPTIONS=-ferror-limit=900 -fstrict-aliasing --output "!PROJECT_NAME!.exe"
-
+set COMPILER_OPTIONS=/nologo /FC /TP /W3 /Fe!EXE_OUTPUT_PATH! /Fo!OBJ_OUTPUT_PATH!
 if "%BUILD_CONFIG%"=="debug" (
 	echo Build config = debug
-	set COMPILER_OPTIONS=!COMPILER_OPTIONS! --debug
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Zi /GS /MTd
 ) else (
 	echo Build config = optimized release
-	set COMPILER_OPTIONS=!COMPILER_OPTIONS! -O3 -DK15_RELEASE_BUILD
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /O2 /GL /Gw /MT /DK15_RELEASE_BUILD
 )
+
+set CL_OPTIONS=!COMPILER_OPTIONS!
 
 ::is cl.exe part of PATH?
 where /Q cl.exe
@@ -34,7 +42,7 @@ if !errorlevel! == 0 (
 	goto START_COMPILATION
 )
 
-echo Didn't find clang.exe in PATH - searching for Visual Studio installation...
+echo Didn't find cl.exe in PATH - searching for Visual Studio installation...
 
 set FOUND_PATH=0
 set VS_PATH=
@@ -84,7 +92,7 @@ IF !FOUND_PATH!==0 (
 
 :START_COMPILATION
 	echo Starting build process...
-	set CL_PATH="clang.exe"
-	set BUILD_COMMAND=!CL_PATH! !C_FILE_NAME! !COMPILER_OPTIONS!
+	set CL_PATH="cl.exe"
+	set BUILD_COMMAND=!CL_PATH! !C_FILE_NAME! !CL_OPTIONS!
 	call !BUILD_COMMAND!
 ) 

@@ -5,10 +5,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "(Windows) Launch Debug",
+            "name": "(Win32) Launch Debug",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "k15_win32_gb_emulator_debug.exe",
+            "program": "${workspaceFolder}/win32/build_debug/k15_win32_gb_emulator.exe",
             
             //#### TESTS
             //### MOONEYE
@@ -146,17 +146,17 @@
             //"args": [ "-r", "roms/Donkey Kong Land III (USA, Europe) (SGB Enhanced).gb" ],    //Works but weird palette
             
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/win32/build_release/",
             "environment": [],
         },
         {
-            "name": "(Windows) Launch Release",
+            "name": "(Win32) Launch Release",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "k15_win32_gb_emulator_release.exe",
+            "program": "${workspaceFolder}/win32/build_debug/k15_win32_gb_emulator.exe",
             "args": [ "Super Mario Land (World).gb" ],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/win32/build_debug/",
             "environment": [],
         },
         {

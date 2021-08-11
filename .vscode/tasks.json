@@ -6,6 +6,9 @@
         {
             "label": "Build K15 GB Emulator - DEBUG",
             "type": "shell",
+            "options": {
+                "cwd": "win32"
+            },
             "windows": {
                 "command": "build_msvc_cl.bat",
                 "args": [
@@ -23,6 +26,9 @@
         {
             "label": "Build K15 GB Emulator - RELEASE",
             "type": "shell",
+            "options": {
+                "cwd": "win32"
+            },
             "windows": {
                 "command": "build_msvc_cl.bat",
                 "args": [
@@ -48,6 +54,9 @@
         {
             "label": "Dump disassembly of release build",
             "type": "shell",
+            "options": {
+                "cwd": "win32"
+            },
             "windows": {
                 "command": "disassemble_release.bat",
                 "args": []

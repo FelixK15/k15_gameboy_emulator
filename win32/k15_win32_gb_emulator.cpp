@@ -67,7 +67,7 @@ PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 
 #include <math.h>
 #include <stdio.h>
-#include "k15_gb_emulator.h"
+#include "../k15_gb_emulator.h"
 #include "k15_win32_opengl.h"
 
 #define WIN32_PROFILE_FUNCTION(func) \
@@ -82,38 +82,36 @@ PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 	printf("'%s' took %.3fms.\n", #func, funcTimeInMilliseconds);\
 }
 
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-//#	include "k15_gb_emulator_ui.cpp"
-#endif
-
 constexpr float pi 		= 3.14159f;
 constexpr float twoPi 	= 6.28318f;
 
-constexpr uint32_t gbMaxRomHistoryCount 	= 32;
+constexpr uint32_t gbMaxRomHistoryCount 	= 32u;
 
 const IID 	IID_IAudioClient				= _uuidof(IAudioClient);
 const IID 	IID_IAudioRenderClient			= _uuidof(IAudioRenderClient);
 const IID 	IID_IMMDeviceEnumerator 		= _uuidof(IMMDeviceEnumerator);
 const CLSID CLSID_MMDeviceEnumerator 		= _uuidof(MMDeviceEnumerator);
 
-constexpr uint32_t gbMenuOpenRom 			= 1;
-constexpr uint32_t gbMenuClose 				= 2;
+constexpr uint32_t gbMenuOpenRom 			= 1u;
+constexpr uint32_t gbMenuClose 				= 2u;
 
-constexpr uint32_t gbMenuScale0 			= 10;
-constexpr uint32_t gbMenuFullscreen			= 25;
-constexpr uint32_t gbMenuShowUserMessage	= 26;
+constexpr uint32_t gbMenuScale0 			= 10u;
+constexpr uint32_t gbMenuFullscreen			= 25u;
+constexpr uint32_t gbMenuShowUserMessage	= 26u;
 
-constexpr uint32_t gbMenuState1 			= 30;
-constexpr uint32_t gbMenuState2 			= 31;
-constexpr uint32_t gbMenuState3 			= 32;
-constexpr uint32_t gbMenuSaveState			= 35;
-constexpr uint32_t gbMenuLoadState			= 36;
-constexpr uint32_t gbMenuSpeed1x			= 37;
-constexpr uint32_t gbMenuSpeed4x			= 38;
-constexpr uint32_t gbMenuSpeed8x			= 39;
-constexpr uint32_t gbMenuSpeed16x			= 40;
+constexpr uint32_t gbMenuState1 			= 30u;
+constexpr uint32_t gbMenuState2 			= 31u;
+constexpr uint32_t gbMenuState3 			= 32u;
+constexpr uint32_t gbMenuSaveState			= 35u;
+constexpr uint32_t gbMenuLoadState			= 36u;
+constexpr uint32_t gbMenuSpeed1x			= 37u;
+constexpr uint32_t gbMenuSpeed2x			= 38u;
+constexpr uint32_t gbMenuSpeed4x			= 39u;
+constexpr uint32_t gbMenuSpeed8x			= 40u;
 
-constexpr uint32_t gbMenuResetEmulator 		= 50;
+constexpr uint32_t gbMenuResetEmulator 		= 50u;
+
+constexpr uint8_t gbDefaultScale = 2u;
 
 const char* pSettingsFormatting = R"(
 stateSlot=%hhu
@@ -239,10 +237,10 @@ struct Win32ApplicationContext
 	int16_t						leftMouseDownDeltaY								= 0;
 
 	uint32_t 					emulatorDeltaTimeInMicroseconds 				= 0u;
-	uint8_t						frameBufferScale								= 1u;	
-	uint8_t						menuFrameBufferScale							= 1u; //FK: What has been selected in the menu
-	uint8_t						maxWindowedFrameBufferScale						= 1u;
-	uint8_t						fullscreenFrameBufferScale						= 1u;
+	uint8_t						frameBufferScale								= gbDefaultScale;	
+	uint8_t						menuFrameBufferScale							= gbDefaultScale; //FK: What has been selected in the menu
+	uint8_t						maxWindowedFrameBufferScale						= gbDefaultScale;
+	uint8_t						fullscreenFrameBufferScale						= gbDefaultScale;
 
 	DWORD						windowStyle										= 0u;
 	DWORD						windowStyleEx									= 0u;
@@ -879,8 +877,8 @@ void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 
 	pContext->frameBufferScale = scale;
 
-	//FK: Don't set window pos when window is maximized
-	if( !pContext->windowMaximized )
+	//FK: Don't set window pos when window is maximized or in fullscreen
+	if( !pContext->windowMaximized && !pContext->fullscreen )
 	{
 		RECT windowRect = {};
 		windowRect.right 	= gbHorizontalResolutionInPixels * pContext->frameBufferScale;
@@ -903,7 +901,6 @@ void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 void enableFullscreen( Win32ApplicationContext* pContext )
 {
 	pContext->fullscreen = 1;
-	setFrameBufferScale( pContext, pContext->fullscreenFrameBufferScale );
 
 	const LONG fullscreenWindowStyle 	=  pContext->windowStyle & ~( WS_CAPTION | WS_THICKFRAME );
 	const LONG fullscreenWindowStyleEx 	=  pContext->windowStyleEx & ~( WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE ) ;
@@ -915,7 +912,8 @@ void enableFullscreen( Win32ApplicationContext* pContext )
 	SetMenu( pContext->pWindowHandle, nullptr );
 	SetWindowPos( pContext->pWindowHandle, HWND_TOP, pContext->monitorPosX, pContext->monitorPosY, 
 		pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING );
-	updateGameboyFrameVertexBuffer( pContext );
+
+	setFrameBufferScale( pContext, pContext->fullscreenFrameBufferScale );
 }
 
 void disableFullscreen( Win32ApplicationContext* pContext )
@@ -927,8 +925,8 @@ void disableFullscreen( Win32ApplicationContext* pContext )
 	pContext->windowMaximized = 0;
 	pContext->fullscreen = 0;
 
-	SetMenu( pContext->pWindowHandle, pContext->pMenuBar );
 	setFrameBufferScale( pContext, pContext->menuFrameBufferScale );
+	SetMenu( pContext->pWindowHandle, pContext->pMenuBar );
 }
 
 void hideUserMessage( Win32ApplicationContext* pContext )
@@ -1010,14 +1008,18 @@ void setEmulatorSpeedFactor( Win32ApplicationContext* pContext, uint8_t speedFac
 	RuntimeAssert( speedFactor > 0u );
 	pContext->emulatorContext.cyclePerHostFrameFactor = speedFactor;
 
-	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed1x,  MF_UNCHECKED );
-	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed4x,  MF_UNCHECKED );
-	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed8x,  MF_UNCHECKED );
-	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed16x, MF_UNCHECKED );
+	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed1x, MF_UNCHECKED );
+	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed2x, MF_UNCHECKED );
+	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed4x, MF_UNCHECKED );
+	CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed8x, MF_UNCHECKED );
 
 	if( speedFactor == 1 )
 	{
 		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed1x, MF_CHECKED );
+	}
+	else if( speedFactor == 2 )
+	{
+		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed2x, MF_CHECKED );
 	}
 	else if( speedFactor == 4 )
 	{
@@ -1026,10 +1028,6 @@ void setEmulatorSpeedFactor( Win32ApplicationContext* pContext, uint8_t speedFac
 	else if( speedFactor == 8 )
 	{
 		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed8x, MF_CHECKED );
-	}
-	else if( speedFactor == 16 )
-	{
-		CheckMenuItem( pContext->pStateMenuItems, gbMenuSpeed16x, MF_CHECKED );
 	}
 }
 
@@ -1085,21 +1083,10 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 				setFrameBufferScale( pContext, pContext->menuFrameBufferScale );
 				break;
 			}
-			else if( wparam >= gbMenuSpeed1x && wparam <= gbMenuSpeed16x )
+			else if( wparam >= gbMenuSpeed1x && wparam <= gbMenuSpeed8x )
 			{
-				uint8_t speedFactor = 1;
-				if( wparam == gbMenuSpeed4x )
-				{
-					speedFactor = 4;
-				}
-				else if( wparam == gbMenuSpeed8x )
-				{
-					speedFactor = 8;
-				}
-				else if( wparam == gbMenuSpeed16x )
-				{
-					speedFactor = 16;
-				}
+				const uint8_t speedFactorShift = wparam - gbMenuSpeed1x;
+				const uint8_t speedFactor = 1 << speedFactorShift;
 				
 				setEmulatorSpeedFactor( pContext, speedFactor );
 				break;
@@ -1355,8 +1342,8 @@ uint8_t setupWindow( Win32ApplicationContext* pContext )
 	constexpr DWORD windowStyle = WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME;
 
 	RECT windowRect = {};
-	windowRect.right 	= gbHorizontalResolutionInPixels;
-	windowRect.bottom 	= gbVerticalResolutionInPixels;
+	windowRect.right 	= gbHorizontalResolutionInPixels * pContext->frameBufferScale;
+	windowRect.bottom 	= gbVerticalResolutionInPixels * pContext->frameBufferScale;
 	AdjustWindowRect( &windowRect, windowStyle, TRUE );
 
 	pContext->windowWidth 	= windowRect.right  - windowRect.left;
@@ -1364,7 +1351,7 @@ uint8_t setupWindow( Win32ApplicationContext* pContext )
 	pContext->windowStyle	= windowStyle;
 
 	WNDCLASSA wndClass 		= {0};
-	wndClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW;
+	wndClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW | CS_DBLCLKS;
 	wndClass.hInstance 		= pContext->pInstanceHandle;
 	wndClass.lpszClassName 	= "K15_Win32Template";
 	wndClass.lpfnWndProc 	= K15_WNDPROC;
@@ -1431,23 +1418,23 @@ uint8_t setupMenu( Win32ApplicationContext* pContext )
 	result |= AppendMenuA( pContext->pFileMenuItems, MF_STRING, gbMenuClose, "&Quit" );
 
 	//FK: State menu
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_CHECKED,   gbMenuState1, "State Slot 1\tF2" );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuState2, "State Slot 2\tF3" );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuState3, "State Slot 3\tF4" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_CHECKED,   	gbMenuState1, "State Slot 1\tF2" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, 	gbMenuState2, "State Slot 2\tF3" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, 	gbMenuState3, "State Slot 3\tF4" );
 	result |= AppendMenuA( pContext->pStateMenuItems, MF_SEPARATOR, 0, nullptr );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_GRAYED, gbMenuSaveState, "Quicksave State\tF6" );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_GRAYED, gbMenuLoadState, "Quickload State\tF9" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_GRAYED, 		gbMenuSaveState, "Quicksave State\tF6" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_GRAYED, 		gbMenuLoadState, "Quickload State\tF9" );
 	result |= AppendMenuA( pContext->pStateMenuItems, MF_SEPARATOR, 0, nullptr );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_CHECKED,	gbMenuSpeed1x,  "Run Emulator in 1x Speed" );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuSpeed4x,  "Run Emulator in 4x Speed" );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuSpeed8x,  "Run Emulator in 8x Speed" );
-	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, gbMenuSpeed16x, "Run Emulator in 16x Speed" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_CHECKED,		gbMenuSpeed1x, "Run Emulator in 1x Speed" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, 	gbMenuSpeed2x, "Run Emulator in 2x Speed" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, 	gbMenuSpeed4x, "Run Emulator in 4x Speed" );
+	result |= AppendMenuA( pContext->pStateMenuItems, MF_STRING | MF_UNCHECKED, 	gbMenuSpeed8x, "Run Emulator in 8x Speed" );
 
 	//FK: Scale settings
 	char menuScaleText[] = "Scale 1x";
 	for( uint8_t scaleIndex = 1; scaleIndex <= pContext->maxWindowedFrameBufferScale; ++scaleIndex )
 	{
-		UINT flags = scaleIndex == 1 ? MF_CHECKED : MF_UNCHECKED;
+		UINT flags = scaleIndex == gbDefaultScale ? MF_CHECKED : MF_UNCHECKED;
 		flags |= MF_STRING;
 
 		//FK: Set ascii value for decimal number

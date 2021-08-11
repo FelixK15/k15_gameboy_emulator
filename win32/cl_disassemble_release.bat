@@ -6,6 +6,10 @@ setlocal enableextensions enabledelayedexpansion
 set FOUND_PATH=0
 set VS_PATH=
 
+set SCRIPT_PATH=%~dp0
+set EXE_PATH=!SCRIPT_PATH!build_release\k15_win32_cl_gb_emulator.exe
+set ASM_OUTPUT_PATH=!SCRIPT_PATH!\k15_win32_cl_gb_emulator_release_disassembly.asm
+
 ::check whether this is 64bit windows or not
 reg Query "HKLM\Hardware\Description\System\CentralProcessor\0" | find /i "x86" > NUL && set OS=32BIT || set OS=64BIT
 
@@ -46,9 +50,7 @@ IF !FOUND_PATH!==0 (
 		call !VCVARS_PATH! x86 >nul 2>nul
 	)
 
-	set DUMPBIN_PATH=dumpbin
-	set DUMPBIN_COMMAND=!DUMPBIN_PATH! /DISASM k15_win32_gb_emulator_release.exe
-
+	set DUMPBIN_COMMAND=dumpbin /DISASM "!EXE_PATH!"
 	echo Creating disassembly ...
-	call !DUMPBIN_COMMAND! > k15_win32_gb_emulator_release_disassembly.asm
+	call !DUMPBIN_COMMAND! > "!ASM_OUTPUT_PATH!"
 ) 
