@@ -8,142 +8,142 @@
             "name": "(Win32) Launch Debug",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/win32/build_debug/k15_win32_gb_emulator.exe",
+            "program": "${workspaceFolder}/win32/build_debug/k15_win32_cl_gb_emulator.exe",
             
             //#### TESTS
             //### MOONEYE
             //## PPU ACCEPTANCE
-            //"args": [ "-r", "testroms/acceptance/ppu/hblank_ly_scx_timing-GS.gb"],            //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/intr_1_2_timing-GS.gb"],                 //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_0_timing.gb"],                    //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_mode0_timing.gb"],                //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_mode0_timing_sprites.gb"],        //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_mode3_timing.gb"],                //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/intr_2_oam_ok_timing.gb"],               //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/ilcdon_timing-GS.gb"],                   //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/lcdon_write_timing-GS.gb"],              //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/stat_irq_blocking.gb"],                  //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/stat_lyc_onoff.gb"],                     //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],                //FAIL
-            //"args": [ "-r", "testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],                //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/hblank_ly_scx_timing-GS.gb"],            //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/intr_1_2_timing-GS.gb"],                 //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/intr_2_0_timing.gb"],                    //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/intr_2_mode0_timing.gb"],                //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/intr_2_mode0_timing_sprites.gb"],        //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/intr_2_mode3_timing.gb"],                //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/intr_2_oam_ok_timing.gb"],               //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/ilcdon_timing-GS.gb"],                   //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/lcdon_write_timing-GS.gb"],              //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/stat_irq_blocking.gb"],                  //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/stat_lyc_onoff.gb"],                     //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],                //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ppu/vblank_stat_intr-GS.gb"],                //FAIL
 
             //## SERIAL ACCEPTANCE
-            //"args": [ "-r", "testroms/acceptance/serial/boot_sclk_align-dmgABCmgb.gb"],       //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/serial/boot_sclk_align-dmgABCmgb.gb"],       //FAIL
             
             //## BITS ACCEPTANCE
-            //"args": [ "-r", "testroms/acceptance/bits/mem_oam.gb"],                           //PASS
-            //"args": [ "-r", "testroms/acceptance/bits/reg_f.gb"],                             //PASS
-            //"args": [ "-r", "testroms/acceptance/bits/unused_hwio-GS.gb"],                    //PASS
+            //"args": [ "-r", "../../testroms/acceptance/bits/mem_oam.gb"],                           //PASS
+            //"args": [ "-r", "../../testroms/acceptance/bits/reg_f.gb"],                             //PASS
+            //"args": [ "-r", "../../testroms/acceptance/bits/unused_hwio-GS.gb"],                    //PASS
             
             //## INSTR ACCEPTANCE
-            //"args": [ "-r", "testroms/acceptance/instr/daa.gb"],                              //PASS
+            //"args": [ "-r", "../../testroms/acceptance/instr/daa.gb"],                              //PASS
 
             //## TIMER ACCEPTANCE
-            //"args": [ "-r", "testroms/acceptance/timer/div_write.gb"],                        //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/rapid_toggle.gb"],                     //FAIL(But ok)
-            //"args": [ "-r", "testroms/acceptance/timer/tim00.gb"],                            //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tim00_div_trigger.gb"],                //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tim01.gb"],                            //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tim01_div_trigger.gb"],                //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tim10.gb"],                            //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tim10_div_trigger.gb"],                //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tim11.gb"],                            //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tim11_div_trigger.gb"],                //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tima_reload.gb"],                      //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tima_write_reloading.gb"],             //PASS
-            //"args": [ "-r", "testroms/acceptance/timer/tma_write_reloading.gb"],              //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/div_write.gb"],                        //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/rapid_toggle.gb"],                     //FAIL(But ok)
+            //"args": [ "-r", "../../testroms/acceptance/timer/tim00.gb"],                            //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tim00_div_trigger.gb"],                //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tim01.gb"],                            //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tim01_div_trigger.gb"],                //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tim10.gb"],                            //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tim10_div_trigger.gb"],                //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tim11.gb"],                            //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tim11_div_trigger.gb"],                //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tima_reload.gb"],                      //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tima_write_reloading.gb"],             //PASS
+            //"args": [ "-r", "../../testroms/acceptance/timer/tma_write_reloading.gb"],              //PASS
 
-            //"args": [ "-r", "testroms/acceptance/add_sp_e_timing.gb"],                        //FAIL
-            //"args": [ "-r", "testroms/acceptance/boot_div2-S.gb"],                            //FAIL
-            //"args": [ "-r", "testroms/acceptance/boot_div-dmg0.gb"],                          //FAIL
-            //"args": [ "-r", "testroms/acceptance/boot_div-dmgABCmgb.gb"],                     //FAIL
-            //"args": [ "-r", "testroms/acceptance/boot_div-S.gb"],                             //FAIL
-            //"args": [ "-r", "testroms/acceptance/boot_hwio-dmg0.gb"],                         //FAIL
-            //"args": [ "-r", "testroms/acceptance/boot_hwio-dmgABCmgb.gb"],                    //FAIL
-            //"args": [ "-r", "testroms/acceptance/boot_regs-dmg0.gb"],                         //PASS
-            //"args": [ "-r", "testroms/acceptance/call_cc_timing.gb"],                         //FAIL
-            //"args": [ "-r", "testroms/acceptance/call_cc_timing2.gb"],                        //FAIL
-            //"args": [ "-r", "testroms/acceptance/di_timing-GS.gb"],                           //FAIL
-            //"args": [ "-r", "testroms/acceptance/di_timing.gb"],                              //FAIL
-            //"args": [ "-r", "testroms/acceptance/ei_sequence.gb"],                            //FAIL
-            //"args": [ "-r", "testroms/acceptance/ei_timing.gb"],                              //FAIL
-            //"args": [ "-r", "testroms/acceptance/halt_ime0_ei.gb"],                           //PASS
-            //"args": [ "-r", "testroms/acceptance/halt_ime0_nointr_timing.gb"],                //FAIL
-            //"args": [ "-r", "testroms/acceptance/halt_ime1_timing.gb"],                       //PASS
-            //"args": [ "-r", "testroms/acceptance/halt_ime1_timing2-GS.gb"],                   //PASS
-            //"args": [ "-r", "testroms/acceptance/if_ie_registers.gb"],                        //PASS
-            //"args": [ "-r", "testroms/acceptance/intr_timing.gb"],                            //FAIL
-            //"args": [ "-r", "testroms/acceptance/jp_cc_timing.gb"],                           //FAIL
-            //"args": [ "-r", "testroms/acceptance/jp_timing.gb"],                              //FAIL
-            //"args": [ "-r", "testroms/acceptance/ld_hl_sp_e_timing.gb"],                      //FAIL
-            //"args": [ "-r", "testroms/acceptance/oam_dma_restart.gb"],                        //FAIL
-            //"args": [ "-r", "testroms/acceptance/oam_dma_start.gb"],                          //FAIL
-            //"args": [ "-r", "testroms/acceptance/oam_dma_timing.gb"],                         //FAIL
-            //"args": [ "-r", "testroms/acceptance/pop_timing.gb"],                             //FAIL
-            //"args": [ "-r", "testroms/acceptance/push_timing.gb"],                            //FAIL
-            //"args": [ "-r", "testroms/acceptance/rapid_di_ei.gb"],                            //FAIL
-            //"args": [ "-r", "testroms/acceptance/ret_cc_timing.gb"],                          //FAIL
-            //"args": [ "-r", "testroms/acceptance/ret_timing.gb"],                             //FAIL
-            //"args": [ "-r", "testroms/acceptance/reti_intr_timing.gb"],                       //FAIL
-            //"args": [ "-r", "testroms/acceptance/reti_timing.gb"],                            //FAIL
-            //"args": [ "-r", "testroms/acceptance/rst_timing.gb"],                             //FAIL
-            //"args": [ "-r", "testroms/acceptance/div_timing.gb"],                             //PASS
+            //"args": [ "-r", "../../testroms/acceptance/add_sp_e_timing.gb"],                        //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/boot_div2-S.gb"],                            //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/boot_div-dmg0.gb"],                          //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/boot_div-dmgABCmgb.gb"],                     //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/boot_div-S.gb"],                             //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/boot_hwio-dmg0.gb"],                         //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/boot_hwio-dmgABCmgb.gb"],                    //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/boot_regs-dmg0.gb"],                         //PASS
+            //"args": [ "-r", "../../testroms/acceptance/call_cc_timing.gb"],                         //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/call_cc_timing2.gb"],                        //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/di_timing-GS.gb"],                           //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/di_timing.gb"],                              //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ei_sequence.gb"],                            //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ei_timing.gb"],                              //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/halt_ime0_ei.gb"],                           //PASS
+            //"args": [ "-r", "../../testroms/acceptance/halt_ime0_nointr_timing.gb"],                //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/halt_ime1_timing.gb"],                       //PASS
+            //"args": [ "-r", "../../testroms/acceptance/halt_ime1_timing2-GS.gb"],                   //PASS
+            //"args": [ "-r", "../../testroms/acceptance/if_ie_registers.gb"],                        //PASS
+            //"args": [ "-r", "../../testroms/acceptance/intr_timing.gb"],                            //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/jp_cc_timing.gb"],                           //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/jp_timing.gb"],                              //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ld_hl_sp_e_timing.gb"],                      //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/oam_dma_restart.gb"],                        //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/oam_dma_start.gb"],                          //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/oam_dma_timing.gb"],                         //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/pop_timing.gb"],                             //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/push_timing.gb"],                            //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/rapid_di_ei.gb"],                            //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ret_cc_timing.gb"],                          //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/ret_timing.gb"],                             //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/reti_intr_timing.gb"],                       //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/reti_timing.gb"],                            //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/rst_timing.gb"],                             //FAIL
+            //"args": [ "-r", "../../testroms/acceptance/div_timing.gb"],                             //PASS
 
             //## MBC1
-            //"args": [ "-r", "testroms/emulator-only/mbc1/bits_bank1.gb" ],                    //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/bits_bank2.gb" ],                    //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/bits_mode.gb" ],                     //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/bits_ramg.gb" ],                     //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_512kb.gb" ],                     //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_1Mb.gb" ],                       //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_2Mb.gb" ],                       //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_4Mb.gb" ],                       //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_8Mb.gb" ],                       //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc1/rom_16Mb.gb" ],                      //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/bits_bank1.gb" ],                    //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/bits_bank2.gb" ],                    //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/bits_mode.gb" ],                     //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/bits_ramg.gb" ],                     //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/rom_512kb.gb" ],                     //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/rom_1Mb.gb" ],                       //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/rom_2Mb.gb" ],                       //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/rom_4Mb.gb" ],                       //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/rom_8Mb.gb" ],                       //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc1/rom_16Mb.gb" ],                      //PASS
 
             //## MBC5
-            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_512kb.gb" ],                     //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_1Mb.gb" ],                       //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_2Mb.gb" ],                       //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_4Mb.gb" ],                       //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_8Mb.gb" ],                       //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_16Mb.gb" ],                      //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_32MB.gb" ],                      //PASS
-            //"args": [ "-r", "testroms/emulator-only/mbc5/rom_64MB.gb" ],                      //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc5/rom_512kb.gb" ],                     //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc5/rom_1Mb.gb" ],                       //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc5/rom_2Mb.gb" ],                       //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc5/rom_4Mb.gb" ],                       //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc5/rom_8Mb.gb" ],                       //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc5/rom_16Mb.gb" ],                      //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc5/rom_32MB.gb" ],                      //PASS
+            //"args": [ "-r", "../../testroms/emulator-only/mbc5/rom_64MB.gb" ],                      //PASS
 
             //### BLARGGS
-            //"args": [ "-r", "testroms/blarggs/cpu_instrs.gb"],                                //PASS
-            //"args": [ "-r", "testroms/blarggs/halt_bug.gb"],                                  //PASS
-            //"args": [ "-r", "testroms/blarggs/interrupt_time.gb"],                            //FAIL (no gbc support)
-            //"args": [ "-r", "testroms/blarggs/instr_timing.gb"],                              //PASS
-            //"args": [ "-r", "testroms/blarggs/mem_timing-1.gb"],                              //FAIL
-            //"args": [ "-r", "testroms/blarggs/mem_timing-2.gb"],                              //FAIL
-            //"args": [ "-r", "testroms/blarggs/01-read_timing.gb"],                            //FAIL
-            //"args": [ "-r", "testroms/blarggs/02-write_timing.gb"],                           //FAIL
-            //"args": [ "-r", "testroms/blarggs/03-modify_timing.gb"],                          //FAIL
+            //"args": [ "-r", "../../testroms/blarggs/cpu_instrs.gb"],                                //PASS
+            //"args": [ "-r", "../../testroms/blarggs/halt_bug.gb"],                                  //PASS
+            //"args": [ "-r", "../../testroms/blarggs/interrupt_time.gb"],                            //FAIL (no gbc support)
+            //"args": [ "-r", "../../testroms/blarggs/instr_timing.gb"],                              //PASS
+            //"args": [ "-r", "../../testroms/blarggs/mem_timing-1.gb"],                              //FAIL
+            //"args": [ "-r", "../../testroms/blarggs/mem_timing-2.gb"],                              //FAIL
+            //"args": [ "-r", "../../testroms/blarggs/01-read_timing.gb"],                            //FAIL
+            //"args": [ "-r", "../../testroms/blarggs/02-write_timing.gb"],                           //FAIL
+            //"args": [ "-r", "../../testroms/blarggs/03-modify_timing.gb"],                          //FAIL
 
             //### DEMOS
-            //"args": [ "-r", "roms/gejmboj.gb"],                                               //FAIL
-            //"args": [ "-r", "roms/pocket.gb"],                                                //FAIL
-            //"args": [ "-r", "roms/Dawn_fixed.gb"],                                            //PASS
+            //"args": [ "-r", "../../roms/gejmboj.gb"],                                               //FAIL
+            //"args": [ "-r", "../../roms/pocket.gb"],                                                //FAIL
+            //"args": [ "-r", "../../roms/Dawn_fixed.gb"],                                            //PASS
 
             //####  GAMES
-            //"args": [ "-r", "roms/Prehistorik Man (USA, Europe).gb"],                         //Hang after Intro
-            //"args": [ "-r", "roms/Alleyway (World).gb"],                                      //Works
-            //"args": [ "-r", "roms/Baseball (World).gb"],                                      //Works
-            //"args": [ "-r", "roms/Mega Man - Dr. Wily's Revenge (USA).gb" ],                  //Works, Sprite flickering (8x16 sprites)
-            //"args": [ "-r", "roms/Bomb Jack (Europe).gb" ],                                   //Works
-            //"args": [ "-r", "roms/Tetris (Japan) (En).gb" ],                                  //Works
-            //"args": [ "-r", "roms/BattleCity (Japan).gb" ],                                   //Works
-            //"args": [ "-r", "roms/Alfred Chicken (Europe).gb" ],                              //Works
-            //"args": [ "-r", "roms/Super Mario Land (World).gb" ],                             //Works
-            //"args": [ "-r", "roms/Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb" ],    //Works
-            //"args": [ "-r", "roms/Street Fighter II (USA) (SGB Enhanced).gb" ],               //Graphic Corruption, no input
-            //"args": [ "-r", "roms/Pokemon - Blaue Edition (Germany) (SGB Enhanced).gb" ],     //Works but some graphic glitches
-            //"args": [ "-r", "roms/Asterix (Europe) (En,Fr,De,Es,It).gb" ],                    //Works
-            //"args": [ "-r", "roms/Castlevania - The Adventure (Europe).gb" ],                 //Works, 16x8 Sprite issue
-            //"args": [ "-r", "roms/Donkey Kong Land (USA, Europe) (SGB Enhanced).gb" ],        //Works but weird palette
-            //"args": [ "-r", "roms/Donkey Kong Land III (USA, Europe) (SGB Enhanced).gb" ],    //Works but weird palette
+            "args": [ "-r", "../../roms/Prehistorik Man (USA, Europe).gb"],                         //Hang after Intro
+            //"args": [ "-r", "../../roms/Alleyway (World).gb"],                                      //Works
+            //"args": [ "-r", "../../roms/Baseball (World).gb"],                                      //Works
+            //"args": [ "-r", "../../roms/Mega Man - Dr. Wily's Revenge (USA).gb" ],                  //Works, Sprite flickering (8x16 sprites)
+            //"args": [ "-r", "../../roms/Bomb Jack (Europe).gb" ],                                   //Works
+            "args": [ "-r", "../../roms/Tetris (Japan) (En).gb" ],                                  //Works
+            //"args": [ "-r", "../../roms/BattleCity (Japan).gb" ],                                   //Works
+            //"args": [ "-r", "../../roms/Alfred Chicken (Europe).gb" ],                              //Works
+            //"args": [ "-r", "../../roms/Super Mario Land (World).gb" ],                             //Works
+            //"args": [ "-r", "../../roms/Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb" ],    //Works
+            //"args": [ "-r", "../../roms/Street Fighter II (USA) (SGB Enhanced).gb" ],               //Graphic Corruption, no input
+            //"args": [ "-r", "../../roms/Pokemon - Blaue Edition (Germany) (SGB Enhanced).gb" ],     //Works but some graphic glitches
+            //"args": [ "-r", "../../roms/Asterix (Europe) (En,Fr,De,Es,It).gb" ],                    //Works
+            //"args": [ "-r", "../../roms/Castlevania - The Adventure (Europe).gb" ],                 //Works, 16x8 Sprite issue
+            //"args": [ "-r", "../../roms/Donkey Kong Land (USA, Europe) (SGB Enhanced).gb" ],        //Works but weird palette
+            //"args": [ "-r", "../../roms/Donkey Kong Land III (USA, Europe) (SGB Enhanced).gb" ],    //Works but weird palette
             
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/win32/build_release/",
@@ -153,7 +153,7 @@
             "name": "(Win32) Launch Release",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/win32/build_debug/k15_win32_gb_emulator.exe",
+            "program": "${workspaceFolder}/win32/build_debug/k15_win32_cl_gb_emulator.exe",
             "args": [ "Super Mario Land (World).gb" ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/win32/build_debug/",
