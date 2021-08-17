@@ -1260,16 +1260,7 @@ uint8_t isCartridgeTypeSupported( const GBCartridgeType cartridgeType )
         case ROM_MBC5_RUMBLE_SRAM_BATT:
             return 1;
 
-        case ROM_MBC2:
-        case ROM_MBC2_BATT:
-        case ROM_MBC3_TIMER_BATT:
-        case ROM_MBC3_TIMER_RAM_BATT: 
-        case ROM_MBC3:
-        case ROM_MBC3_RAM:
-        case ROM_MBC3_RAM_BATT:
-        case ROM_MMMD1:
-        case ROM_MMMD1_SRAM:
-        case ROM_MMMD1_SRAM_BATT:
+        default:
             return 0;
     }
 
