@@ -80,14 +80,14 @@ IF !FOUND_PATH!==0 (
 	echo Could not find valid Visual Studio installation.
 ) ELSE (
 	echo Found Visual Studio installation at !VS_PATH!
-	echo Searching and executing vsvars64.bat ...
-	set VCVARS_PATH="!VS_PATH!VC\vcvars64.bat"
+	echo Searching and executing vcvarsall.bat ...
+	set VCVARS_PATH="!VS_PATH!VC\vcvarsall.bat"
 
 	call !VCVARS_PATH! >nul 2>nul
 
 	if !errorlevel! neq 0 (
-		set VCVARS_PATH="!VS_PATH!VC\Auxiliary\Build\vcvars64.bat"
-		call !VCVARS_PATH! x86 >nul 2>nul
+		set VCVARS_PATH="!VS_PATH!VC\Auxiliary\Build\vcvarsall.bat"
+		call !VCVARS_PATH! x64 >nul 2>nul
 	)
 
 :START_COMPILATION
