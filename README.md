@@ -13,8 +13,7 @@ that is natively not able to do so.
 ## How do I build this software locally?
 
 Currently the codebase can only be build on a Windows machine with Microsoft Visual Studio installed.
-If these requirements are met, simply run the `build_msvc_cl.bat` or `build_msvc_clang` - This should spawn a `cl.exe` or `clang.exe` instance which will compile
-the project and output the executible. In case you want to build a debug version, pass the argument `debug` to the build scripts.
+If these requirements are met, simply run the `build_msvc_cl.bat` or `build_msvc_clang` inside thw `win32` directory - This should spawn a `cl.exe` or `clang.exe` instance which will compile the project and output the executible. In case you want to build a debug version, pass the argument `debug` to the build scripts.
 
 ## How do I navigate the codebase?
 
