@@ -629,7 +629,7 @@ uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileN
 	pOutFileMapping->pFileHandle 		= pFileHandle;
 	pOutFileMapping->pFileMappingHandle = pFileMappingHandle;
 	pOutFileMapping->pFileBaseAddress	= pFileBaseAddress;
-	pOutFileMapping->fileSizeInBytes	= fileSizeInBytes;
+	pOutFileMapping->fileSizeInBytes	= ( uint32_t )fileSizeInBytes;
 
 	return 1;
 }
@@ -1085,7 +1085,7 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 			}
 			else if( wparam >= gbMenuSpeed1x && wparam <= gbMenuSpeed8x )
 			{
-				const uint8_t speedFactorShift = wparam - gbMenuSpeed1x;
+				const uint8_t speedFactorShift = (uint8_t)( wparam - gbMenuSpeed1x );
 				const uint8_t speedFactor = 1 << speedFactorShift;
 				
 				setEmulatorSpeedFactor( pContext, speedFactor );
