@@ -25,6 +25,14 @@
 #define Kbit(x) (Kbyte(x)/8)
 #define Mbit(x) (Mbyte(x)/8)
 
+#define MultiplyBy2(x)(x<<1)
+#define MultiplyBy4(x)(x<<2)
+#define MultiplyBy8(x)(x<<3)
+
+#define DivideBy2(x)(x>>1)
+#define DivideBy4(x)(x>>2)
+#define DivideBy8(x)(x>>3)
+
 #define FourCC(a, b, c, d)  ((uint32_t)((a) << 0) | (uint32_t)((b) << 8) | (uint32_t)((c) << 16) | (uint32_t)((d) << 24))
 #define ArrayCount(arr)     (sizeof(arr)/sizeof(arr[0]))
 
@@ -71,8 +79,8 @@ static constexpr size_t     gbCompressionTokenSizeInBytes           = 1;
 static constexpr size_t     gbRamBankSizeInBytes                    = Kbyte( 8 );
 static constexpr size_t     gbRomBankSizeInBytes                    = Kbyte( 16 );
 
+typedef uint16_t GBScanlineTilePixel;
 typedef uint32_t GBEmulatorInstanceEventMask;
-
 enum
 {
     K15_GB_NO_EVENT_FLAG            = 0x00,
@@ -283,8 +291,8 @@ struct GBCpuState
 
     GBCpuRegisters  registers;
 
-    uint32_t        cycleCounter;
-    uint16_t        dmaAddress;
+    uint32_t        cycleCounter;   //FK: TODO: count in M cycles so that we can uint16_t here..?
+    uint16_t        dmaAddress; 
     uint8_t         dmaCycleCounter;
     GBCpuStateFlags flags;          //FK: not to be confused with GBCpuRegisters::F
 };
@@ -405,8 +413,8 @@ struct GBPpuFlags
 
 struct GBPpuPixelFetcher
 {
-    uint16_t cycleCounter;
-    uint16_t tileData;
+    uint8_t tileDataLow;
+    uint8_t tileDataHigh;
     
     GBPixelFetcherState state;
     uint8_t             tileIndex;
@@ -417,9 +425,10 @@ struct GBPpuPixelFifo
 {
     GBPalette   palette;
 
+    uint16_t    pixelDataHigh;
+    uint16_t    pixelDataLow;
     uint8_t     pixelDataShift;
     uint8_t     pixelCount;
-    uint32_t    pixelData; //FK: holds 16 pixel with 2 bits per pixel
 };
 
 struct GBPpuState
@@ -427,12 +436,13 @@ struct GBPpuState
     GBObjectAttributes* pOAM;
 
     GBLcdStatus*        pLcdStatus;
+    uint8_t*            pLy;
     uint8_t*            pLyc;
     uint8_t*            pBackgroundOrWindowTileIds[ 2 ];
     uint8_t*            pTileBlocks[ 3 ];
     uint8_t*            pGBFrameBuffers[ gbFrameBufferCount ];
 
-    uint32_t            cycleCounter;
+    uint16_t            lcdModeCycleCounter;
 
     GBPpuPixelFetcher   pixelFetcher;
     GBPpuPixelFifo      backgroundPixelFifo;
@@ -450,6 +460,7 @@ struct GBPpuState
     uint8_t             windowPosY;
     uint8_t             scanlineIndexCompare;
     uint8_t             scanlineIndex;
+    uint8_t             scanlineXPos;
     uint8_t             scanlineSpriteCounter;
     uint8_t             activeFrameBufferIndex;
 };
@@ -775,9 +786,11 @@ void patchIOPpuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBPpuState* p
     pPpuState->pTileBlocks[2]                   = pMemoryMapper->pBaseAddress + 0x9000;
     pPpuState->pBackgroundOrWindowTileIds[0]    = pMemoryMapper->pBaseAddress + 0x9800;
     pPpuState->pBackgroundOrWindowTileIds[1]    = pMemoryMapper->pBaseAddress + 0x9C00;
-    pPpuState->cycleCounter                     = 0;
+    pPpuState->lcdModeCycleCounter              = 0;
 
     pPpuState->pLcdStatus = (GBLcdStatus*)(pMemoryMapper->pBaseAddress + 0xFF41);
+    pPpuState->pLy        = pMemoryMapper->pBaseAddress + K15_GB_MAPPED_IO_ADDRESS_LY;
+    pPpuState->pLyc       = pMemoryMapper->pBaseAddress + K15_GB_MAPPED_IO_ADDRESS_LYC;
 }
 
 void patchIOApuMappedMemoryPointer( GBMemoryMapper* pMemoryMapper, GBApuState* pApuState )
@@ -2158,6 +2171,7 @@ void incrementPpuScanlineIndex( GBCpuState* pCpuState, GBPpuState* pPpuState )
 
     const uint8_t nextScanlineIndex = pPpuState->scanlineIndex + 1;
 
+    *pPpuState->pLy                     = nextScanlineIndex;
     pPpuState->scanlineIndex            = nextScanlineIndex;
     pPpuState->pLcdStatus->lycEqLyFlag  = ( pPpuState->scanlineIndexCompare == nextScanlineIndex );
     const uint8_t lcdStatInterruptLine = pPpuState->pLcdStatus->lycEqLyFlag && pPpuState->flags.triggerLcdStatInterruptLycEqLy;
@@ -2215,11 +2229,19 @@ const uint8_t fetchPpuPixelFifoTileIndex( GBPpuState* pPpuState, const uint8_t s
 
 uint16_t fetchPpuTileData( GBPpuState* pPpuState, const uint8_t unsignedTileIndex )
 {
-    const uint8_t tileDataOffset = pPpuState->scanlineIndex % gbTileSizeInBytes;
+    //FK: Get the y offset inside the tile row to where the scanline currently is.
+    const uint8_t yInTileSpace = pPpuState->scanlineIndex / gbTileResolutionInPixels;
+    const uint8_t tileRowStartYPos  = yInTileSpace * gbTileResolutionInPixels;
+    const uint8_t tileRowYOffset = pPpuState->scanlineIndex - tileRowStartYPos;
+
+    const uint8_t tileDataOffset = yInTileSpace * gbBackgroundTileCount;
     if( pPpuState->flags.bgAndWindowTileDataArea )
     {
-        const uint16_t* pTileData = (const uint16_t*)pPpuState->pTileBlocks[ 0 ];
-        return pTileData[ unsignedTileIndex + tileDataOffset ];
+        const uint8_t* pTileData = (const uint8_t*)pPpuState->pTileBlocks[ 0 ];
+        const uint8_t* pTileTopPixelData = pTileData + unsignedTileIndex * gbTileSizeInBytes;
+        const uint16_t* pTileScanlinePixelData = (const uint16_t*)( pTileTopPixelData + ( pPpuState->scanlineIndex - 1 * 8 ) * 2 );
+
+        return *pTileScanlinePixelData;
     }
 
     const uint16_t* pTileData    = (const uint16_t*)pPpuState->pTileBlocks[ 2 ];
@@ -2227,84 +2249,59 @@ uint16_t fetchPpuTileData( GBPpuState* pPpuState, const uint8_t unsignedTileInde
     return pTileData[ signedTileIndex + tileDataOffset ];
 }
 
-void fillBackgroundPpuPixelFifo( GBPpuState* pPpuState, GBPpuPixelFetcher* pPixelFetcher, GBPpuPixelFifo* pPixelFifo, uint8_t cycleCount )
+void tickBackgroundPixelFetcher( GBPpuState* pPpuState, GBPpuPixelFetcher* pPixelFetcher, GBPpuPixelFifo* pPixelFifo )
 {
-    while( cycleCount > 0 )
+    if( pPpuState->scanlineIndex == 9 )
     {
-        pPixelFetcher->cycleCounter += cycleCount;
-        switch( pPixelFetcher->state )
+        BreakPointHook();
+    }
+
+    switch( pPixelFetcher->state )
+    {
+        case GBPixelFetcherState::GetTile:
         {
-            case GBPixelFetcherState::GetTile:
-            {
-                if( pPixelFetcher->cycleCounter < 2 )
-                {
-                    break;
-                }
+            pPixelFetcher->posXInTileSpace &= 0x1F;
+            pPixelFetcher->tileIndex        = fetchPpuPixelFifoTileIndex( pPpuState, pPixelFetcher->posXInTileSpace++ );
+            pPixelFetcher->state            = GBPixelFetcherState::GetTileDataLow;
+            pPixelFetcher->tileDataLow      = 0u;
+            pPixelFetcher->tileDataHigh     = 0u;
+            break;
+        }
+        case GBPixelFetcherState::GetTileDataLow:
+        {
+            const uint16_t tileData = fetchPpuTileData( pPpuState, pPixelFetcher->tileIndex );
 
-                cycleCount -= 2;
-                pPixelFetcher->posXInTileSpace &= 0x1F;
-                pPixelFetcher->tileIndex        = fetchPpuPixelFifoTileIndex( pPpuState, pPixelFetcher->posXInTileSpace++ );
-                pPixelFetcher->cycleCounter     = 2u;
-                pPixelFetcher->state            = GBPixelFetcherState::GetTileDataLow;
-                pPixelFetcher->tileData         = 0u;
-                continue;
-            }
-            case GBPixelFetcherState::GetTileDataLow:
-            {
-                if( pPixelFetcher->cycleCounter < 4 )
-                {
-                    break;
-                }
+            pPixelFetcher->tileDataLow  = tileData & 0x00FF;
+            pPixelFetcher->state        = GBPixelFetcherState::GetTileDataHigh;
+            break;
+        }
+        case GBPixelFetcherState::GetTileDataHigh:
+        {
+            const uint16_t tileData = fetchPpuTileData( pPpuState, pPixelFetcher->tileIndex );
 
-                const uint16_t tileData = fetchPpuTileData( pPpuState, pPixelFetcher->tileIndex );
+            pPixelFetcher->tileDataHigh = ( tileData >> 8 ) & 0x00FF;
+            pPixelFetcher->state        = GBPixelFetcherState::Sleep;
+            break;
+        }
+        case GBPixelFetcherState::Sleep:
+        {
+            pPixelFetcher->state = GBPixelFetcherState::PushPixelRowToFifo;
+            break;
+        }
+        case GBPixelFetcherState::PushPixelRowToFifo:
+        {
+            const uint8_t pixelsToDiscard   = pPpuState->screenPosX % 8;
+            const uint32_t pixelDiscardMask = ~( ( 1 << ( pixelsToDiscard * 2 ) ) - 1 );
+ 
+            pPixelFifo->palette         = pPpuState->backgroundMonochromePalette;
+            pPixelFifo->pixelDataHigh   |= pPixelFetcher->tileDataHigh << pPixelFifo->pixelDataShift;
+            pPixelFifo->pixelDataLow    |= pPixelFetcher->tileDataLow << pPixelFifo->pixelDataShift;
+            pPixelFifo->pixelDataShift  = 8u;
 
-                cycleCount -= 2;
-                pPixelFetcher->tileData |= tileData & 0x00FF;
-
-                pPixelFetcher->cycleCounter = 4;
-                pPixelFetcher->state        = GBPixelFetcherState::GetTileDataHigh;
-                continue;
-            }
-            case GBPixelFetcherState::GetTileDataHigh:
-            {
-                if( pPixelFetcher->cycleCounter < 6 )
-                {
-                    break;
-                }
-
-                const uint16_t tileData = fetchPpuTileData( pPpuState, pPixelFetcher->tileIndex );
-
-                cycleCount -= 2;
-                pPixelFetcher->tileData |= tileData & 0xFF00;
-
-                pPixelFetcher->cycleCounter = 6;
-                pPixelFetcher->state        = GBPixelFetcherState::Sleep;
-                continue;
-            }
-            case GBPixelFetcherState::Sleep:
-            {
-                if( pPixelFetcher->cycleCounter < 8 )
-                {
-                    break;
-                }
-
-                cycleCount -= 2;
-                pPixelFetcher->state = GBPixelFetcherState::PushPixelRowToFifo;
-                continue;
-            }
-            case GBPixelFetcherState::PushPixelRowToFifo:
-            {
-                const uint8_t pixelsToDiscard = pPpuState->screenPosX % 8;
-                const uint8_t pixelDiscardMask = ( 1 << pixelsToDiscard ) - 1;
-
-                pPixelFifo->palette         = pPpuState->backgroundMonochromePalette;
-                pPixelFifo->pixelDataShift  = 0u;
-                pPixelFifo->pixelData       |= pPixelFetcher->tileData; //FK: Todo: shift pixel data
-                pPixelFifo->pixelData       &= pixelDiscardMask;
-                pPixelFifo->pixelCount      += 8;
-                pPixelFetcher->state        = GBPixelFetcherState::GetTile;
-                break;
-            }
+           // pPixelFifo->pixelData       &= pixelDiscardMask << pPixelFifo->pixelDataShift;
+            pPixelFifo->pixelCount      += 8;
+            pPixelFetcher->state        = GBPixelFetcherState::GetTile;
+            break;
         }
     }
 }
@@ -2329,19 +2326,42 @@ void updatePpuFlagsFromLcdControl( GBPpuFlags* pPpuFlags, GBLcdControl lcdContro
     pPpuFlags->bgAndWindowPriority        = lcdControl.bgEnable;
 }
 
-void popPpuPixelFifoContentToLcd( GBPpuState* pPpuState, GBPpuPixelFifo* pPixelFifo, const uint8_t scanlinePosX, uint8_t numberOfPixelsToPop )
+void popPpuPixelFifoContentToLcd( GBPpuState* pPpuState, GBPpuPixelFifo* pPixelFifo, uint8_t numberOfPixelsToPop )
 {
     RuntimeAssert( pPixelFifo->pixelCount >= numberOfPixelsToPop );
 
-    uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
-    uint16_t* pFrameBufferPixelData = (uint16_t*)( pActiveFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * pPpuState->scanlineIndex ) );
-    pFrameBufferPixelData += ( scanlinePosX / 8 );
+    if( pPpuState->scanlineIndex == 9 )
+    {
+        BreakPointHook();
+    }
 
-    uint16_t lcdPixelData = *pFrameBufferPixelData;
-    lcdPixelData |= pPixelFifo->pixelData & ( ( 1 << ( numberOfPixelsToPop * 2 ) ) - 1 );
+    const uint8_t scanlinePixelDataOffset = DivideBy8( pPpuState->scanlineXPos );
+    const uint8_t scanlinePixelDataShift  = MultiplyBy2( pPpuState->scanlineXPos % 8 );
+
+    uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
+    GBScanlineTilePixel* pFrameBufferPixelData = (GBScanlineTilePixel*)( pActiveFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * pPpuState->scanlineIndex ) );
+    pFrameBufferPixelData += scanlinePixelDataOffset;
+    
+    const uint32_t pixelDataMask = ( 1 << MultiplyBy2( numberOfPixelsToPop ) ) - 1;
+    const uint8_t pixelDataShift = MultiplyBy2( numberOfPixelsToPop );
+
+    uint16_t pixelData = 0u;
+    for( size_t pixelIndex = 0u; pixelIndex < numberOfPixelsToPop; ++pixelIndex )
+    {
+        pixelData |= ( pPixelFifo->pixelDataLow  & 0x1 ) << 0;
+        pixelData |= ( pPixelFifo->pixelDataHigh & 0x1 ) << 1;
+
+        pPixelFifo->pixelDataLow >>= 1;
+        pPixelFifo->pixelDataHigh >>= 1;
+    }
+
+    GBScanlineTilePixel lcdPixelData = *pFrameBufferPixelData;
+    lcdPixelData &= ~( pixelDataMask << scanlinePixelDataShift );
+    lcdPixelData |= ( pixelData & pixelDataMask ) << scanlinePixelDataShift;
 
     *pFrameBufferPixelData = lcdPixelData;
     pPixelFifo->pixelCount -= numberOfPixelsToPop;
+    pPpuState->scanlineXPos += numberOfPixelsToPop;
 }
 
 void updatePpu( GBCpuState* pCpuState, GBPpuState* pPpuState, uint8_t cycleCount )
@@ -2352,61 +2372,69 @@ void updatePpu( GBCpuState* pCpuState, GBPpuState* pPpuState, uint8_t cycleCount
         return;
     }
 
-    while( cycleCount > 0 )
-    {
-        pPpuState->cycleCounter += cycleCount;
+    //FK: fastes cpu instr takes 4 cycles, there shouldn't be anything faster
+    RuntimeAssert( ( cycleCount % 4 ) == 0 );
 
+    //FK: Convert from t cycles to m cycles
+    uint8_t mCycleCount = DivideBy4( cycleCount );
+    while( mCycleCount-- > 0 )
+    {
         const uint8_t scanlineIndex = pPpuState->scanlineIndex;
         switch( pPpuState->lcdMode )
         {
             case 0:
             {
-                if( pPpuState->cycleCounter >= 456u )
+                if( pPpuState->lcdModeCycleCounter >= 456u )
                 {
-                    cycleCount = pPpuState->cycleCounter - 456u;
-                    pPpuState->cycleCounter = 0u;
-
+                    pPpuState->lcdModeCycleCounter -= 456u;
                     incrementPpuScanlineIndex( pCpuState, pPpuState );
 
                     if( pPpuState->scanlineIndex == 144u )
                     {
+                        //FK: change between index 0 and 1
+                        pPpuState->activeFrameBufferIndex = !pPpuState->activeFrameBufferIndex;
+
                         setPpuLcdMode( pCpuState, pPpuState, 1u );
                         triggerInterrupt( pCpuState, VBlankInterrupt );
-                        continue;
+                        break;
                     }
 
                     setPpuLcdMode( pCpuState, pPpuState, 2u );
-                    continue;
+                    break;
                 }
                 break;
             }
 
             case 1:
             {
-                if( pPpuState->cycleCounter >= 4560u )
+                if( pPpuState->lcdModeCycleCounter >= 456u )
                 {
-                    cycleCount = pPpuState->cycleCounter - 4560u;
-                    pPpuState->cycleCounter  = 0u;
-                    pPpuState->scanlineIndex = 0u;
-                    setPpuLcdMode( pCpuState, pPpuState, 2u );
-                    continue;
+                    pPpuState->lcdModeCycleCounter -= 456u;
+
+                    if( pPpuState->scanlineIndex == 153 )
+                    {
+                        pPpuState->scanlineIndex = 0u;
+                        setPpuLcdMode( pCpuState, pPpuState, 2u );
+                        break;
+                    }
+
+                    incrementPpuScanlineIndex( pCpuState, pPpuState );
                 }
                 break;
             }
 
             case 2:
             {
-                if( pPpuState->cycleCounter >= 80u )
+                if( pPpuState->lcdModeCycleCounter >= 80u )
                 {
-                    cycleCount = pPpuState->cycleCounter - 80u;
-                    pPpuState->cycleCounter = 80u;
-
+                    pPpuState->lcdModeCycleCounter -= 80u;
                     setPpuLcdMode( pCpuState, pPpuState, 3u );
-                    continue;
+                    break;
                 }
 
                 if( pPpuState->flags.oamSearched )
                 {
+                    cycleCount = 0;
                     break;
                 }
 
@@ -2426,25 +2454,33 @@ void updatePpu( GBCpuState* pCpuState, GBPpuState* pPpuState, uint8_t cycleCount
                 {
                     BreakPointHook();
                 }
-                const uint8_t scanlinePosX = pPpuState->pixelFetcher.posXInTileSpace;
-                if( pPpuState->backgroundPixelFifo.pixelCount <= 8 && scanlinePosX < 31 )
-                {
-                    fillBackgroundPpuPixelFifo( pPpuState, &pPpuState->pixelFetcher, &pPpuState->backgroundPixelFifo, cycleCount );
-                }
 
-                const uint8_t numberOfPixelsToPop = min( pPpuState->backgroundPixelFifo.pixelCount, cycleCount );
-                popPpuPixelFifoContentToLcd( pPpuState, &pPpuState->backgroundPixelFifo, scanlinePosX, numberOfPixelsToPop );
-                
-                //FK: One pixel per T-cycle
-                cycleCount -= numberOfPixelsToPop;
-
-                if( pPpuState->backgroundPixelFifo.pixelCount == 0 && scanlinePosX == 31 )
+                //FK: Fifo ticks twice per 1 m cycle
+                uint8_t fifoTickCount = 2u;
+                while( fifoTickCount-- > 0 )
                 {
-                    setPpuLcdMode( pCpuState, pPpuState, 0 );
-                    pPpuState->pixelFetcher.cycleCounter    = 0u;
-                    pPpuState->pixelFetcher.posXInTileSpace = 0u;
-                    pPpuState->pixelFetcher.state           = GBPixelFetcherState::GetTile;
-                    continue;
+                    const uint8_t numberOfPixelsToPop = 2; //FK: 2 pixels per "fifo tick" 
+                    const uint8_t scanlinePosX = pPpuState->pixelFetcher.posXInTileSpace;
+                    if( pPpuState->backgroundPixelFifo.pixelCount > 8 || scanlinePosX == 21 )
+                    {
+                        popPpuPixelFifoContentToLcd( pPpuState, &pPpuState->backgroundPixelFifo, numberOfPixelsToPop );
+
+                        if( pPpuState->backgroundPixelFifo.pixelCount == 0 )
+                        {
+                            //FK: Whole scanline has been pushed
+                            setPpuLcdMode( pCpuState, pPpuState, 0 );
+                            pPpuState->scanlineXPos = 0u;
+                            pPpuState->backgroundPixelFifo.pixelDataShift  = 0u;
+                            pPpuState->pixelFetcher.posXInTileSpace = 0u;
+                            pPpuState->pixelFetcher.state           = GBPixelFetcherState::GetTile;
+                            break;
+                        }
+                    }
+
+                    if( scanlinePosX < 21 )
+                    {
+                        tickBackgroundPixelFetcher( pPpuState, &pPpuState->pixelFetcher, &pPpuState->backgroundPixelFifo );
+                    }
                 }
                 
                 break;
@@ -2456,6 +2492,8 @@ void updatePpu( GBCpuState* pCpuState, GBPpuState* pPpuState, uint8_t cycleCount
                 break;
             }
         }
+
+         pPpuState->lcdModeCycleCounter += 4u;
     }
     
 #else
@@ -4467,17 +4505,11 @@ GBEmulatorInstanceEventMask runGBEmulatorForCycles( GBEmulatorInstance* pInstanc
 #endif
     }
 
-    pCpuState->cycleCounter += localCycleCounter;
-    if( pPpuState->cycleCounter >= gbCyclesPerFrame )
+    if( pCpuState->cycleCounter >= gbCyclesPerFrame )
     {
-        pInstance->flags.vblank = 1;
-        pPpuState->cycleCounter -= gbCyclesPerFrame;
         pCpuState->cycleCounter -= gbCyclesPerFrame;
     }
-    else
-    {
-        BreakPointHook();
-    }
 
-    return pInstance->flags.vblank == 1 ? K15_GB_VBLANK_EVENT_FLAG : K15_GB_NO_EVENT_FLAG;
+    return K15_GB_VBLANK_EVENT_FLAG;
+    //return pInstance->flags.vblank == 1 ? K15_GB_VBLANK_EVENT_FLAG : K15_GB_NO_EVENT_FLAG;
 }
