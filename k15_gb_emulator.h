@@ -2230,7 +2230,7 @@ uint16_t fetchPpuTileData( GBPpuState* pPpuState, const uint8_t unsignedTileInde
     {
         const int8_t signedTileIndex = ( int8_t )unsignedTileIndex;
         pTileData = pPpuState->pTileBlocks[ 2 ];
-        pTileData += unsignedTileIndex * gbTileSizeInBytes;
+        pTileData += signedTileIndex * gbTileSizeInBytes;
     }
 
     const uint16_t* pTileScanlinePixelData = (const uint16_t*)( pTileData + tileYOffset * 2 );
@@ -2282,8 +2282,24 @@ void tickBackgroundPixelFetcher( GBPpuState* pPpuState, GBPpuPixelFetcher* pPixe
  
             const uint8_t pixelDataShift = pPixelFifo->pixelCount == 0 ? 8 : 0;
             pPixelFifo->palette         = pPpuState->backgroundMonochromePalette;
+        #if 1
             pPixelFifo->pixelDataHigh   |= ( pPixelFetcher->tileDataHigh & pixelDiscardMask ) << pixelDataShift;
             pPixelFifo->pixelDataLow    |= ( pPixelFetcher->tileDataLow & pixelDiscardMask ) << pixelDataShift;
+        #else
+                //if( pPpuState->scanlineXPos < 16 )
+                //{
+                //    pPixelFifo->pixelDataHigh   = 0b0000000100000001;
+                //    pPixelFifo->pixelDataLow    = 0b0000000100000001;
+                //}
+                //else
+                //{
+                //    pPixelFifo->pixelDataLow = 0;
+                //    pPixelFifo->pixelDataHigh = 0;
+                //}                           
+                pPixelFifo->pixelDataHigh   = 0b0001101101111110;
+                pPixelFifo->pixelDataLow    = 0b0001101101111110;
+
+        #endif
             pPixelFifo->pixelCount      += 8;
             pPixelFetcher->state        = GBPixelFetcherState::GetTile;
             break;
@@ -2311,42 +2327,35 @@ void updatePpuFlagsFromLcdControl( GBPpuFlags* pPpuFlags, GBLcdControl lcdContro
     pPpuFlags->bgAndWindowPriority        = lcdControl.bgEnable;
 }
 
-void popPpuPixelFifoContentToLcd( GBPpuState* pPpuState, GBPpuPixelFifo* pPixelFifo, uint8_t numberOfPixelsToPop )
+void popPpuPixelFifoContentToLcd( GBPpuState* pPpuState, GBPpuPixelFifo* pPixelFifo )
 {
-    RuntimeAssert( pPixelFifo->pixelCount >= numberOfPixelsToPop );
-
-    if( pPpuState->scanlineIndex == 9 )
-    {
-        BreakPointHook();
-    }
-
-    const uint8_t scanlinePixelDataOffset = DivideBy8( pPpuState->scanlineXPos );
-    const uint8_t scanlinePixelDataShift  = MultiplyBy2( ( 8 - ( pPpuState->scanlineXPos % 8 ) ) - numberOfPixelsToPop );
+    //FK: Optimized for popping 2 pixels (as the ppu only pops 2 pixels per ppu tick)
+    const uint8_t pixelsToDiscard = pPpuState->screenPosX % 8;
+    const uint8_t scanlinePixelDataOffset = DivideBy4( pPpuState->scanlineXPos );
+    const uint8_t scanlinePixelDataShift  = 4 - ( MultiplyBy2( pPpuState->scanlineXPos ) % 8 );
 
     uint8_t* pActiveFrameBuffer = getActiveFrameBuffer( pPpuState );
-    GBScanlineTilePixel* pFrameBufferPixelData = (GBScanlineTilePixel*)( pActiveFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * pPpuState->scanlineIndex ) );
+    uint8_t* pFrameBufferPixelData = pActiveFrameBuffer + ( gbFrameBufferScanlineSizeInBytes * pPpuState->scanlineIndex );
     pFrameBufferPixelData += scanlinePixelDataOffset;
     
-    const uint32_t pixelDataMask = ( 1 << MultiplyBy2( numberOfPixelsToPop ) ) - 1;
-    const uint8_t pixelDataShift = MultiplyBy2( numberOfPixelsToPop );
+    uint8_t pixelData = 0u;
+    pixelData |= ( ( pPixelFifo->pixelDataHigh  & 0x8000 ) > 0 ) << 3;
+    pixelData |= ( ( pPixelFifo->pixelDataLow   & 0x8000 ) > 0 ) << 2;
+    pixelData |= ( ( pPixelFifo->pixelDataHigh  & 0x4000 ) > 0 ) << 1;
+    pixelData |= ( ( pPixelFifo->pixelDataLow   & 0x4000 ) > 0 ) << 0;
 
-    uint16_t pixelData = 0u;
-    for( size_t pixelIndex = 0u; pixelIndex < numberOfPixelsToPop; ++pixelIndex )
-    {
-        pixelData |= ( ( pPixelFifo->pixelDataLow  & 0x8000 ) > 0 ) << ( pixelIndex * 2 + 0 );
-        pixelData |= ( ( pPixelFifo->pixelDataHigh & 0x8000 ) > 0 ) << ( pixelIndex * 2 + 1 );
+    pPixelFifo->pixelDataLow <<= 2;
+    pPixelFifo->pixelDataHigh <<= 2;
+   
+    const uint8_t pixelDataMask = 0x0F;
 
-        pPixelFifo->pixelDataLow <<= 1;
-        pPixelFifo->pixelDataHigh <<= 1;
-    }
-
-    GBScanlineTilePixel lcdPixelData = *pFrameBufferPixelData;
+    uint8_t lcdPixelData = *pFrameBufferPixelData;
     lcdPixelData &= ~( pixelDataMask << scanlinePixelDataShift );
     lcdPixelData |= ( pixelData & pixelDataMask ) << scanlinePixelDataShift;
 
     *pFrameBufferPixelData = lcdPixelData;
-    pPixelFifo->pixelCount -= numberOfPixelsToPop;
-    pPpuState->scanlineXPos += numberOfPixelsToPop;
+    pPixelFifo->pixelCount -= 2;
+    pPpuState->scanlineXPos += 2;
 }
 
 void updatePpu( GBCpuState* pCpuState, GBPpuState* pPpuState, uint8_t cycleCount )
@@ -2435,20 +2444,14 @@ void updatePpu( GBCpuState* pCpuState, GBPpuState* pPpuState, uint8_t cycleCount
                 //FK: when entering window, clear background fifo and fill again with window pixels
                 //https://www.youtube.com/watch?v=HyzD8pNlpwI&t=3194s
 
-                if( pPpuState->scanlineIndex == 9 )
-                {
-                    BreakPointHook();
-                }
-
                 //FK: Fifo ticks twice per 1 m cycle
                 uint8_t fifoTickCount = 2u;
                 while( fifoTickCount-- > 0 )
                 {
-                    const uint8_t numberOfPixelsToPop = 2; //FK: 2 pixels per "fifo tick" 
                     const uint8_t scanlinePosX = pPpuState->pixelFetcher.posXInTileSpace;
                     if( pPpuState->backgroundPixelFifo.pixelCount > 8 || scanlinePosX == 21 )
                     {
-                        popPpuPixelFifoContentToLcd( pPpuState, &pPpuState->backgroundPixelFifo, numberOfPixelsToPop );
+                        popPpuPixelFifoContentToLcd( pPpuState, &pPpuState->backgroundPixelFifo );
 
                         if( pPpuState->backgroundPixelFifo.pixelCount == 0 )
                         {
