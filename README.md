@@ -15,6 +15,8 @@ that is natively not able to do so.
 Currently the codebase can only be build on a Windows machine with Microsoft Visual Studio installed.
 If these requirements are met, simply run the `build_msvc_cl.bat` or `build_msvc_clang` inside the `win32` directory - This should spawn a `cl.exe` or `clang.exe` instance which will compile the project and output the executible. In case you want to build a debug version, pass the argument `debug` to the build scripts.
 
+Note: You don't necesseraly *have* to have Visual Studio installed - it's enough if either `cl.exe` or `clang.exe` are part of your `PATH` environment variable (for `build_msvc_cl.bat` and `build_msvc_clang.bat` respectively). Additionally, the linker has to be able to resolve os library and c stdlib calls.
+
 ## How do I navigate the codebase?
 
 The win32 entry point `WinMain()` and interface is located in the `k15_win32_gb_emulator.cpp` file.
