@@ -250,6 +250,7 @@ struct Win32ApplicationContext
 	GLuint						gameboyFrameVertexBuffer						= 0u;
 	GLuint						gameboyVertexArray								= 0u;
 
+	uint8_t						xinputControllerCount							= 0u;
 	uint8_t   					leftMouseDown									= 0u;
 	uint8_t						fullscreen										= 0u;
 	uint8_t						vsyncEnabled									= 0u;
@@ -277,41 +278,6 @@ Win32Settings serializeSettings( Win32ApplicationContext* pContext )
 	settings.showUserMessage	= pContext->showUserMessage;
 
 	return settings;
-}
-
-void renderUserMessageToRGBFrameBuffer( const Win32UserMessage* pUserMessage, uint8_t* pRGBFrameBuffer )
-{
-	if( pUserMessage->timeToLiveInMilliseconds == 0 )
-	{
-		return;
-	}
-
-    const size_t pixelWidth = pUserMessage->textLength * glyphWidthInPixels;
-    
-    const size_t startX = ( gbHorizontalResolutionInPixels - pixelWidth );
-    const size_t startY = ( gbVerticalResolutionInPixels - glyphHeightInPixels );
-	
-	const char* pText = pUserMessage->pText;
-    for( size_t charIndex = 0; charIndex < pUserMessage->textLength; ++charIndex )
-    {
-        const uint8_t* pFontGlyphPixels = getFontGlyphPixel( pText[charIndex] );
-        size_t x = startX + charIndex * glyphWidthInPixels;
-        for( size_t y = startY; y < gbVerticalResolutionInPixels; ++y)
-        {
-            const uint8_t* pFontGlyphPixelsRunning = pFontGlyphPixels;
-            const size_t endX = x + glyphWidthInPixels;
-            for( ;x < endX; ++x)
-            {
-                const size_t pixelIndex = ( x + y * gbHorizontalResolutionInPixels ) * 3;
-                //FK: BGR
-                pRGBFrameBuffer[pixelIndex + 2] = *pFontGlyphPixelsRunning++;
-                pRGBFrameBuffer[pixelIndex + 1] = *pFontGlyphPixelsRunning++;
-                pRGBFrameBuffer[pixelIndex + 0] = *pFontGlyphPixelsRunning++;
-            }
-            x = startX + charIndex * glyphWidthInPixels;
-            pFontGlyphPixels -= ( fontPixelDataWidthInPixels * 3 );
-        }
-    }
 }
 
 uint8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
@@ -361,6 +327,41 @@ uint8_t loadSettingsFromFile( Win32Settings* pOutSettings, const char* pPath )
 		&pOutSettings->showUserMessage );
 
 	return 1;
+}
+
+void renderUserMessageToRGBFrameBuffer( const Win32UserMessage* pUserMessage, uint8_t* pRGBFrameBuffer )
+{
+	if( pUserMessage->timeToLiveInMilliseconds == 0 )
+	{
+		return;
+	}
+
+    const size_t pixelWidth = pUserMessage->textLength * glyphWidthInPixels;
+    
+    const size_t startX = ( gbHorizontalResolutionInPixels - pixelWidth );
+    const size_t startY = ( gbVerticalResolutionInPixels - glyphHeightInPixels );
+	
+	const char* pText = pUserMessage->pText;
+    for( size_t charIndex = 0; charIndex < pUserMessage->textLength; ++charIndex )
+    {
+        const uint8_t* pFontGlyphPixels = getFontGlyphPixel( pText[charIndex] );
+        size_t x = startX + charIndex * glyphWidthInPixels;
+        for( size_t y = startY; y < gbVerticalResolutionInPixels; ++y)
+        {
+            const uint8_t* pFontGlyphPixelsRunning = pFontGlyphPixels;
+            const size_t endX = x + glyphWidthInPixels;
+            for( ;x < endX; ++x)
+            {
+                const size_t pixelIndex = ( x + y * gbHorizontalResolutionInPixels ) * 3;
+                //FK: BGR
+                pRGBFrameBuffer[pixelIndex + 2] = *pFontGlyphPixelsRunning++;
+                pRGBFrameBuffer[pixelIndex + 1] = *pFontGlyphPixelsRunning++;
+                pRGBFrameBuffer[pixelIndex + 0] = *pFontGlyphPixelsRunning++;
+            }
+            x = startX + charIndex * glyphWidthInPixels;
+            pFontGlyphPixels -= ( fontPixelDataWidthInPixels * 3 );
+        }
+    }
 }
 
 void parseCommandLineArguments( Win32GBEmulatorArguments* pOutArguments, LPSTR pCommandLineArguments )
@@ -481,7 +482,7 @@ void updateGameboyFrameVertexBuffer( Win32ApplicationContext* pContext )
 	glUnmapBuffer( GL_ARRAY_BUFFER );
 }
 
-void pushUserMessage( Win32UserMessage* pUserMessage, const char* pText )
+void setUserMessage( Win32UserMessage* pUserMessage, const char* pText )
 {
 	const size_t textLength = strlen( pText );
 	RuntimeAssert( textLength < 17 );
@@ -490,7 +491,6 @@ void pushUserMessage( Win32UserMessage* pUserMessage, const char* pText )
 	pUserMessage->pText 					= pText;
 	pUserMessage->textLength				= ( uint8_t )textLength;
 	pUserMessage->timeToLiveInMilliseconds	= 1000000u;
-
 }
 
 void allocateDebugConsole()
@@ -639,7 +639,7 @@ void loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	Win32FileMapping stateFileMapping;
 	if( mapFileForReading( &stateFileMapping, pStateFileName ) == 0 )
 	{
-		pushUserMessage( pUserMessage, "Can't open state" );
+		setUserMessage( pUserMessage, "Can't open state" );
 		return;
 	}
 
@@ -673,14 +673,14 @@ void saveStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	Win32FileMapping stateFileMapping;
 	if( mapFileForWriting( &stateFileMapping, pStateFileName, stateSizeInBytes ) == 0 )
 	{
-		pushUserMessage( pUserMessage, "Can't open state" );
+		setUserMessage( pUserMessage, "Can't open state" );
 		return;
 	}
 
 	storeGBEmulatorState( pEmulatorInstance, stateFileMapping.pFileBaseAddress, stateSizeInBytes );
 	unmapFileMapping( &stateFileMapping );
 
-	pushUserMessage( pUserMessage, "State saved!" );
+	setUserMessage( pUserMessage, "State saved!" );
 }
 
 void updateMonitorSettings( Win32ApplicationContext* pContext )
@@ -726,6 +726,24 @@ void updateMonitorSettings( Win32ApplicationContext* pContext )
 	const float cylcesPerHostFrameRest = ( ( cyclesPerHostFrame - ( uint32_t )cyclesPerHostFrame ) * ( float )pContext->monitorRefreshRate );
 	pContext->emulatorContext.cyclesPerHostFrame 		= ( uint32_t )cyclesPerHostFrame;
 	pContext->emulatorContext.cyclesPerHostFrameRest 	= ( uint32_t )( cylcesPerHostFrameRest + 0.5f );
+}
+
+uint8_t queryConnectedXInputControllerCount()
+{
+	constexpr uint8_t maxControllerCount = 4u;
+	uint8_t connectedXInputControllerCount = 0u;
+	for( uint8_t controllerIndex = 0u; controllerIndex < maxControllerCount; ++controllerIndex )
+	{
+		XINPUT_STATE controllerState;
+		if( w32XInputGetState( (DWORD)controllerIndex, &controllerState ) == ERROR_DEVICE_NOT_CONNECTED )
+		{
+			break;
+		}
+
+		++connectedXInputControllerCount;
+	}
+
+	return connectedXInputControllerCount;
 }
 
 char* fixRomFileName( char* pRomFileName )
@@ -779,13 +797,13 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	Win32FileMapping romFileMapping;
 	if( mapFileForReading( &romFileMapping, pFixedRomPath ) == 0 )
 	{
-		pushUserMessage( &pContext->userMessage, "Can't map rom" );
+		setUserMessage( &pContext->userMessage, "Can't map rom" );
 		return;
 	}
 
 	if( !isValidGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
 	{
-		pushUserMessage( &pContext->userMessage, "Rom file invalid" );
+		setUserMessage( &pContext->userMessage, "Rom file invalid" );
 		unmapFileMapping( &romFileMapping );
 		return;
 	}
@@ -812,7 +830,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 
 		if( mapFileForWriting( &ramFileMapping, ramFileName, ramSizeInBytes ) == 0 )
 		{
-			pushUserMessage( &pContext->userMessage, "Can't map ram" );
+			setUserMessage( &pContext->userMessage, "Can't map ram" );
 			unmapFileMapping( &romFileMapping );
 			return;
 		}
@@ -830,7 +848,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	}
 
 	strcpy_s( pEmulatorContext->romBaseFileName, sizeof( pEmulatorContext->romBaseFileName ), romBaseFileName );
-	pushUserMessage( &pContext->userMessage, "Rom loaded!");
+	setUserMessage( &pContext->userMessage, "Rom loaded!");
 
 	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
 	enableRomMenuItems( pContext );
@@ -952,7 +970,7 @@ void toggleShowUserMessage( Win32ApplicationContext* pContext )
 	else
 	{
 		showUserMessage( pContext );
-		pushUserMessage( &pContext->userMessage, "User message!");
+		setUserMessage( &pContext->userMessage, "User message!");
 	}
 }
 
@@ -980,7 +998,7 @@ void loadEmulatorState( Win32ApplicationContext* pContext )
 	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
 	if( !isGBEmulatorRomMapped( pEmulatorContext->pEmulatorInstance ) )
 	{
-		pushUserMessage( &pContext->userMessage, "Failed to map state file." );
+		setUserMessage( &pContext->userMessage, "Failed to map state file." );
 		return;
 	}
 
@@ -994,7 +1012,7 @@ void saveEmulatorState( Win32ApplicationContext* pContext )
 	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
 	if( !isGBEmulatorRomMapped( pEmulatorContext->pEmulatorInstance ) )
 	{
-		pushUserMessage( &pContext->userMessage, "Failed to map state file." );
+		setUserMessage( &pContext->userMessage, "Failed to map state file." );
 		return;
 	}
 
@@ -1151,12 +1169,31 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 	if( strcmp( pFileExtension, ".gb") != 0 &&
 		strcmp( pFileExtension, ".gbc" ) != 0 )
 	{
-		pushUserMessage( &pContext->userMessage, "Invalid rom" );
+		setUserMessage( &pContext->userMessage, "Invalid rom" );
 		return;	
 	}
 
 	loadRomFile( pContext, filePathBuffer );
 	w32DragFinish( pDropInfo );
+}
+
+void handleDeviceChanged( Win32ApplicationContext* pContext, WPARAM wparam )
+{
+	constexpr DWORD DBT_DEVNODES_CHANGED 		= 0x0007;
+	if( (DWORD)wparam == DBT_DEVNODES_CHANGED )
+	{
+		const uint8_t prevControllerCount = pContext->xinputControllerCount;
+		pContext->xinputControllerCount = queryConnectedXInputControllerCount();
+
+		if( prevControllerCount < pContext->xinputControllerCount )
+		{
+			setUserMessage( &pContext->userMessage, "Pad added!");
+		}
+		else if( prevControllerCount > pContext->xinputControllerCount )
+		{
+			setUserMessage( &pContext->userMessage, "Pad removed!");
+		}
+	}
 }
 
 void handleWindowPosChanged( Win32ApplicationContext* pContext, LPARAM lparam )
@@ -1326,6 +1363,10 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 	
 	case WM_DROPFILES:
 		handleDropFiles( pContext, wparam );
+		break;
+
+	case WM_DEVICECHANGE:
+		handleDeviceChanged( pContext, wparam );
 		break;
 	}
 
@@ -1652,19 +1693,29 @@ void setupOpenGL( Win32ApplicationContext* pContext )
 	generateOpenGLTextures( pContext );
 }
 
-uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32InputType dominantInputType )
+uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32InputType dominantInputType, const uint8_t connectedXInputControllerCount )
 {
-	XINPUT_STATE state;
-	const DWORD result = w32XInputGetState(0, &state);
-	if( result != ERROR_SUCCESS )
+	if( connectedXInputControllerCount == 0 )
 	{
 		return 0;
 	}
 
-	const WORD gamepadButtons = state.Gamepad.wButtons;
-	if( dominantInputType != Win32InputType::Gamepad && gamepadButtons == 0)
+	XINPUT_STATE state;
+	WORD gamepadButtons = 0u;
+	for( uint8_t controllerIndex = 0u; controllerIndex < connectedXInputControllerCount; ++controllerIndex )
 	{
-		return 0;
+		const DWORD result = w32XInputGetState( controllerIndex, &state );
+		if( result != ERROR_SUCCESS )
+		{
+			return 0;
+		}
+
+		gamepadButtons |= state.Gamepad.wButtons;
+	}
+
+	if( gamepadButtons == 0 && dominantInputType != Win32InputType::Gamepad )
+	{
+		return 0u;
 	}
 
 	pJoypadState->a 		= ( gamepadButtons & XINPUT_GAMEPAD_A ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_B ) > 0;
@@ -1858,9 +1909,9 @@ void queryWin32SystemKeys( Win32ApplicationContext* pContext )
 	prevKeyStates = currentKeyStates;
 }
 
-void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32EmulatorContext* pEmulatorContext )
+void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32EmulatorContext* pEmulatorContext, const uint8_t connectedControllerCount )
 {
-	if( queryControllerInput( pJoypadState, pEmulatorContext->dominantInputType ) )
+	if( queryControllerInput( pJoypadState, pEmulatorContext->dominantInputType, connectedControllerCount ) )
 	{
 		pEmulatorContext->dominantInputType = Win32InputType::Gamepad;
 	}
@@ -1972,7 +2023,7 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 			queryWin32SystemKeys( pContext );
 
 			GBEmulatorJoypadState joypadState;
-			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext );
+			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext, pContext->xinputControllerCount );
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
@@ -2050,7 +2101,7 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 			queryWin32SystemKeys( pContext );
 
 			GBEmulatorJoypadState joypadState;
-			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext );
+			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext, pContext->xinputControllerCount );
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
@@ -2117,6 +2168,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	}
 
 	loadAndVerifySettings( &appContext );
+	appContext.xinputControllerCount = queryConnectedXInputControllerCount();
 
 	if( appContext.vsyncEnabled )
 	{
