@@ -250,6 +250,7 @@ struct Win32ApplicationContext
 	GLuint						gameboyFrameVertexBuffer						= 0u;
 	GLuint						gameboyVertexArray								= 0u;
 
+	uint8_t						xinputControllerCount							= 0u;
 	uint8_t   					leftMouseDown									= 0u;
 	uint8_t						fullscreen										= 0u;
 	uint8_t						vsyncEnabled									= 0u;
@@ -277,41 +278,6 @@ Win32Settings serializeSettings( Win32ApplicationContext* pContext )
 	settings.showUserMessage	= pContext->showUserMessage;
 
 	return settings;
-}
-
-void renderUserMessageToRGBFrameBuffer( const Win32UserMessage* pUserMessage, uint8_t* pRGBFrameBuffer )
-{
-	if( pUserMessage->timeToLiveInMilliseconds == 0 )
-	{
-		return;
-	}
-
-    const size_t pixelWidth = pUserMessage->textLength * glyphWidthInPixels;
-    
-    const size_t startX = ( gbHorizontalResolutionInPixels - pixelWidth );
-    const size_t startY = ( gbVerticalResolutionInPixels - glyphHeightInPixels );
-	
-	const char* pText = pUserMessage->pText;
-    for( size_t charIndex = 0; charIndex < pUserMessage->textLength; ++charIndex )
-    {
-        const uint8_t* pFontGlyphPixels = getFontGlyphPixel( pText[charIndex] );
-        size_t x = startX + charIndex * glyphWidthInPixels;
-        for( size_t y = startY; y < gbVerticalResolutionInPixels; ++y)
-        {
-            const uint8_t* pFontGlyphPixelsRunning = pFontGlyphPixels;
-            const size_t endX = x + glyphWidthInPixels;
-            for( ;x < endX; ++x)
-            {
-                const size_t pixelIndex = ( x + y * gbHorizontalResolutionInPixels ) * 3;
-                //FK: BGR
-                pRGBFrameBuffer[pixelIndex + 2] = *pFontGlyphPixelsRunning++;
-                pRGBFrameBuffer[pixelIndex + 1] = *pFontGlyphPixelsRunning++;
-                pRGBFrameBuffer[pixelIndex + 0] = *pFontGlyphPixelsRunning++;
-            }
-            x = startX + charIndex * glyphWidthInPixels;
-            pFontGlyphPixels -= ( fontPixelDataWidthInPixels * 3 );
-        }
-    }
 }
 
 uint8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
@@ -361,6 +327,41 @@ uint8_t loadSettingsFromFile( Win32Settings* pOutSettings, const char* pPath )
 		&pOutSettings->showUserMessage );
 
 	return 1;
+}
+
+void renderUserMessageToRGBFrameBuffer( const Win32UserMessage* pUserMessage, uint8_t* pRGBFrameBuffer )
+{
+	if( pUserMessage->timeToLiveInMilliseconds == 0 )
+	{
+		return;
+	}
+
+    const size_t pixelWidth = pUserMessage->textLength * glyphWidthInPixels;
+    
+    const size_t startX = ( gbHorizontalResolutionInPixels - pixelWidth );
+    const size_t startY = ( gbVerticalResolutionInPixels - glyphHeightInPixels );
+	
+	const char* pText = pUserMessage->pText;
+    for( size_t charIndex = 0; charIndex < pUserMessage->textLength; ++charIndex )
+    {
+        const uint8_t* pFontGlyphPixels = getFontGlyphPixel( pText[charIndex] );
+        size_t x = startX + charIndex * glyphWidthInPixels;
+        for( size_t y = startY; y < gbVerticalResolutionInPixels; ++y)
+        {
+            const uint8_t* pFontGlyphPixelsRunning = pFontGlyphPixels;
+            const size_t endX = x + glyphWidthInPixels;
+            for( ;x < endX; ++x)
+            {
+                const size_t pixelIndex = ( x + y * gbHorizontalResolutionInPixels ) * 3;
+                //FK: BGR
+                pRGBFrameBuffer[pixelIndex + 2] = *pFontGlyphPixelsRunning++;
+                pRGBFrameBuffer[pixelIndex + 1] = *pFontGlyphPixelsRunning++;
+                pRGBFrameBuffer[pixelIndex + 0] = *pFontGlyphPixelsRunning++;
+            }
+            x = startX + charIndex * glyphWidthInPixels;
+            pFontGlyphPixels -= ( fontPixelDataWidthInPixels * 3 );
+        }
+    }
 }
 
 void parseCommandLineArguments( Win32GBEmulatorArguments* pOutArguments, LPSTR pCommandLineArguments )
@@ -490,7 +491,6 @@ void pushUserMessage( Win32UserMessage* pUserMessage, const char* pText )
 	pUserMessage->pText 					= pText;
 	pUserMessage->textLength				= ( uint8_t )textLength;
 	pUserMessage->timeToLiveInMilliseconds	= 1000000u;
-
 }
 
 void allocateDebugConsole()
@@ -726,6 +726,24 @@ void updateMonitorSettings( Win32ApplicationContext* pContext )
 	const float cylcesPerHostFrameRest = ( ( cyclesPerHostFrame - ( uint32_t )cyclesPerHostFrame ) * ( float )pContext->monitorRefreshRate );
 	pContext->emulatorContext.cyclesPerHostFrame 		= ( uint32_t )cyclesPerHostFrame;
 	pContext->emulatorContext.cyclesPerHostFrameRest 	= ( uint32_t )( cylcesPerHostFrameRest + 0.5f );
+}
+
+uint8_t queryConnectedXInputControllerCount()
+{
+	constexpr uint8_t maxControllerCount = 4u;
+	uint8_t connectedXInputControllerCount = 0u;
+	for( uint8_t controllerIndex = 0u; controllerIndex < maxControllerCount; ++controllerIndex )
+	{
+		XINPUT_STATE controllerState;
+		if( w32XInputGetState( (DWORD)controllerIndex, &controllerState ) == ERROR_DEVICE_NOT_CONNECTED )
+		{
+			break;
+		}
+
+		++connectedXInputControllerCount;
+	}
+
+	return connectedXInputControllerCount;
 }
 
 char* fixRomFileName( char* pRomFileName )
@@ -1159,6 +1177,16 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 	w32DragFinish( pDropInfo );
 }
 
+void handleDeviceChanged( Win32ApplicationContext* pContext, WPARAM wparam )
+{
+	constexpr DWORD DBT_DEVICEARRIVAL 			= 0x8000;
+	constexpr DWORD DBT_DEVICEREMOVECOMPLETE 	= 0x8004;
+	if( (DWORD)wparam == DBT_DEVICEARRIVAL || (DWORD)wparam == DBT_DEVICEREMOVECOMPLETE )
+	{
+		pContext->xinputControllerCount = queryConnectedXInputControllerCount();
+	}
+}
+
 void handleWindowPosChanged( Win32ApplicationContext* pContext, LPARAM lparam )
 {
 	if( pContext->fullscreen )
@@ -1326,6 +1354,10 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 	
 	case WM_DROPFILES:
 		handleDropFiles( pContext, wparam );
+		break;
+
+	case WM_DEVICECHANGE:
+		handleDeviceChanged( pContext, wparam );
 		break;
 	}
 
@@ -1652,29 +1684,37 @@ void setupOpenGL( Win32ApplicationContext* pContext )
 	generateOpenGLTextures( pContext );
 }
 
-uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32InputType dominantInputType )
+uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32InputType dominantInputType, const uint8_t connectedXInputControllerCount )
 {
+	if( connectedXInputControllerCount == 0 )
+	{
+		return 0;
+	}
+
 	XINPUT_STATE state;
-	const DWORD result = w32XInputGetState(0, &state);
-	if( result != ERROR_SUCCESS )
+	for( uint8_t controllerIndex = 0u; controllerIndex < connectedXInputControllerCount; ++controllerIndex )
 	{
-		return 0;
-	}
+		const DWORD result = w32XInputGetState( controllerIndex, &state );
+		if( result != ERROR_SUCCESS )
+		{
+			return 0;
+		}
 
-	const WORD gamepadButtons = state.Gamepad.wButtons;
-	if( dominantInputType != Win32InputType::Gamepad && gamepadButtons == 0)
-	{
-		return 0;
-	}
+		const WORD gamepadButtons = state.Gamepad.wButtons;
+		if( dominantInputType != Win32InputType::Gamepad && gamepadButtons == 0)
+		{
+			return 0;
+		}
 
-	pJoypadState->a 		= ( gamepadButtons & XINPUT_GAMEPAD_A ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_B ) > 0;
-	pJoypadState->b 		= ( gamepadButtons & XINPUT_GAMEPAD_X ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_Y ) > 0;
-	pJoypadState->start 	= ( gamepadButtons & XINPUT_GAMEPAD_START ) > 0;
-	pJoypadState->select 	= ( gamepadButtons & XINPUT_GAMEPAD_BACK ) > 0;
-	pJoypadState->left 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_LEFT ) > 0;
-	pJoypadState->right 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_RIGHT ) > 0;
-	pJoypadState->down 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_DOWN ) > 0;
-	pJoypadState->up 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_UP ) > 0;
+		pJoypadState->a 		= ( gamepadButtons & XINPUT_GAMEPAD_A ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_B ) > 0;
+		pJoypadState->b 		= ( gamepadButtons & XINPUT_GAMEPAD_X ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_Y ) > 0;
+		pJoypadState->start 	= ( gamepadButtons & XINPUT_GAMEPAD_START ) > 0;
+		pJoypadState->select 	= ( gamepadButtons & XINPUT_GAMEPAD_BACK ) > 0;
+		pJoypadState->left 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_LEFT ) > 0;
+		pJoypadState->right 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_RIGHT ) > 0;
+		pJoypadState->down 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_DOWN ) > 0;
+		pJoypadState->up 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_UP ) > 0;
+	}
 
 	return 1;
 }
@@ -1858,9 +1898,9 @@ void queryWin32SystemKeys( Win32ApplicationContext* pContext )
 	prevKeyStates = currentKeyStates;
 }
 
-void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32EmulatorContext* pEmulatorContext )
+void queryGBEmulatorJoypadState( GBEmulatorJoypadState* pJoypadState, Win32EmulatorContext* pEmulatorContext, const uint8_t connectedControllerCount )
 {
-	if( queryControllerInput( pJoypadState, pEmulatorContext->dominantInputType ) )
+	if( queryControllerInput( pJoypadState, pEmulatorContext->dominantInputType, connectedControllerCount ) )
 	{
 		pEmulatorContext->dominantInputType = Win32InputType::Gamepad;
 	}
@@ -1972,7 +2012,7 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 			queryWin32SystemKeys( pContext );
 
 			GBEmulatorJoypadState joypadState;
-			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext );
+			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext, pContext->xinputControllerCount );
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
@@ -2050,7 +2090,7 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 			queryWin32SystemKeys( pContext );
 
 			GBEmulatorJoypadState joypadState;
-			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext );
+			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext, pContext->xinputControllerCount );
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
@@ -2117,6 +2157,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	}
 
 	loadAndVerifySettings( &appContext );
+	appContext.xinputControllerCount = queryConnectedXInputControllerCount();
 
 	if( appContext.vsyncEnabled )
 	{
