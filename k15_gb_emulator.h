@@ -3578,7 +3578,7 @@ void handleMBC1Write( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper )
                 const uint16_t romBankNumber = fixMBC1Rom0BankNumber( pCartridge->romBankCount, pCartridge->highBankValue << 5 );
                 mapCartridgeRom0Bank( pCartridge, pMemoryMapper, romBankNumber );
             }
-            else
+            else if( pCartridge->ramEnabled && pCartridge->ramBankCount > 0u )
             {
                 const uint8_t ramBankNumber = fixMBC1RamBankNumber( pCartridge->ramBankCount, pCartridge->highBankValue );
                 mapCartridgeRamBank( pCartridge, pMemoryMapper, ramBankNumber );
