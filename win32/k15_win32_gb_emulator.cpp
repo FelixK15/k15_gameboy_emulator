@@ -647,19 +647,19 @@ void loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	switch( result )
 	{
 		case GBStateLoadResult::Success:
-			pushUserMessage( pUserMessage, "State loaded!" );
+			setUserMessage( pUserMessage, "State loaded!" );
 			break;
 
 		case GBStateLoadResult::IncompatibleData:
-			pushUserMessage( pUserMessage, "Not a state file" );
+			setUserMessage( pUserMessage, "Not a state file" );
 			break;
 		
 		case GBStateLoadResult::OldVersion:
-			pushUserMessage( pUserMessage, "Old state version" );
+			setUserMessage( pUserMessage, "Old version" );
 			break;
 
 		case GBStateLoadResult::WrongRom:
-			pushUserMessage( pUserMessage, "State wrong rom" );
+			setUserMessage( pUserMessage, "State wrong rom" );
 			break;
 	}
 
@@ -803,7 +803,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 
 	if( !isValidGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
 	{
-		setUserMessage( &pContext->userMessage, "Rom file invalid" );
+		setUserMessage( &pContext->userMessage, "Rom invalid" );
 		unmapFileMapping( &romFileMapping );
 		return;
 	}
@@ -1163,14 +1163,6 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 	if( w32DragQueryFileA( pDropInfo, 0u, filePathBuffer, sizeof( filePathBuffer ) ) == 0 )
 	{
 		return;
-	}
-
-	char* pFileExtension = strrchr( filePathBuffer, '.' );
-	if( strcmp( pFileExtension, ".gb") != 0 &&
-		strcmp( pFileExtension, ".gbc" ) != 0 )
-	{
-		setUserMessage( &pContext->userMessage, "Invalid rom" );
-		return;	
 	}
 
 	loadRomFile( pContext, filePathBuffer );
