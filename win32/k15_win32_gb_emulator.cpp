@@ -482,7 +482,7 @@ void updateGameboyFrameVertexBuffer( Win32ApplicationContext* pContext )
 	glUnmapBuffer( GL_ARRAY_BUFFER );
 }
 
-void pushUserMessage( Win32UserMessage* pUserMessage, const char* pText )
+void setUserMessage( Win32UserMessage* pUserMessage, const char* pText )
 {
 	const size_t textLength = strlen( pText );
 	RuntimeAssert( textLength < 17 );
@@ -639,7 +639,7 @@ void loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	Win32FileMapping stateFileMapping;
 	if( mapFileForReading( &stateFileMapping, pStateFileName ) == 0 )
 	{
-		pushUserMessage( pUserMessage, "Can't open state" );
+		setUserMessage( pUserMessage, "Can't open state" );
 		return;
 	}
 
@@ -647,19 +647,19 @@ void loadStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	switch( result )
 	{
 		case K15_GB_STATE_LOAD_SUCCESS:
-			pushUserMessage( pUserMessage, "State loaded!" );
+			setUserMessage( pUserMessage, "State loaded!" );
 			break;
 
 		case K15_GB_STATE_LOAD_FAILED_INCOMPATIBLE_DATA:
-			pushUserMessage( pUserMessage, "Not a state file" );
+			setUserMessage( pUserMessage, "Not a state file" );
 			break;
 		
 		case K15_GB_STATE_LOAD_FAILED_OLD_VERSION:
-			pushUserMessage( pUserMessage, "Old state version" );
+			setUserMessage( pUserMessage, "Old state version" );
 			break;
 
 		case K15_GB_STATE_LOAD_FAILED_WRONG_ROM:
-			pushUserMessage( pUserMessage, "State wrong rom" );
+			setUserMessage( pUserMessage, "State wrong rom" );
 			break;
 	}
 
@@ -673,14 +673,14 @@ void saveStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 	Win32FileMapping stateFileMapping;
 	if( mapFileForWriting( &stateFileMapping, pStateFileName, stateSizeInBytes ) == 0 )
 	{
-		pushUserMessage( pUserMessage, "Can't open state" );
+		setUserMessage( pUserMessage, "Can't open state" );
 		return;
 	}
 
 	storeGBEmulatorState( pEmulatorInstance, stateFileMapping.pFileBaseAddress, stateSizeInBytes );
 	unmapFileMapping( &stateFileMapping );
 
-	pushUserMessage( pUserMessage, "State saved!" );
+	setUserMessage( pUserMessage, "State saved!" );
 }
 
 void updateMonitorSettings( Win32ApplicationContext* pContext )
@@ -797,13 +797,13 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	Win32FileMapping romFileMapping;
 	if( mapFileForReading( &romFileMapping, pFixedRomPath ) == 0 )
 	{
-		pushUserMessage( &pContext->userMessage, "Can't map rom" );
+		setUserMessage( &pContext->userMessage, "Can't map rom" );
 		return;
 	}
 
 	if( !isValidGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
 	{
-		pushUserMessage( &pContext->userMessage, "Rom file invalid" );
+		setUserMessage( &pContext->userMessage, "Rom file invalid" );
 		unmapFileMapping( &romFileMapping );
 		return;
 	}
@@ -830,7 +830,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 
 		if( mapFileForWriting( &ramFileMapping, ramFileName, ramSizeInBytes ) == 0 )
 		{
-			pushUserMessage( &pContext->userMessage, "Can't map ram" );
+			setUserMessage( &pContext->userMessage, "Can't map ram" );
 			unmapFileMapping( &romFileMapping );
 			return;
 		}
@@ -848,7 +848,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	}
 
 	strcpy_s( pEmulatorContext->romBaseFileName, sizeof( pEmulatorContext->romBaseFileName ), romBaseFileName );
-	pushUserMessage( &pContext->userMessage, "Rom loaded!");
+	setUserMessage( &pContext->userMessage, "Rom loaded!");
 
 	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
 	enableRomMenuItems( pContext );
@@ -970,7 +970,7 @@ void toggleShowUserMessage( Win32ApplicationContext* pContext )
 	else
 	{
 		showUserMessage( pContext );
-		pushUserMessage( &pContext->userMessage, "User message!");
+		setUserMessage( &pContext->userMessage, "User message!");
 	}
 }
 
@@ -998,7 +998,7 @@ void loadEmulatorState( Win32ApplicationContext* pContext )
 	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
 	if( !isGBEmulatorRomMapped( pEmulatorContext->pEmulatorInstance ) )
 	{
-		pushUserMessage( &pContext->userMessage, "Failed to map state file." );
+		setUserMessage( &pContext->userMessage, "Failed to map state file." );
 		return;
 	}
 
@@ -1012,7 +1012,7 @@ void saveEmulatorState( Win32ApplicationContext* pContext )
 	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
 	if( !isGBEmulatorRomMapped( pEmulatorContext->pEmulatorInstance ) )
 	{
-		pushUserMessage( &pContext->userMessage, "Failed to map state file." );
+		setUserMessage( &pContext->userMessage, "Failed to map state file." );
 		return;
 	}
 
@@ -1169,7 +1169,7 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 	if( strcmp( pFileExtension, ".gb") != 0 &&
 		strcmp( pFileExtension, ".gbc" ) != 0 )
 	{
-		pushUserMessage( &pContext->userMessage, "Invalid rom" );
+		setUserMessage( &pContext->userMessage, "Invalid rom" );
 		return;	
 	}
 
@@ -1179,11 +1179,20 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 
 void handleDeviceChanged( Win32ApplicationContext* pContext, WPARAM wparam )
 {
-	constexpr DWORD DBT_DEVICEARRIVAL 			= 0x8000;
-	constexpr DWORD DBT_DEVICEREMOVECOMPLETE 	= 0x8004;
-	if( (DWORD)wparam == DBT_DEVICEARRIVAL || (DWORD)wparam == DBT_DEVICEREMOVECOMPLETE )
+	constexpr DWORD DBT_DEVNODES_CHANGED 		= 0x0007;
+	if( (DWORD)wparam == DBT_DEVNODES_CHANGED )
 	{
+		const uint8_t prevControllerCount = pContext->xinputControllerCount;
 		pContext->xinputControllerCount = queryConnectedXInputControllerCount();
+
+		if( prevControllerCount < pContext->xinputControllerCount )
+		{
+			setUserMessage( &pContext->userMessage, "Pad added!");
+		}
+		else if( prevControllerCount > pContext->xinputControllerCount )
+		{
+			setUserMessage( &pContext->userMessage, "Pad removed!");
+		}
 	}
 }
 
@@ -1692,6 +1701,7 @@ uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32In
 	}
 
 	XINPUT_STATE state;
+	WORD gamepadButtons = 0u;
 	for( uint8_t controllerIndex = 0u; controllerIndex < connectedXInputControllerCount; ++controllerIndex )
 	{
 		const DWORD result = w32XInputGetState( controllerIndex, &state );
@@ -1700,21 +1710,22 @@ uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32In
 			return 0;
 		}
 
-		const WORD gamepadButtons = state.Gamepad.wButtons;
-		if( dominantInputType != Win32InputType::Gamepad && gamepadButtons == 0)
-		{
-			return 0;
-		}
-
-		pJoypadState->a 		= ( gamepadButtons & XINPUT_GAMEPAD_A ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_B ) > 0;
-		pJoypadState->b 		= ( gamepadButtons & XINPUT_GAMEPAD_X ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_Y ) > 0;
-		pJoypadState->start 	= ( gamepadButtons & XINPUT_GAMEPAD_START ) > 0;
-		pJoypadState->select 	= ( gamepadButtons & XINPUT_GAMEPAD_BACK ) > 0;
-		pJoypadState->left 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_LEFT ) > 0;
-		pJoypadState->right 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_RIGHT ) > 0;
-		pJoypadState->down 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_DOWN ) > 0;
-		pJoypadState->up 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_UP ) > 0;
+		gamepadButtons |= state.Gamepad.wButtons;
 	}
+
+	if( gamepadButtons == 0 && dominantInputType != Win32InputType::Gamepad )
+	{
+		return 0u;
+	}
+
+	pJoypadState->a 		= ( gamepadButtons & XINPUT_GAMEPAD_A ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_B ) > 0;
+	pJoypadState->b 		= ( gamepadButtons & XINPUT_GAMEPAD_X ) > 0 || ( gamepadButtons & XINPUT_GAMEPAD_Y ) > 0;
+	pJoypadState->start 	= ( gamepadButtons & XINPUT_GAMEPAD_START ) > 0;
+	pJoypadState->select 	= ( gamepadButtons & XINPUT_GAMEPAD_BACK ) > 0;
+	pJoypadState->left 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_LEFT ) > 0;
+	pJoypadState->right 	= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_RIGHT ) > 0;
+	pJoypadState->down 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_DOWN ) > 0;
+	pJoypadState->up 		= ( gamepadButtons & XINPUT_GAMEPAD_DPAD_UP ) > 0;
 
 	return 1;
 }
