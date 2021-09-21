@@ -627,6 +627,18 @@ const uint8_t* getFontGlyphPixel( char glyph )
     return fontPixelData + (x + y * fontPixelDataWidthInPixels) * 3;
 }
 
+static inline uint32_t castSizeToUint32( const size_t value )
+{
+    RuntimeAssert( value < 0xFFFFFFFF );
+    return ( uint32_t )value;
+}
+
+static inline int32_t castSizeToInt32( const size_t value )
+{
+    RuntimeAssert( value < INT32_MAX && value > INT32_MIN );
+    return (int32_t)value;
+}
+
 uint8_t isInVideoRamAddressRange( const uint16_t address )
 {
     return address >= 0x8000 && address < 0xA000;
@@ -759,6 +771,234 @@ GBCartridgeHeader getGBCartridgeHeader(const uint8_t* pRomData)
     GBCartridgeHeader header;
     memcpy(&header, pRomData + 0x0100, sizeof(GBCartridgeHeader));
     return header;
+}
+
+struct ZipEndOfCentralDirectory
+{
+    uint32_t signature;
+    uint16_t diskNumber;
+    uint16_t centralDirDisk;
+    uint16_t centralDirRecordCount;
+    uint32_t centralDirectorySizeInBytes;
+    uint32_t centralDirectoryAbsoluteOffset;
+};
+
+struct ZipArchive
+{
+    const uint8_t*                   restrict_modifier    pData;
+    const ZipEndOfCentralDirectory*  restrict_modifier    pEocd;
+    uint32_t                         dataSizeInBytes;
+};
+
+const ZipEndOfCentralDirectory* findZipArchiveEndOfCentralDirectory( const uint8_t* pZipData, const uint32_t zipDataSizeInBytes )
+{
+    uint32_t eocdPos = zipDataSizeInBytes - 20;
+	while( eocdPos != 0 )
+	{
+		if( pZipData[ eocdPos + 3 ] == 0x06 &&
+			pZipData[ eocdPos + 2 ] == 0x05 &&
+			pZipData[ eocdPos + 1 ] == 0x4b &&
+			pZipData[ eocdPos + 0 ] == 0x50 )
+		{
+			break;
+		}
+
+		--eocdPos;
+	}
+
+    if( eocdPos == 0u )
+    {
+        return nullptr;
+    }
+
+    return (const ZipEndOfCentralDirectory*)( pZipData + eocdPos );
+}
+
+uint8_t isValidZipData( const uint8_t* pZipData, const uint32_t zipDataSizeInBytes )
+{
+    //FK: Check for file header size
+    if( zipDataSizeInBytes <= 30 )
+    {
+        return 0u;
+    }
+
+    //FK: Header signature
+    if( pZipData[0] != 'P'  &&
+        pZipData[1] != 'K'  &&
+        pZipData[2] != '\3' &&
+        pZipData[3] != '\4' )
+    {
+        return 0u;
+    }
+
+    return 1u;
+}
+
+char* trimTrailingWhitespaces( char* pString )
+{
+    const size_t stringLength = strlen( pString );
+    size_t charIndex = stringLength - 1;
+    while( isspace( pString[ charIndex ] ) && charIndex > 0u )
+    {
+        pString[ charIndex ] = 0;
+        --charIndex;
+    }
+
+    return pString;
+}
+
+struct ZipArchiveDirectory
+{
+    uint32_t signature;
+    uint16_t versionMadeBy;
+    uint16_t minVersion;
+    uint16_t generalPurpose;
+    uint16_t compressionMethod;
+    uint16_t t1;
+    uint16_t t2;
+    uint32_t crc;
+    uint32_t comp;
+    uint32_t uncomp;
+    uint16_t fnl;
+    uint16_t efl;
+    uint16_t fcl;
+    uint16_t diskNumberWhereFileStarts;
+    uint16_t fileAttributes;
+    uint32_t extFileAttributes;
+    uint32_t relativeOffsetOfFileHeader;
+};
+
+struct ZipArchiveEntry
+{
+    const char* pFileName;
+    uint32_t absoluteOffsetToDirectory;
+    uint32_t absoluteOffsetToFileHeader;
+    uint32_t absoluteOffsetToNextEntry;
+
+    uint16_t fileNameLength;
+    uint16_t recordIndex;
+};
+
+ZipArchiveEntry createZipArchiveEntry( const ZipArchive* pZipArchive, const uint32_t absoluteOffsetToCentralDirectory, uint16_t recordIndex )
+{
+    uint16_t fileNameLength;
+    memcpy( &fileNameLength, pZipArchive->pData + absoluteOffsetToCentralDirectory + 28, sizeof( fileNameLength ) );
+
+    uint16_t extraFieldLength;
+    memcpy( &extraFieldLength, pZipArchive->pData + absoluteOffsetToCentralDirectory + 30, sizeof( extraFieldLength ) );
+
+    uint16_t fileCommentLength;
+    memcpy( &fileCommentLength, pZipArchive->pData + absoluteOffsetToCentralDirectory + 32, sizeof( fileCommentLength ) );
+
+    uint32_t offsetToLocalFileHeader;
+    memcpy( &offsetToLocalFileHeader, pZipArchive->pData + absoluteOffsetToCentralDirectory + 42, sizeof( offsetToLocalFileHeader ) );
+
+    const uint32_t variableByteLength = 46 + fileNameLength + extraFieldLength + fileCommentLength;
+    const uint16_t newRecordIndex = recordIndex + 1u;
+
+    ZipArchiveEntry archiveEntry;
+    archiveEntry.recordIndex                = newRecordIndex;
+    archiveEntry.absoluteOffsetToDirectory  = offsetToLocalFileHeader;
+    archiveEntry.absoluteOffsetToNextEntry  = pZipArchive->pEocd->centralDirRecordCount == newRecordIndex ? 0u : absoluteOffsetToCentralDirectory + variableByteLength;
+    archiveEntry.fileNameLength             = fileNameLength;
+    archiveEntry.pFileName                  = (const char*)pZipArchive->pData + absoluteOffsetToCentralDirectory + 46;
+
+    return archiveEntry;
+}
+
+ZipArchiveEntry findFirstZipArchiveEntry( const ZipArchive* pZipArchive )
+{
+    const ZipEndOfCentralDirectory* pZipDirectory = pZipArchive->pEocd;
+    return createZipArchiveEntry( pZipArchive, pZipDirectory->centralDirectoryAbsoluteOffset, 0u );
+}
+
+ZipArchiveEntry findNextZipArchiveEntry( const ZipArchive* pZipArchive, const ZipArchiveEntry* pPrevEntry )
+{
+    RuntimeAssert( pPrevEntry->absoluteOffsetToNextEntry > 0u );
+    return createZipArchiveEntry( pZipArchive, pPrevEntry->absoluteOffsetToNextEntry, pPrevEntry->recordIndex );
+}
+
+uint8_t isLastZipArchiveEntry( const ZipArchiveEntry* pEntry )
+{
+    return pEntry->absoluteOffsetToNextEntry == 0u;
+}
+
+uint8_t areStringsEqual( const char* pStringA, const char* pStringB, const uint32_t stringLength )
+{
+    for( uint32_t charIndex = 0u; charIndex < stringLength; ++charIndex )
+    {
+        if( pStringA[ charIndex ] != pStringB[ charIndex ] )
+        {
+            return 0u;
+        }
+    }
+
+    return 1u;
+}
+
+const char* findLastInString( const char* pString, uint32_t stringLength, const char needle )
+{
+    const char* pStringStart = pString;
+    const char* pStringEnd = pString + stringLength;
+    while( pStringStart != pStringEnd )
+    {
+        if( *pStringEnd == needle )
+        {
+            return pStringEnd;
+        }
+
+        --pStringEnd;
+    }
+
+    return nullptr;
+}
+
+uint32_t countRomsInZipArchive( const ZipArchive* pZipArchive )
+{
+    uint32_t romCount = 0u;
+    const ZipEndOfCentralDirectory* pEocd = pZipArchive->pEocd;
+
+    ZipArchiveEntry zipArchiveEntry = findFirstZipArchiveEntry( pZipArchive );
+    while( true )
+    {
+        const char* pFileExtension = findLastInString( zipArchiveEntry.pFileName, zipArchiveEntry.fileNameLength, '.' );
+        if( pFileExtension != nullptr )
+        {
+            const uint32_t fileExtensionLength = zipArchiveEntry.fileNameLength - (uint32_t)( pFileExtension - zipArchiveEntry.pFileName );
+            if( areStringsEqual( pFileExtension, ".gb", fileExtensionLength ) ||
+                areStringsEqual( pFileExtension, ".gbc", fileExtensionLength ) )
+            {
+                ++romCount;
+            }
+        }
+
+        if( isLastZipArchiveEntry( &zipArchiveEntry ) )
+        {
+            break;
+        }
+
+        zipArchiveEntry = findNextZipArchiveEntry( pZipArchive, &zipArchiveEntry );
+    }
+
+    return romCount;
+}
+
+uint8_t openZipArchive( ZipArchive* pOutZipArchive, const uint8_t* pZipData, const uint32_t zipDataSizeInBytes )
+{
+    if( !isValidZipData( pZipData, zipDataSizeInBytes ) )
+	{
+		return 0u;
+	}
+
+    const ZipEndOfCentralDirectory* pZipEOCD = (const ZipEndOfCentralDirectory*)findZipArchiveEndOfCentralDirectory( pZipData, zipDataSizeInBytes );
+
+    ZipArchive zipArchive;
+    zipArchive.pData                = pZipData;
+    zipArchive.dataSizeInBytes      = zipDataSizeInBytes;
+    zipArchive.pEocd                = pZipEOCD;
+
+    *pOutZipArchive = zipArchive;
+    return 1u;
 }
 
 uint8_t isValidGBRomData( const uint8_t* pRomData, const uint32_t romSizeInBytes )

@@ -128,12 +128,15 @@
             //"args": [ "-r", "../../roms/Dawn_fixed.gb"],                                            //PASS
 
             //####  GAMES
-            "args": [ "-r", "../../roms/Prehistorik Man (USA, Europe).gb"],                         //Hang after Intro
+            "args": [ "-r", "../../roms/roms.zip" ],                                                 //test zip implementation
+            //"args": [ "-r", "../../roms/Addams Family, The (Japan).zip" ],                           //test zip implementation
+            
+            //"args": [ "-r", "../../roms/Prehistorik Man (USA, Europe).gb"],                         //Hang after Intro
             //"args": [ "-r", "../../roms/Alleyway (World).gb"],                                      //Works
             //"args": [ "-r", "../../roms/Baseball (World).gb"],                                      //Works
             //"args": [ "-r", "../../roms/Mega Man - Dr. Wily's Revenge (USA).gb" ],                  //Works, Sprite flickering (8x16 sprites)
             //"args": [ "-r", "../../roms/Bomb Jack (Europe).gb" ],                                   //Works
-            "args": [ "-r", "../../roms/Tetris (Japan) (En).gb" ],                                  //Works
+            //"args": [ "-r", "../../roms/Tetris (Japan) (En).gb" ],                                  //Works
             //"args": [ "-r", "../../roms/BattleCity (Japan).gb" ],                                   //Works
             //"args": [ "-r", "../../roms/Alfred Chicken (Europe).gb" ],                              //Works
             //"args": [ "-r", "../../roms/Super Mario Land (World).gb" ],                             //Works

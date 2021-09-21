@@ -60,6 +60,8 @@ PFNDRAGQUERYFILEAPROC		w32DragQueryFileA		= nullptr;
 PFNDRAGFINISHPROC			w32DragFinish			= nullptr;
 PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 
+#define restrict_modifier __restrict
+
 #include <audioclient.h>
 #include <mmdeviceapi.h>
 #include <commdlg.h>
@@ -420,6 +422,7 @@ void parseCommandLineArguments( Win32GBEmulatorArguments* pOutArguments, LPSTR p
 				if( arg == 'r' )
 				{
 					strcpy_s( pOutArguments->romPath, sizeof( pOutArguments->romPath ), argParam );
+					trimTrailingWhitespaces( pOutArguments->romPath );
 				}
 
 				pArgParam 			= argParam;
@@ -781,14 +784,67 @@ void getRomBaseFileName( char* pRomBaseFileNameBuffer, size_t romBaseFileNameBuf
 	*pRomPathFileExtension = '.';
 }
 
+void loadZipArchiveFile( Win32ApplicationContext* pContext, char* pArchivePath )
+{
+	Win32FileMapping archiveFileMapping;
+	if( mapFileForReading( &archiveFileMapping, pArchivePath ) == 0 )
+	{
+		setUserMessage( &pContext->userMessage, "Can't map zip" );
+		return;
+	}
+
+	ZipArchive zipArchive;
+	if( openZipArchive( &zipArchive, archiveFileMapping.pFileBaseAddress, archiveFileMapping.fileSizeInBytes ) == 0 )
+	{
+		setUserMessage( &pContext->userMessage, "Invalid zip" );
+		return;
+	}
+
+	const uint32_t romsInArchive = countRomsInZipArchive( &zipArchive );
+	if( romsInArchive == 0u )
+	{
+		setUserMessage( &pContext->userMessage, "Zip w/o roms" );
+		return;
+	}
+	else if( romsInArchive == 1u )
+	{
+		ZipArchiveEntry zipEntry = findFirstZipArchiveEntry( &zipArchive );
+		
+		
+	}
+
+}
+
 void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 {
-	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
-
 	char fixedRomPath[ MAX_PATH ];
 	strcpy_s( fixedRomPath, sizeof( fixedRomPath ), pRomPath );
 	char* pFixedRomPath = fixRomFileName( fixedRomPath );
-	
+
+	char* pFileExtension = strrchr( pFixedRomPath, '.' );
+
+	const uint8_t isGameBoyColorRom = strcmp( pFileExtension, ".gbc") == 0;
+	if( isGameBoyColorRom )
+	{
+		MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
+		return;
+	}
+
+	const uint8_t isZipArchive = strcmp( pFileExtension, ".zip" ) == 0;
+	if( isZipArchive )
+	{
+		loadZipArchiveFile( pContext, pFixedRomPath );
+		return;
+	}
+
+	const uint8_t isGameBoyRom = strcmp( pFileExtension, ".gb") == 0;
+	if( !isGameBoyRom )
+	{
+		setUserMessage( &pContext->userMessage, "Invalid rom" );
+		return;
+	}
+
+	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
 	char romBaseFileName[ MAX_PATH ];
 	CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
 
@@ -1163,14 +1219,6 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 	if( w32DragQueryFileA( pDropInfo, 0u, filePathBuffer, sizeof( filePathBuffer ) ) == 0 )
 	{
 		return;
-	}
-
-	char* pFileExtension = strrchr( filePathBuffer, '.' );
-	if( strcmp( pFileExtension, ".gb") != 0 &&
-		strcmp( pFileExtension, ".gbc" ) != 0 )
-	{
-		setUserMessage( &pContext->userMessage, "Invalid rom" );
-		return;	
 	}
 
 	loadRomFile( pContext, filePathBuffer );
