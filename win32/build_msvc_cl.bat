@@ -27,13 +27,14 @@ set C_FILE_NAME="!SOURCE_FOLDER!k15_win32_gb_emulator.cpp"
 set COMPILER_OPTIONS=/nologo /FC /TP /W3 /Fe!EXE_OUTPUT_PATH! /Fo!OBJ_OUTPUT_PATH!
 if "%BUILD_CONFIG%"=="debug" (
 	echo Build config = debug
-	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Zi /GS /MTd
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Zi /GS
 ) else (
 	echo Build config = optimized release
 	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /O2 /GL /Gw /MT /DK15_RELEASE_BUILD
 )
 
-set CL_OPTIONS=!COMPILER_OPTIONS!
+set LINKER_OPTIONS=/SUBSYSTEM:WINDOWS
+set CL_OPTIONS=!COMPILER_OPTIONS! /link !LINKER_OPTIONS!
 
 ::is cl.exe part of PATH?
 where /Q cl.exe

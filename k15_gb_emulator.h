@@ -70,6 +70,7 @@ static constexpr size_t     gbMappedMemorySizeInBytes               = 0x10000;
 static constexpr size_t     gbCompressionTokenSizeInBytes           = 1;
 static constexpr size_t     gbRamBankSizeInBytes                    = Kbyte( 8 );
 static constexpr size_t     gbRomBankSizeInBytes                    = Kbyte( 16 );
+static constexpr size_t     gbMaxRomSizeInBytes                     = Mbyte( 8 );
 
 typedef uint32_t GBEmulatorInstanceEventMask;
 
@@ -847,61 +848,78 @@ char* trimTrailingWhitespaces( char* pString )
     return pString;
 }
 
-struct ZipArchiveDirectory
+#pragma pack(push, 1)
+struct ZipCentralDirectoryFileHeader
 {
     uint32_t signature;
     uint16_t versionMadeBy;
-    uint16_t minVersion;
-    uint16_t generalPurpose;
+    uint16_t versionNeededToExtract;
+    uint16_t generalPurposeBitFlag;
     uint16_t compressionMethod;
-    uint16_t t1;
-    uint16_t t2;
-    uint32_t crc;
-    uint32_t comp;
-    uint32_t uncomp;
-    uint16_t fnl;
-    uint16_t efl;
-    uint16_t fcl;
+    uint16_t lastModificationTime;
+    uint16_t lastModificationDate;
+    uint32_t crc32;
+    uint32_t compressedSize;
+    uint32_t uncompressedSize;
+    uint16_t fileNameLength;
+    uint16_t extraFieldLength;
+    uint16_t fileCommentLength;
     uint16_t diskNumberWhereFileStarts;
-    uint16_t fileAttributes;
-    uint32_t extFileAttributes;
-    uint32_t relativeOffsetOfFileHeader;
+    uint16_t internalFileAttributes;
+    uint32_t externalFileAttributes;
+    int32_t localFileHeaderRelativeOffset;
 };
+
+struct ZipLocalFileHeader
+{
+    uint32_t signature;
+    uint16_t minVersion;
+    uint16_t generalPurposeFlag;
+    uint16_t compressionMethod;
+    uint16_t fileLastModificationTime;
+    uint16_t fileLastModificationDate;
+    uint32_t crc32;
+    uint32_t compressedSizeInBytes;
+    uint32_t uncompressedSizeInBytes;
+    uint16_t fileNameLength;
+    uint16_t extraFieldLength;
+};
+#pragma pack(pop)
 
 struct ZipArchiveEntry
 {
     const char* pFileName;
-    uint32_t absoluteOffsetToDirectory;
-    uint32_t absoluteOffsetToFileHeader;
+    const char* pFileComment;
+    int32_t absoluteOffsetToFileHeader;
     uint32_t absoluteOffsetToNextEntry;
-
+    uint32_t uncompressedSizeInBytes;
+    uint32_t compressedSizeInBytes;
     uint16_t fileNameLength;
     uint16_t recordIndex;
+    uint16_t compressionMethod;
 };
 
-ZipArchiveEntry createZipArchiveEntry( const ZipArchive* pZipArchive, const uint32_t absoluteOffsetToCentralDirectory, uint16_t recordIndex )
+ZipArchiveEntry createZipArchiveEntry( const ZipArchive* pZipArchive, const uint32_t absoluteOffsetToCentralDirectoryFileHeader, uint16_t recordIndex )
 {
-    uint16_t fileNameLength;
-    memcpy( &fileNameLength, pZipArchive->pData + absoluteOffsetToCentralDirectory + 28, sizeof( fileNameLength ) );
+    ZipCentralDirectoryFileHeader centralDirectoryFileHeader;
+    memcpy( &centralDirectoryFileHeader, pZipArchive->pData + absoluteOffsetToCentralDirectoryFileHeader, sizeof( ZipCentralDirectoryFileHeader ) );
 
-    uint16_t extraFieldLength;
-    memcpy( &extraFieldLength, pZipArchive->pData + absoluteOffsetToCentralDirectory + 30, sizeof( extraFieldLength ) );
+    uint32_t offset;
+    memcpy( &offset, pZipArchive->pData + absoluteOffsetToCentralDirectoryFileHeader + 42, sizeof( offset ) );
 
-    uint16_t fileCommentLength;
-    memcpy( &fileCommentLength, pZipArchive->pData + absoluteOffsetToCentralDirectory + 32, sizeof( fileCommentLength ) );
-
-    uint32_t offsetToLocalFileHeader;
-    memcpy( &offsetToLocalFileHeader, pZipArchive->pData + absoluteOffsetToCentralDirectory + 42, sizeof( offsetToLocalFileHeader ) );
-
-    const uint32_t variableByteLength = 46 + fileNameLength + extraFieldLength + fileCommentLength;
+    const uint32_t variableByteLength = 46 + centralDirectoryFileHeader.fileNameLength + centralDirectoryFileHeader.extraFieldLength + centralDirectoryFileHeader.fileCommentLength;
     const uint16_t newRecordIndex = recordIndex + 1u;
 
     ZipArchiveEntry archiveEntry;
+    archiveEntry.compressedSizeInBytes      = centralDirectoryFileHeader.compressedSize;
+    archiveEntry.uncompressedSizeInBytes    = centralDirectoryFileHeader.uncompressedSize;
+    archiveEntry.compressionMethod          = centralDirectoryFileHeader.compressionMethod;
     archiveEntry.recordIndex                = newRecordIndex;
-    archiveEntry.absoluteOffsetToDirectory  = offsetToLocalFileHeader;
-    archiveEntry.absoluteOffsetToNextEntry  = pZipArchive->pEocd->centralDirRecordCount == newRecordIndex ? 0u : absoluteOffsetToCentralDirectory + variableByteLength;
-    archiveEntry.fileNameLength             = fileNameLength;
-    archiveEntry.pFileName                  = (const char*)pZipArchive->pData + absoluteOffsetToCentralDirectory + 46;
+    archiveEntry.absoluteOffsetToFileHeader = centralDirectoryFileHeader.localFileHeaderRelativeOffset;
+    archiveEntry.absoluteOffsetToNextEntry  = pZipArchive->pEocd->centralDirRecordCount == newRecordIndex ? 0u : absoluteOffsetToCentralDirectoryFileHeader + variableByteLength;
+    archiveEntry.fileNameLength             = centralDirectoryFileHeader.fileNameLength;
+    archiveEntry.pFileName                  = (const char*)pZipArchive->pData + absoluteOffsetToCentralDirectoryFileHeader + 46;
+    archiveEntry.pFileComment               = (const char*)pZipArchive->pData + absoluteOffsetToCentralDirectoryFileHeader + centralDirectoryFileHeader.fileNameLength + 46;
 
     return archiveEntry;
 }
@@ -953,6 +971,41 @@ const char* findLastInString( const char* pString, uint32_t stringLength, const 
     return nullptr;
 }
 
+uint8_t filePathHasRomFileExtension( const char* pFilePath, const uint16_t filePathLength )
+{
+    const char* pFileExtension = findLastInString( pFilePath, filePathLength, '.' );
+    if( pFileExtension != nullptr )
+    {
+        const uint32_t fileExtensionLength = filePathLength - (uint32_t)( pFileExtension - pFilePath );
+        return areStringsEqual( pFileExtension, ".gb", fileExtensionLength ) || areStringsEqual( pFileExtension, ".gbc", fileExtensionLength );
+    }
+
+    return 0;
+}  
+
+ZipArchiveEntry findFirstRomEntryInZipArchive( const ZipArchive* pZipArchive )
+{
+    ZipArchiveEntry zipArchiveEntry = findFirstZipArchiveEntry( pZipArchive );
+    while( true )
+    {
+        if( filePathHasRomFileExtension( zipArchiveEntry.pFileName, zipArchiveEntry.fileNameLength ) )
+        {
+            return zipArchiveEntry;
+        }
+
+        if( isLastZipArchiveEntry( &zipArchiveEntry ) )
+        {
+            break;
+        }
+
+        zipArchiveEntry = findNextZipArchiveEntry( pZipArchive, &zipArchiveEntry );
+    }
+
+    //FK: The caller should check if there's at least one zip file in the archive before calling this function.
+    IllegalCodePath();
+    return zipArchiveEntry;
+}
+
 uint32_t countRomsInZipArchive( const ZipArchive* pZipArchive )
 {
     uint32_t romCount = 0u;
@@ -961,15 +1014,9 @@ uint32_t countRomsInZipArchive( const ZipArchive* pZipArchive )
     ZipArchiveEntry zipArchiveEntry = findFirstZipArchiveEntry( pZipArchive );
     while( true )
     {
-        const char* pFileExtension = findLastInString( zipArchiveEntry.pFileName, zipArchiveEntry.fileNameLength, '.' );
-        if( pFileExtension != nullptr )
+        if( filePathHasRomFileExtension( zipArchiveEntry.pFileName, zipArchiveEntry.fileNameLength ) )
         {
-            const uint32_t fileExtensionLength = zipArchiveEntry.fileNameLength - (uint32_t)( pFileExtension - zipArchiveEntry.pFileName );
-            if( areStringsEqual( pFileExtension, ".gb", fileExtensionLength ) ||
-                areStringsEqual( pFileExtension, ".gbc", fileExtensionLength ) )
-            {
-                ++romCount;
-            }
+            ++romCount;
         }
 
         if( isLastZipArchiveEntry( &zipArchiveEntry ) )
@@ -999,6 +1046,53 @@ uint8_t openZipArchive( ZipArchive* pOutZipArchive, const uint8_t* pZipData, con
 
     *pOutZipArchive = zipArchive;
     return 1u;
+}
+
+enum class ZipDecompressionResult : uint8_t
+{
+    Success,
+    NotSupported
+};
+
+const uint8_t* getZipArchiveEntryFileStart( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry )
+{
+    ZipLocalFileHeader localFileHeader;
+    memcpy( &localFileHeader, pZipArchive->pData + pZipArchiveEntry->absoluteOffsetToFileHeader, sizeof( localFileHeader ) );
+
+    return pZipArchive->pData + pZipArchiveEntry->absoluteOffsetToFileHeader + sizeof( localFileHeader ) + localFileHeader.fileNameLength + localFileHeader.extraFieldLength;
+}
+
+ZipDecompressionResult decompressZipArchiveEntry( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry, uint8_t* pTargetBuffer )
+{
+    if( pZipArchiveEntry->compressionMethod != 0u )
+    {
+        return ZipDecompressionResult::NotSupported;
+    }
+
+    switch( pZipArchiveEntry->compressionMethod )
+    {
+        case 0:
+        {
+            //FK: File is not compressed
+            const uint8_t* pDataStart = getZipArchiveEntryFileStart( pZipArchive, pZipArchiveEntry );
+            memcpy( pTargetBuffer, pDataStart, pZipArchiveEntry->uncompressedSizeInBytes );
+            break;
+        }
+
+        case 8:
+        {
+            //FK: File is DEFLATE compressed
+            break;
+        }
+
+        default:
+        {
+            IllegalCodePath();
+            break;
+        }
+    }
+
+    return ZipDecompressionResult::Success;
 }
 
 uint8_t isValidGBRomData( const uint8_t* pRomData, const uint32_t romSizeInBytes )
@@ -4281,11 +4375,6 @@ const uint8_t* getGBEmulatorFrameBuffer( GBEmulatorInstance* pInstance )
 {
     const uint8_t backBufferIndex = !pInstance->pPpuState->activeFrameBufferIndex;
     return pInstance->pPpuState->pGBFrameBuffers[ backBufferIndex ];
-}
-
-constexpr size_t calculateGBEmulatorFrameBuffersSizeInBytes()
-{
-    return gbVerticalResolutionInTiles * gbHorizontalResolutionInTiles * gbTileSizeInBytes * gbFrameBufferCount;
 }
 
 GBEmulatorInstanceEventMask runGBEmulatorForCycles( GBEmulatorInstance* pInstance, uint32_t cycleCountToRunFor )

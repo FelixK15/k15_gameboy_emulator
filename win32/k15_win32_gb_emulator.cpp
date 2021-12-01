@@ -113,6 +113,8 @@ constexpr uint32_t gbMenuSpeed8x			= 40u;
 
 constexpr uint32_t gbMenuResetEmulator 		= 50u;
 
+constexpr uint32_t gbPaintTimerId			= 150u;
+
 constexpr uint8_t gbDefaultScale = 2u;
 
 const char* pSettingsFormatting = R"(
@@ -222,6 +224,7 @@ struct Win32ApplicationContext
 	HGLRC						pOpenGLContext									= nullptr;
 	HDC							pDeviceContext									= nullptr;
 	uint8_t* 					pGameboyRGBVideoBuffer 							= nullptr;
+	uint8_t*					pUncompressBuffer								= nullptr;
 	char 						gameTitle[16] 									= {};
 	uint32_t					monitorWidth									= 0u;
 	uint32_t					monitorHeight									= 0u;
@@ -532,9 +535,9 @@ void generateStateFileName( char* pStateFileNameBuffer, size_t stateFileNameLeng
 	sprintf_s( pStateFileNameBuffer, stateFileNameLength, "%s_%d%s", pRomBaseFileName, stateSlotIndex, gbStateFileExtension );
 }
 
-void generateRamFileName( char* pRamFileNameBuffer, size_t ramFileNameLength, const char* pRomBaseFileName )
+void generateRamFileName( char* pRamFileNameBuffer, size_t ramFileNameLength, const char* pRomBaseFileName, uint32_t romBaseFileNameLength )
 {
-	sprintf_s( pRamFileNameBuffer, ramFileNameLength, "%s%s", pRomBaseFileName, gbRamFileExtension );
+	sprintf_s( pRamFileNameBuffer, ramFileNameLength, "%.*s%s", romBaseFileNameLength, pRomBaseFileName, gbRamFileExtension );
 }
 
 void unmapFileMapping( Win32FileMapping* pFileMapping )
@@ -784,6 +787,61 @@ void getRomBaseFileName( char* pRomBaseFileNameBuffer, size_t romBaseFileNameBuf
 	*pRomPathFileExtension = '.';
 }
 
+uint8_t loadRomData( Win32ApplicationContext* pContext, const char* pRomName, uint32_t romNameLength, const uint8_t* pRomData, const uint32_t romDataSizeInBytes )
+{
+	if( !isValidGBRomData( pRomData, romDataSizeInBytes ) )
+	{
+		setUserMessage( &pContext->userMessage, "Rom file invalid" );
+		return 0u;
+	}
+
+	const GBCartridgeHeader header = getGBCartridgeHeader( pRomData );
+	if( header.colorCompatibility == 0xC0 )
+	{
+		MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
+		return 0u;
+	}
+
+	unmapFileMapping( &pContext->emulatorContext.romMapping );
+	unmapFileMapping( &pContext->emulatorContext.ramMapping );
+
+	uint8_t* pRamBaseAddress = nullptr;
+
+	Win32FileMapping ramFileMapping;
+	const size_t ramSizeInBytes = mapRamSizeToByteSize( header.ramSize );
+	if( ramSizeInBytes > 0 )
+	{
+		char ramFileName[MAX_PATH] = {0};
+		generateRamFileName( ramFileName, sizeof( ramFileName ), pRomName, romNameLength );
+
+		if( mapFileForWriting( &ramFileMapping, ramFileName, ramSizeInBytes ) == 0 )
+		{
+			setUserMessage( &pContext->userMessage, "Can't map ram" );
+			return 0u;
+		}
+
+		pRamBaseAddress = ramFileMapping.pFileBaseAddress;
+	}
+
+	const GBMapCartridgeResult result = loadGBEmulatorRom( pContext->emulatorContext.pEmulatorInstance, pRomData, pRamBaseAddress );
+	if( result == K15_GB_CARTRIDGE_TYPE_UNSUPPORTED )
+	{
+		unmapFileMapping( &ramFileMapping );
+		MessageBoxA( pContext->pWindowHandle, "This rom type is currently not supported.", "Rom not supported.", MB_OK );
+		return 0u;
+	}
+
+	strcpy_s( pContext->emulatorContext.romBaseFileName, sizeof( pContext->emulatorContext.romBaseFileName ), pRomName );
+	setUserMessage( &pContext->userMessage, "Rom loaded!");
+
+	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
+	enableRomMenuItems( pContext );
+
+	pContext->emulatorContext.ramMapping = ramFileMapping;
+
+	return 1u;
+}
+
 void loadZipArchiveFile( Win32ApplicationContext* pContext, char* pArchivePath )
 {
 	Win32FileMapping archiveFileMapping;
@@ -808,11 +866,24 @@ void loadZipArchiveFile( Win32ApplicationContext* pContext, char* pArchivePath )
 	}
 	else if( romsInArchive == 1u )
 	{
-		ZipArchiveEntry zipEntry = findFirstZipArchiveEntry( &zipArchive );
-		
-		
-	}
+		const ZipArchiveEntry romEntry = findFirstRomEntryInZipArchive( &zipArchive );
 
+		const ZipDecompressionResult decompressionResult = decompressZipArchiveEntry( &zipArchive, &romEntry, pContext->pUncompressBuffer );
+		if( decompressionResult == ZipDecompressionResult::NotSupported )
+		{
+			setUserMessage( &pContext->userMessage, "Unsupported Zip" );
+			return;
+		}
+
+		const char* pFileExtension = findLastInString( romEntry.pFileName, romEntry.fileNameLength, '.');
+		uint32_t fileNameLength = romEntry.fileNameLength;
+		if( pFileExtension != nullptr )
+		{
+			fileNameLength = castSizeToUint32( pFileExtension - romEntry.pFileName );
+		}
+
+		loadRomData( pContext, romEntry.pFileName, fileNameLength, pContext->pUncompressBuffer, romEntry.uncompressedSizeInBytes );
+	}
 }
 
 void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
@@ -820,7 +891,6 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	char fixedRomPath[ MAX_PATH ];
 	strcpy_s( fixedRomPath, sizeof( fixedRomPath ), pRomPath );
 	char* pFixedRomPath = fixRomFileName( fixedRomPath );
-
 	char* pFileExtension = strrchr( pFixedRomPath, '.' );
 
 	const uint8_t isGameBoyColorRom = strcmp( pFileExtension, ".gbc") == 0;
@@ -857,60 +927,14 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 		return;
 	}
 
-	if( !isValidGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
-	{
-		setUserMessage( &pContext->userMessage, "Rom file invalid" );
-		unmapFileMapping( &romFileMapping );
-		return;
-	}
-
-	const GBCartridgeHeader header = getGBCartridgeHeader( romFileMapping.pFileBaseAddress );
-	if( header.colorCompatibility == 0xC0 )
-	{
-		MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
-		return;
-	}
-
-	unmapFileMapping( &pEmulatorContext->romMapping );
-	unmapFileMapping( &pEmulatorContext->ramMapping );
-
-	const uint8_t* pRomBaseAddress 	= romFileMapping.pFileBaseAddress;
-	uint8_t* pRamBaseAddress 		= nullptr;
-
-	Win32FileMapping ramFileMapping;
-	const size_t ramSizeInBytes = mapRamSizeToByteSize( header.ramSize );
-	if( ramSizeInBytes > 0 )
-	{
-		char ramFileName[MAX_PATH] = {0};
-		generateRamFileName( ramFileName, sizeof( ramFileName ), romBaseFileName );
-
-		if( mapFileForWriting( &ramFileMapping, ramFileName, ramSizeInBytes ) == 0 )
-		{
-			setUserMessage( &pContext->userMessage, "Can't map ram" );
-			unmapFileMapping( &romFileMapping );
-			return;
-		}
-
-		pRamBaseAddress = ramFileMapping.pFileBaseAddress;
-	}
-
-	const GBMapCartridgeResult result = loadGBEmulatorRom( pEmulatorContext->pEmulatorInstance, pRomBaseAddress, pRamBaseAddress );
-	if( result == K15_GB_CARTRIDGE_TYPE_UNSUPPORTED )
+	const uint32_t romBaseFileNameLength = castSizeToUint32( strlen( romBaseFileName ) );
+	if( !loadRomData( pContext, romBaseFileName, romBaseFileNameLength,  romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
 	{
 		unmapFileMapping( &romFileMapping );
-		unmapFileMapping( &ramFileMapping );
-		MessageBoxA( pContext->pWindowHandle, "This rom type is currently not supported.", "Rom not supported.", MB_OK );
 		return;
 	}
-
-	strcpy_s( pEmulatorContext->romBaseFileName, sizeof( pEmulatorContext->romBaseFileName ), romBaseFileName );
-	setUserMessage( &pContext->userMessage, "Rom loaded!");
-
-	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
-	enableRomMenuItems( pContext );
 
 	pEmulatorContext->romMapping = romFileMapping;
-	pEmulatorContext->ramMapping = ramFileMapping;
 }
 
 void openRomFile( Win32ApplicationContext* pContext )
@@ -919,7 +943,7 @@ void openRomFile( Win32ApplicationContext* pContext )
 	OPENFILENAMEA parameters = {};
 	parameters.lStructSize 		= sizeof(OPENFILENAMEA);
 	parameters.hwndOwner   		= pContext->pWindowHandle;
-	parameters.lpstrFilter		= "GameBoy Rom (*.gb)\0*.gb\0GameBoy Color Rom (*.gbc)\0*.gbc\0\0";
+	parameters.lpstrFilter		= "GameBoy Rom (*.gb)\0*.gb\0GameBoy Color Rom (*.gbc)\0*.gbc\0Rom Archive (*.zip)\0*.zip\0\0";
 	parameters.lpstrFile 		= romPath;
 	parameters.nMaxFile			= sizeof( romPath );
 	parameters.lpstrTitle		= "Load GameBoy/GameBoy Color rom file.";
@@ -1244,6 +1268,25 @@ void handleDeviceChanged( Win32ApplicationContext* pContext, WPARAM wparam )
 	}
 }
 
+void handleEnterSizeMove( Win32ApplicationContext* pContext )
+{
+	SetTimer( pContext->pWindowHandle, gbPaintTimerId, 1u, nullptr );
+}
+
+void handleExitSizeMove( Win32ApplicationContext* pContext )
+{
+	KillTimer( pContext->pWindowHandle, gbPaintTimerId );
+} 
+
+void handleTimer( Win32ApplicationContext* pContext, WPARAM wparam )
+{
+	if( wparam == gbPaintTimerId )
+	{
+		//FK: Force WM_PAINT
+		InvalidateRect( pContext->pWindowHandle, nullptr, FALSE );
+	}
+}
+
 void handleWindowPosChanged( Win32ApplicationContext* pContext, LPARAM lparam )
 {
 	if( pContext->fullscreen )
@@ -1355,6 +1398,8 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 
 		PAINTSTRUCT ps;
 		HDC pDeviceContext = BeginPaint( hwnd, &ps );
+
+		//FK: TODO: Update Emulator...?
 		drawGBFrameBuffer( pDeviceContext );
 		w32SwapBuffers( pDeviceContext );
 		EndPaint( hwnd, &ps );
@@ -1367,6 +1412,18 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 
 	case WM_KILLFOCUS:
 		pContext->hasFocus = 0;
+		break;
+
+	case WM_TIMER:
+		handleTimer( pContext, wparam );
+		break;
+
+	case WM_ENTERSIZEMOVE:
+		handleEnterSizeMove( pContext );
+		break;
+
+	case WM_EXITSIZEMOVE:
+		handleExitSizeMove( pContext );
 		break;
 
 	case WM_LBUTTONDOWN:
@@ -1391,10 +1448,6 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 
 	case WM_GETMINMAXINFO:
 		handleWindowMinMaxInfo( lparam );
-		break;
-
-	case WM_SYSKEYDOWN:
-		printf("syskeydown\n");
 		break;
 
 	case WM_COMMAND:
@@ -1833,13 +1886,6 @@ uint8_t setupEmulator( Win32EmulatorContext* pContext )
 		return 0;
 	}
 
-	constexpr size_t gbFrameBufferSizeInBytes = calculateGBEmulatorFrameBuffersSizeInBytes();
-	uint8_t* pEmulatorBackBufferMemory = (uint8_t*)VirtualAlloc( nullptr, gbFrameBufferSizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
-	if( pEmulatorBackBufferMemory == nullptr )
-	{
-		return 0;
-	}
-
 	pContext->pEmulatorInstance = createGBEmulatorInstance( pEmulatorInstanceMemory );
 	setDefaultKeyboardBinding( pContext->digipadKeyboardMappings, pContext->actionButtonKeyboardMappings );
 
@@ -2193,7 +2239,14 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	Win32ApplicationContext appContext;
 	appContext.pInstanceHandle = hInstance;
 
-	allocateDebugConsole();
+	//FK: Allocate buffer for largest possible rom as an uncompress buffer in case a compressed archive is loaded
+	uint8_t* pUncompressBufferMemory = (uint8_t*)VirtualAlloc( nullptr, gbMaxRomSizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
+	if( pUncompressBufferMemory == nullptr )
+	{
+		return 1;
+	}
+
+	appContext.pUncompressBuffer = pUncompressBufferMemory;
 
 	loadWin32FunctionPointers();
 	loadXInputFunctionPointers();
