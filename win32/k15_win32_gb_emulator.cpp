@@ -795,7 +795,7 @@ uint8_t loadRomData( Win32ApplicationContext* pContext, const char* pRomName, ui
 		return 0u;
 	}
 
-	const GBCartridgeHeader header = getGBCartridgeHeader( pRomData );
+	const GBRomHeader header = getGBRomHeader( pRomData );
 	if( header.colorCompatibility == 0xC0 )
 	{
 		MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
@@ -858,6 +858,7 @@ void loadZipArchiveFile( Win32ApplicationContext* pContext, char* pArchivePath )
 		return;
 	}
 
+#if 0
 	const uint32_t romsInArchive = countRomsInZipArchive( &zipArchive );
 	if( romsInArchive == 0u )
 	{
@@ -884,6 +885,7 @@ void loadZipArchiveFile( Win32ApplicationContext* pContext, char* pArchivePath )
 
 		loadRomData( pContext, romEntry.pFileName, fileNameLength, pContext->pUncompressBuffer, romEntry.uncompressedSizeInBytes );
 	}
+#endif
 }
 
 void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
@@ -891,34 +893,6 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 	char fixedRomPath[ MAX_PATH ];
 	strcpy_s( fixedRomPath, sizeof( fixedRomPath ), pRomPath );
 	char* pFixedRomPath = fixRomFileName( fixedRomPath );
-	char* pFileExtension = strrchr( pFixedRomPath, '.' );
-
-	const uint8_t isGameBoyColorRom = strcmp( pFileExtension, ".gbc") == 0;
-	if( isGameBoyColorRom )
-	{
-		MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
-		return;
-	}
-
-	const uint8_t isZipArchive = strcmp( pFileExtension, ".zip" ) == 0;
-	if( isZipArchive )
-	{
-		loadZipArchiveFile( pContext, pFixedRomPath );
-		return;
-	}
-
-	const uint8_t isGameBoyRom = strcmp( pFileExtension, ".gb") == 0;
-	if( !isGameBoyRom )
-	{
-		setUserMessage( &pContext->userMessage, "Invalid rom" );
-		return;
-	}
-
-	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
-	char romBaseFileName[ MAX_PATH ];
-	CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
-
-	getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), pFixedRomPath );
 
 	Win32FileMapping romFileMapping;
 	if( mapFileForReading( &romFileMapping, pFixedRomPath ) == 0 )
@@ -927,14 +901,53 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 		return;
 	}
 
-	const uint32_t romBaseFileNameLength = castSizeToUint32( strlen( romBaseFileName ) );
-	if( !loadRomData( pContext, romBaseFileName, romBaseFileNameLength,  romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+	if( isGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
 	{
-		unmapFileMapping( &romFileMapping );
+		const GBRomHeader gbRomHeader = getGBRomHeader( romFileMapping.pFileBaseAddress );
+		if( gbRomHeader.colorCompatibility == 0xC0 )
+		{
+			MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
+			return;
+		}
+
+		char romBaseFileName[ MAX_PATH ];
+		getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), pFixedRomPath );
+		CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
+		
+		const uint32_t romBaseFileNameLength = castSizeToUint32( strlen( romBaseFileName ) );
+
+		if( !loadRomData( pContext, romBaseFileName, romBaseFileNameLength,  romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+		{
+			unmapFileMapping( &romFileMapping );
+			return;
+		}
+
+		Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
+		pEmulatorContext->romMapping = romFileMapping;
+	}
+	else if( isGZipArchiveData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+	{	
+		GZipArchive gzipArchive;
+		if( openGZipArchive( &gzipArchive, romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) == 0 )
+		{
+			setUserMessage( &pContext->userMessage, "Invalid zip" );
+			return;
+		}
+
+		if( !gzipArchive.flags.FNAME )
+		{
+			setUserMessage( &pContext->userMessage, "No file in gzip" );
+			return;
+		}
+
+		const char* pFileName = getGZipCompressedFileName( &gzipArchive );
+		deflateGZipArchive( &gzipArchive, pContext->pUncompressBuffer, gbMaxRomSizeInBytes );
+	}
+	else
+	{
+		setUserMessage( &pContext->userMessage, "Invalid rom" );
 		return;
 	}
-
-	pEmulatorContext->romMapping = romFileMapping;
 }
 
 void openRomFile( Win32ApplicationContext* pContext )
