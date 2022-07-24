@@ -916,7 +916,7 @@ struct GZipArchive
     GZipArchiveFlags        flags;
 };
 
-enum class GZipDeflateResult : uint8_t
+enum class GZipUncompressResult : uint8_t
 {
     Success,
     UnsupportedCompressionMethod,
@@ -924,15 +924,18 @@ enum class GZipDeflateResult : uint8_t
     TargetBufferTooSmall
 };
 
-struct DeflateDecoderStream
+struct BitStream
 {
-    const uint8_t* pCompressedData;
-    uint8_t* pTargetBuffer;
+    const uint8_t* pDataStart;
+    const uint8_t* pDataEnd;
+    const uint8_t* pDataCurrent;
+    uint8_t bitMask;
+};
 
-    uint32_t compressedDataSizeInBytes;
-    uint32_t targetBufferSizeInBytes;
-
-    uint32_t bitPosition;
+struct MemoryWriteStream
+{
+    uint8_t* pTargetData;
+    const uint8_t* pTargetDataEnd;
 };
 
 struct DeflateBlockHeader
@@ -941,85 +944,113 @@ struct DeflateBlockHeader
     uint8_t         compressionMethod   : 2;
 };
 
-DeflateDecoderStream createDeflateDecoderStream( const uint8_t* pCompressedData, uint32_t compressedDataSizeInBytes )
+MemoryWriteStream createMemoryWriteStream( uint8_t* pTargetBuffer, const uint32_t targetBufferCapacityInBytes )
 {
-    DeflateDecoderStream deflateDecoderStream;
-    deflateDecoderStream.pCompressedData              = pCompressedData;
-    deflateDecoderStream.compressedDataSizeInBytes    = compressedDataSizeInBytes;
-    deflateDecoderStream.bitPosition                  = 0u;
-    return deflateDecoderStream;
+    MemoryWriteStream writeStream;
+    writeStream.pTargetData     = pTargetBuffer;
+    writeStream.pTargetDataEnd  = pTargetBuffer + targetBufferCapacityInBytes;
+
+    return writeStream;
 }
 
-void advanceDeflateDecoderStreamToNextByte( DeflateDecoderStream* pDeflateDecoder )
+uint8_t pushData( MemoryWriteStream* pWriteStream, const uint8_t* pData, const uint32_t dataSizeInBytes )
 {
-    const uint8_t bitsToAdvance = 8u - ( pDeflateDecoder->bitPosition % 8u );
-    RuntimeAssert( pDeflateDecoder->bitPosition + bitsToAdvance < pDeflateDecoder->compressedDataSizeInBytes * 8u );
-    pDeflateDecoder->bitPosition += bitsToAdvance;
-}
-
-inline uint32_t getDeflateDecoderStreamByteIndex( const DeflateDecoderStream* pDeflateDecoder )
-{
-    return pDeflateDecoder->compressedDataSizeInBytes >> 3u;
-}
-
-void skipBitsFromDeflateDecoderStream( DeflateDecoderStream* pDeflateDecoder, const uint32_t bitsToSkip )
-{
-    const uint32_t newBitPosition = pDeflateDecoder->bitPosition + bitsToSkip;
-    RuntimeAssert( ( newBitPosition >> 3u ) < pDeflateDecoder->compressedDataSizeInBytes );
-
-    pDeflateDecoder->bitPosition = newBitPosition;
-}
-
-const uint8_t* getDeflateDecoderStreamPosition( const DeflateDecoderStream* pDeflateDecoder )
-{
-    return pDeflateDecoder->pCompressedData + getDeflateDecoderStreamByteIndex( pDeflateDecoder );
-}
-
-uint8_t readBitsFromDeflateDecoderStream( DeflateDecoderStream* pDeflateDecoder, const uint8_t bitsToRead )
-{
-    RuntimeAssert( bitsToRead <= 8u );
-
-    uint8_t bits = 0u;
-    const uint8_t bitPositionInCurrentByte = ( pDeflateDecoder->bitPosition % 8u );
-
-    if( bitPositionInCurrentByte == 7u )
+    if( pWriteStream->pTargetData + dataSizeInBytes < pWriteStream->pTargetDataEnd )
     {
-        advanceDeflateDecoderStreamToNextByte( pDeflateDecoder );
-        const uint8_t bitMask = ( (1 << bitsToRead ) - 1 );
-        const uint32_t byteIndex = getDeflateDecoderStreamByteIndex( pDeflateDecoder );
-        bits = pDeflateDecoder->pCompressedData[ byteIndex ] & bitMask;
-    }
-    else if( bitPositionInCurrentByte + bitsToRead > 7u )
-    {
-        const uint8_t bitsToReadFromFirstByte   = 7u - bitPositionInCurrentByte;
-        const uint8_t bitsToReadFromSecondByte  = bitsToRead - bitsToReadFromFirstByte;
-        const uint8_t firstBitMask = ( ( 1 << bitsToReadFromFirstByte ) - 1 );
-        const uint8_t secondBitMask = ( ( 1 << bitsToReadFromSecondByte ) - 1 );
-        const uint32_t byteIndex = getDeflateDecoderStreamByteIndex( pDeflateDecoder );
-
-        bits = ( pDeflateDecoder->pCompressedData[ byteIndex + 0 ] >> bitPositionInCurrentByte ) & firstBitMask;
-        advanceDeflateDecoderStreamToNextByte( pDeflateDecoder );
-        bits |= ( pDeflateDecoder->pCompressedData[ byteIndex + 1 ] & secondBitMask ) << bitsToReadFromFirstByte;
-    }
-    else
-    {
-        const uint8_t bitMask = ( (1 << bitsToRead ) - 1 );
-        const uint32_t byteIndex = getDeflateDecoderStreamByteIndex( pDeflateDecoder );
-        bits = ( pDeflateDecoder->pCompressedData[ byteIndex ] >> pDeflateDecoder->bitPosition ) & bitMask;
+        return 0u;
     }
 
-    pDeflateDecoder->bitPosition += bitsToRead;
-    return bits;
+    memcpy( pWriteStream->pTargetData, pData, dataSizeInBytes );
+    pWriteStream->pTargetData += dataSizeInBytes;
+
+    return 1u;
 }
 
-void discardPartiallyReadByteFromDeflateDecoderStream( DeflateDecoderStream* pDeflateDecoder )
+BitStream createBitStream( const uint8_t* pData, uint32_t dataSizeInBytes )
 {
-    if( ( pDeflateDecoder->bitPosition % 8u ) == 0u )
+    BitStream bitStream;
+    bitStream.pDataStart    = pData;
+    bitStream.pDataCurrent  = pData;
+    bitStream.pDataEnd      = pData + dataSizeInBytes;
+    bitStream.bitMask       = 1;
+    return bitStream;
+}
+
+void advanceToNextByte( BitStream* pBitStream )
+{
+    RuntimeAssert( ( pBitStream->pDataCurrent + 1 ) < pBitStream->pDataEnd );
+    ++pBitStream->pDataCurrent;
+    pBitStream->bitMask = 1;
+}
+
+uint8_t reverseBitsInByte( uint8_t value )
+{
+    //FK: https://developer.squareup.com/blog/reversing-bits-in-c/
+    return (uint8_t)(((value * 0x0802LU & 0x22110LU) |
+            (value * 0x8020LU & 0x88440LU)) * 0x10101LU >> 16);
+}
+
+uint8_t readBit( BitStream* pBitStream )
+{
+    const uint8_t bit = ( *pBitStream->pDataCurrent & pBitStream->bitMask ) > 0;
+    pBitStream->bitMask <<= 1;
+
+    if( pBitStream->bitMask == 0u )
+    {
+        advanceToNextByte( pBitStream );
+    }
+
+    return bit;
+}
+
+uint8_t readBits( BitStream* pBitStream, uint8_t bitsToRead )
+{
+    RuntimeAssert( bitsToRead <= 8 );
+
+    uint8_t value = 0u;
+    while( true )
+    {
+        value |= readBit( pBitStream );
+
+        if( ( --bitsToRead ) == 0u )
+        {
+            break;
+        }
+        value <<= 1u;
+    }
+
+    return value;
+}
+
+uint8_t readBitsInverse( BitStream* pBitStream, uint8_t bitsToRead )
+{
+    RuntimeAssert( bitsToRead <= 8 );
+
+    uint8_t value = 0u;
+    for( uint8_t bitIndex = 0u; bitIndex < bitsToRead; ++bitIndex )
+    {
+        value |= ( readBit( pBitStream ) << bitIndex );
+    }
+    
+    return value;
+}
+
+void moveToNextByteBoundary( BitStream* pBitStream )
+{
+    if( pBitStream->bitMask == 1u )
     {
         return;
     }
 
-    advanceDeflateDecoderStreamToNextByte( pDeflateDecoder );
+    advanceToNextByte( pBitStream );
+}
+
+void skipBytes( BitStream* pBitStream, const uint32_t bytesToSkip )
+{
+    RuntimeAssert( pBitStream->bitMask == 1u );
+    RuntimeAssert( pBitStream->pDataCurrent + bytesToSkip < pBitStream->pDataEnd );
+
+    pBitStream->pDataCurrent += bytesToSkip;
 }
 
 const ZipEndOfCentralDirectory* findZipArchiveEndOfCentralDirectory( const uint8_t* pZipData, const uint32_t zipDataSizeInBytes )
@@ -1110,12 +1141,12 @@ GZipCompressedData getGZipCompressedData( const GZipArchive* pArchive )
 
     if( pArchive->flags.FNAME )
     {
-        dataOffset += ( uint32_t )strlen( (const char*)pArchive->pData + dataOffset );
+        dataOffset += ( uint32_t )strlen( (const char*)pArchive->pData + dataOffset ) + 1;
     }
 
     if( pArchive->flags.FCOMMENT )
     {
-        dataOffset += ( uint32_t )strlen( (const char*)pArchive->pData + dataOffset );
+        dataOffset += ( uint32_t )strlen( (const char*)pArchive->pData + dataOffset ) + 1;
     }
 
     if( pArchive->flags.FHCRC )
@@ -1127,7 +1158,7 @@ GZipCompressedData getGZipCompressedData( const GZipArchive* pArchive )
     const uint8_t* pCompressedDataEnd   = ( const uint8_t* )( pArchive->pFooter );
 
     GZipCompressedData compressedData;
-    compressedData.pCompressedData              = pArchive->pData;
+    compressedData.pCompressedData              = pCompressedDataStart;
     compressedData.compressedDataSizeInBytes    = ( uint32_t )( pCompressedDataEnd - pCompressedDataStart );
 
     return compressedData;
@@ -1143,40 +1174,43 @@ const char* getGZipCompressedFileName( const GZipArchive* pArchive )
     return getGZipFileNameMember( pArchive );
 }
 
-DeflateDecoderStream createGZipDeflateDecoderStream( const GZipArchive* pArchive )
+BitStream createGZipBitStream( const GZipArchive* pArchive )
 {
     const GZipCompressedData compressedData = getGZipCompressedData( pArchive );
-    return createDeflateDecoderStream( compressedData.pCompressedData, compressedData.compressedDataSizeInBytes );
+    return createBitStream( compressedData.pCompressedData, compressedData.compressedDataSizeInBytes );
 }
 
-uint8_t deflateStreamIntoBuffer( DeflateDecoderStream* pDeflateDecoderStream, uint8_t* pTargetBuffer, const uint32_t targetBufferCapacityInBytes )
+uint8_t uncompressDeflateStream( BitStream* pDeflateStream, MemoryWriteStream* pTargetStream )
 {
     //FK: Reference: https://github.com/madler/zlib/blob/master/contrib/puff/puff.c
     //FK: Reference: https://www.w3.org/Graphics/PNG/RFC-1951
     //FK: Reference: https://www.infinitepartitions.com/art001.html
-
+#if 0
     while( true )
     {
-        const uint8_t lastBlock         = readBitsFromDeflateDecoderStream( pDeflateDecoderStream, 1u );
-        const uint8_t compressionMethod = readBitsFromDeflateDecoderStream( pDeflateDecoderStream, 2u );
+        const uint8_t lastBlock         = readBit( pDeflateStream );
+        const uint8_t compressionMethod = readBitsInverse( pDeflateStream, 2u );
 
         switch( compressionMethod )
         {
             case 0:
             {
                 //FK: Block is not compressed
-                discardPartiallyReadByteFromDeflateDecoderStream( pDeflateDecoderStream );
-                const uint8_t dataLengthLow         = readBitsFromDeflateDecoderStream( pDeflateDecoderStream, 8u );
-                const uint8_t dataLengthHigh        = readBitsFromDeflateDecoderStream( pDeflateDecoderStream, 8u );
+                moveToNextByteBoundary( pDeflateStream );
+                const uint8_t dataLengthLow         = readBits( pDeflateStream, 8u );
+                const uint8_t dataLengthHigh        = readBits( pDeflateStream, 8u );
                 const uint16_t dataLengthInBytes    = ( ( uint16_t )dataLengthLow << 8u | dataLengthHigh );
 
                 //FK: Skip nlen
-                skipBitsFromDeflateDecoderStream( pDeflateDecoderStream, 16u );
-                const uint8_t* pBlockData = getDeflateDecoderStreamPosition( pDeflateDecoderStream );
+                skipBytes( pDeflateStream, 2u );
+                
+                const uint8_t* pBlockData = pDeflateStream->pDataCurrent;
+                if( !pushData( pTargetStream, pBlockData, dataLengthInBytes ) )
+                {
+                    return 0u;
+                }
 
-                //FK: TODO: Check target buffer size
-                memcpy( pTargetBuffer, pBlockData, dataLengthInBytes );
-                skipBitsFromDeflateDecoderStream( pDeflateDecoderStream, dataLengthInBytes * 8u );
+                skipBytes( pDeflateStream, dataLengthInBytes );
                 break;
             }
 
@@ -1188,10 +1222,37 @@ uint8_t deflateStreamIntoBuffer( DeflateDecoderStream* pDeflateDecoderStream, ui
 
             case 2:
             {
+                static constexpr uint8_t order[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 
+                    11, 4, 12, 3, 13, 2, 14, 1, 15 };
+
+#define MAXLCODES 286           /* maximum number of literal/length codes */
+#define MAXDCODES 30            /* maximum number of distance codes */
+#define MAXCODES (MAXLCODES+MAXDCODES)  /* maximum codes lengths to read */
+                uint16_t lengths[MAXCODES] = {0};
                 //FK: Block compressed with dynamic huffman
-                uint8_t hlist = readBitsFromDeflateDecoderStream( pDeflateDecoderStream, 5u );
-                uint8_t hdist = readBitsFromDeflateDecoderStream( pDeflateDecoderStream, 5u );
-                uint8_t hclen = readBitsFromDeflateDecoderStream( pDeflateDecoderStream, 4u );
+                uint16_t nlit   = readBitsInverse( pDeflateStream, 5u ) + 257;
+                uint16_t ndist  = readBitsInverse( pDeflateStream, 5u ) + 1;
+                uint16_t nlen   = readBitsInverse( pDeflateStream, 4u ) + 4;
+
+                uint8_t index = 0u;
+                for( index = 0u; index < nlen; ++index )
+                {
+                    lengths[ order[ index ] ] = readBitsInverse( pDeflateStream, 3u );
+                }
+
+                uint8_t constructHuffmanTable( HuffmanTable* pOutHuffmanTable, const uint16_t* pCodes, const uint16_t codeLengths )
+                {
+
+                }
+
+                HuffmanTable lenCode;
+                if( !constructHuffmanTable( &lenCode, lenghts, 19 ) )
+                {
+                    return 0u;
+                }
+
+
+
                 BreakPointHook();
 
                 break;
@@ -1203,41 +1264,41 @@ uint8_t deflateStreamIntoBuffer( DeflateDecoderStream* pDeflateDecoderStream, ui
             break;
         }
     }
-
+#endif
     return 0u;
 }
 
-GZipDeflateResult deflateGZipArchive( const GZipArchive* pArchive, uint8_t* pTargetBuffer, const uint32_t targetBufferCapacityInBytes )
+GZipUncompressResult uncompressGZipArchive( const GZipArchive* pArchive, uint8_t* pTargetBuffer, const uint32_t targetBufferCapacityInBytes )
 {
     if( pArchive->compressionMethod != 8u )
     {
-        return GZipDeflateResult::UnsupportedCompressionMethod;
+        return GZipUncompressResult::UnsupportedCompressionMethod;
     }
 
     if( pArchive->pFooter->uncompressedSizeInBytes > targetBufferCapacityInBytes )
     {
-        return GZipDeflateResult::TargetBufferTooSmall;
+        return GZipUncompressResult::TargetBufferTooSmall;
     }
 
-    DeflateDecoderStream decodeStream = createGZipDeflateDecoderStream( pArchive );
-    deflateStreamIntoBuffer( &decodeStream, pTargetBuffer, targetBufferCapacityInBytes );
+    BitStream decodeStream          = createGZipBitStream( pArchive );
+    MemoryWriteStream writeStream   = createMemoryWriteStream( pTargetBuffer, targetBufferCapacityInBytes );
+    if( !uncompressDeflateStream( &decodeStream, &writeStream ) )
+    {
+        return GZipUncompressResult::TargetBufferTooSmall;
+    }
 
-    return GZipDeflateResult::ChecksumError;
+    return GZipUncompressResult::ChecksumError;
 }
 
-uint8_t isValidZipData( const uint8_t* pZipData, const uint32_t zipDataSizeInBytes )
+uint8_t isValidZipArchive( const uint8_t* pZipArchiveData, const uint32_t zipArchiveDataSizeInBytes )
 {
     //FK: Check for file header size
-    if( zipDataSizeInBytes <= 30 )
+    if( zipArchiveDataSizeInBytes <= 30 )
     {
         return 0u;
     }
 
-    //FK: Header signature (zip)
-    const uint8_t isPkZip = ( pZipData[0] == 'P' && pZipData[1] == 'K' && pZipData[2] == '\3' && pZipData[3] == '\4' );
-    const uint8_t isGzip  = ( pZipData[0] == 0x1F && pZipData[1] == 0x8b );
-
-    return isPkZip || isGzip;
+    return ( pZipArchiveData[0] == 'P' && pZipArchiveData[1] == 'K' && pZipArchiveData[2] == '\3' && pZipArchiveData[3] == '\4' );
 }
 
 char* trimTrailingWhitespaces( char* pString )
@@ -1437,7 +1498,7 @@ uint32_t countRomsInZipArchive( const ZipArchive* pZipArchive )
 
 uint8_t openZipArchive( ZipArchive* pOutZipArchive, const uint8_t* pZipData, const uint32_t zipDataSizeInBytes )
 {
-    if( !isValidZipData( pZipData, zipDataSizeInBytes ) )
+    if( !isValidZipArchive( pZipData, zipDataSizeInBytes ) )
 	{
 		return 0u;
 	}
@@ -2337,13 +2398,6 @@ GBMapCartridgeResult loadGBEmulatorRom( GBEmulatorInstance* pEmulator, const uin
 
     resetGBEmulator( pEmulator );
     return mapCartridgeMemory( pEmulator->pCartridge, pEmulator->pMemoryMapper, pRomMemory, pRamMemory );
-}
-
-uint8_t reverseBitsInByte( uint8_t value )
-{
-    //FK: https://developer.squareup.com/blog/reversing-bits-in-c/
-    return (uint8_t)(((value * 0x0802LU & 0x22110LU) |
-            (value * 0x8020LU & 0x88440LU)) * 0x10101LU >> 16);
 }
 
 uint8_t* getActiveFrameBuffer( GBPpuState* pPpuState )

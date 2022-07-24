@@ -941,7 +941,7 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 		}
 
 		const char* pFileName = getGZipCompressedFileName( &gzipArchive );
-		deflateGZipArchive( &gzipArchive, pContext->pUncompressBuffer, gbMaxRomSizeInBytes );
+		uncompressGZipArchive( &gzipArchive, pContext->pUncompressBuffer, gbMaxRomSizeInBytes );
 	}
 	else
 	{
