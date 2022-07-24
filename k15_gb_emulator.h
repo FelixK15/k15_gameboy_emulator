@@ -283,7 +283,8 @@ struct GBSerialState
     uint8_t* pSerialTransferControl = nullptr;
     uint8_t shiftIndex              = 0u;
     uint8_t inByte                  = 0xFFu;
-    uint8_t transferInProgress      = 0u;
+    uint8_t initiateTransfer        = 0u;
+    uint8_t useInternalClock        = 0u;
     uint32_t cycleCounter           = 0u;
 };
 
@@ -1384,7 +1385,8 @@ void initSerialState( GBMemoryMapper* pMemoryMapper, GBSerialState* pSerialState
     pSerialState->cycleCounter          = 0u;
     pSerialState->inByte                = 0xFFu;
     pSerialState->shiftIndex            = 0u;
-    pSerialState->transferInProgress    = 0u;
+    pSerialState->initiateTransfer      = 0u;
+    pSerialState->useInternalClock      = 0u;
 
     *pSerialState->pSerialTransferControl   = 0x7E;
     *pSerialState->pSerialTransferData      = 0x00;
@@ -1999,7 +2001,12 @@ uint8_t convertTimerControlFrequencyBit( const uint8_t timerControlValue )
 
 void updateSerial( GBCpuState* pCpuState, GBSerialState* pSerial, const uint8_t cycleCount )
 {
-    if( !pSerial->transferInProgress )
+    if( !pSerial->initiateTransfer )
+    {
+        return;
+    }
+
+    if( !pSerial->useInternalClock )
     {
         return;
     }
@@ -2018,7 +2025,7 @@ void updateSerial( GBCpuState* pCpuState, GBSerialState* pSerial, const uint8_t 
         if( pSerial->shiftIndex == 8 )
         {
             *pSerial->pSerialTransferControl &= ~0x80;
-            pSerial->transferInProgress = 0;
+            pSerial->initiateTransfer = 0;
             pSerial->shiftIndex = 0u;
             triggerInterrupt( pCpuState, SerialInterrupt );
         }
@@ -3774,7 +3781,8 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
         case K15_GB_MAPPED_IO_ADDRESS_SC:
         {
             memoryValueBitMask = 0b10000001;
-            pSerialState->transferInProgress = ( newMemoryValue & 0x80 ) > 0u;
+            pSerialState->initiateTransfer = ( newMemoryValue & 0x80 ) > 0u;
+            pSerialState->useInternalClock = ( newMemoryValue & 0x01 ) > 0u;
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_DIV:

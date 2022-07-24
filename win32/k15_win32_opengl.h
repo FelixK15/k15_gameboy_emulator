@@ -256,6 +256,10 @@ void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
 	glIsEnabled             = (PFNGLISENABLEDPROC)GetProcAddress(pOpenGL32Module, "glIsEnabled");
 	glScissor               = (PFNGLSCISSORPROC)GetProcAddress(pOpenGL32Module, "glScissor");
 	glTexImage2D            = (PFNGLTEXIMAGE2DPROC)GetProcAddress(pOpenGL32Module, "glTexImage2D");
+	glTexSubImage2D         = (PFNGLTEXSUBIMAGE2DPROC)GetProcAddress(pOpenGL32Module, "glTexSubImage2D");
+    glDrawArrays            = (PFNGLDRAWARRAYSPROC)GetProcAddress(pOpenGL32Module, "glDrawArrays");
+    glDrawElements          = (PFNGLDRAWELEMENTSPROC)GetProcAddress(pOpenGL32Module, "glDrawElements");
+    glDeleteTextures        = (PFNGLDELETETEXTURESPROC)GetProcAddress(pOpenGL32Module, "glDeleteTextures");
 
 	RuntimeAssert(glGenTextures != nullptr);
 	RuntimeAssert(glBindTexture != nullptr);
@@ -270,6 +274,10 @@ void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
 	RuntimeAssert(glIsEnabled != nullptr);
 	RuntimeAssert(glScissor != nullptr);
 	RuntimeAssert(glTexImage2D != nullptr);
+	RuntimeAssert(glTexSubImage2D != nullptr);
+	RuntimeAssert(glDrawArrays != nullptr);
+	RuntimeAssert(glDrawElements != nullptr);
+	RuntimeAssert(glDeleteTextures != nullptr);
 
 	RuntimeAssert(w32glGetProcAddress != nullptr );
 	RuntimeAssert(w32glCreateContext != nullptr );
@@ -294,13 +302,11 @@ void loadWGLOpenGLFunctionPointers()
 void loadOpenGL4FunctionPointers()
 {
 	glTexStorage2D 				= (PFNGLTEXSTORAGE2DPROC)w32glGetProcAddress("glTexStorage2D");
-	glTexSubImage2D 			= (PFNGLTEXSUBIMAGE2DPROC)w32glGetProcAddress("glTexSubImage2D");
 	glGenBuffers				= (PFNGLGENBUFFERSPROC)w32glGetProcAddress("glGenBuffers");
 	glBindBuffer				= (PFNGLBINDBUFFERPROC)w32glGetProcAddress("glBindBuffer");
 	glBufferStorage				= (PFNGLBUFFERSTORAGEPROC)w32glGetProcAddress("glBufferStorage");
 	glMapBuffer					= (PFNGLMAPBUFFERPROC)w32glGetProcAddress("glMapBuffer");
 	glUnmapBuffer				= (PFNGLUNMAPBUFFERPROC)w32glGetProcAddress("glUnmapBuffer");
-	glDrawArrays				= (PFNGLDRAWARRAYSPROC)w32glGetProcAddress("glDrawArrays");
 	glVertexAttribPointer		= (PFNGLVERTEXATTRIBPOINTERPROC)w32glGetProcAddress("glVertexAttribPointer");
 	glEnableVertexAttribArray	= (PFNGLENABLEVERTEXATTRIBARRAYPROC)w32glGetProcAddress("glEnableVertexAttribArray");
 	glCreateShader				= (PFNGLCREATESHADERPROC)w32glGetProcAddress("glCreateShader");
@@ -322,9 +328,7 @@ void loadOpenGL4FunctionPointers()
 	glUniform1i                 = (PFNGLUNIFORM1IPROC)w32glGetProcAddress("glUniform1i");                   
 	glUniformMatrix4fv          = (PFNGLUNIFORMMATRIX4FVPROC)w32glGetProcAddress("glUniformMatrix4fv");            
 	glActiveTexture             = (PFNGLACTIVETEXTUREPROC)w32glGetProcAddress("glActiveTexture");           
-	glDrawElements              = (PFNGLDRAWELEMENTSPROC)w32glGetProcAddress("glDrawElements");                
 	glDeleteVertexArrays        = (PFNGLDELETEVERTEXARRAYSPROC)w32glGetProcAddress("glDeleteVertexArrays");          
-	glDeleteTextures            = (PFNGLDELETETEXTURESPROC)w32glGetProcAddress("glDeleteTextures");              
 	glGetUniformLocation        = (PFNGLGETUNIFORMLOCATIONPROC)w32glGetProcAddress("glGetUniformLocation");          
 	glDeleteBuffers             = (PFNGLDELETEBUFFERSPROC)w32glGetProcAddress("glDeleteBuffers");               
 	glDetachShader              = (PFNGLDETACHSHADERPROC)w32glGetProcAddress("glDetachShader");                
@@ -334,13 +338,11 @@ void loadOpenGL4FunctionPointers()
 	glBlendFuncSeparate         = (PFNGLBLENDFUNCSEPARATEPROC)w32glGetProcAddress("glBlendFuncSeparate");           
 
 	RuntimeAssert(glTexStorage2D != nullptr);
-	RuntimeAssert(glTexSubImage2D != nullptr);
 	RuntimeAssert(glGenBuffers != nullptr);
 	RuntimeAssert(glBindBuffer	!= nullptr);
 	RuntimeAssert(glBufferStorage != nullptr);
 	RuntimeAssert(glMapBuffer != nullptr);
 	RuntimeAssert(glUnmapBuffer != nullptr);
-	RuntimeAssert(glDrawArrays != nullptr);
 	RuntimeAssert(glVertexAttribPointer != nullptr);
 	RuntimeAssert(glEnableVertexAttribArray != nullptr);
 	RuntimeAssert(glCreateShader != nullptr);
@@ -362,9 +364,7 @@ void loadOpenGL4FunctionPointers()
 	RuntimeAssert(glUniform1i != nullptr);
 	RuntimeAssert(glUniformMatrix4fv != nullptr);
 	RuntimeAssert(glActiveTexture != nullptr);
-	RuntimeAssert(glDrawElements != nullptr);
 	RuntimeAssert(glDeleteVertexArrays != nullptr);
-	RuntimeAssert(glDeleteTextures != nullptr);
 	RuntimeAssert(glGetUniformLocation != nullptr);
 	RuntimeAssert(glDeleteBuffers != nullptr);
 	RuntimeAssert(glDetachShader != nullptr);
