@@ -150,7 +150,7 @@
             //"args": [ "-r", "../../roms/Donkey Kong Land III (USA, Europe) (SGB Enhanced).gb" ],    //Works but weird palette
             
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/win32/build_release/",
+            "cwd": "${workspaceFolder}/win32/build_debug/",
             "environment": [],
         },
         {

@@ -2,6 +2,9 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <commctrl.h>
+
+#pragma comment(lib, "Comctl32.lib")
 
 #define XINPUT_GAMEPAD_DPAD_UP          0x0001
 #define XINPUT_GAMEPAD_DPAD_DOWN        0x0002
@@ -212,6 +215,7 @@ struct Win32ApplicationContext
 	Win32EmulatorContext		emulatorContext									= {};
 	Win32UserMessage			userMessage										= {};
 
+	WNDPROC						pTest;
 	HINSTANCE					pInstanceHandle									= nullptr;
 	HMONITOR					pMonitorHandle									= nullptr;
 	HWND						pWindowHandle									= nullptr;
@@ -834,7 +838,6 @@ uint8_t loadRomData( Win32ApplicationContext* pContext, const char* pRomName, ui
 	strcpy_s( pContext->emulatorContext.romBaseFileName, sizeof( pContext->emulatorContext.romBaseFileName ), pRomName );
 	setUserMessage( &pContext->userMessage, "Rom loaded!");
 
-	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
 	enableRomMenuItems( pContext );
 
 	pContext->emulatorContext.ramMapping = ramFileMapping;
@@ -842,50 +845,84 @@ uint8_t loadRomData( Win32ApplicationContext* pContext, const char* pRomName, ui
 	return 1u;
 }
 
-void loadZipArchiveFile( Win32ApplicationContext* pContext, char* pArchivePath )
+LRESULT CALLBACK RomArchiveWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	Win32FileMapping archiveFileMapping;
-	if( mapFileForReading( &archiveFileMapping, pArchivePath ) == 0 )
+	uint8_t messageHandled = false;
+	Win32ApplicationContext* pContext = (Win32ApplicationContext*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+
+	switch (message)
 	{
-		setUserMessage( &pContext->userMessage, "Can't map zip" );
-		return;
+	case WM_CLOSE:
+	{
+		EnableWindow( pContext->pWindowHandle, TRUE );
+		break;
 	}
 
-	ZipArchive zipArchive;
-	if( openZipArchive( &zipArchive, archiveFileMapping.pFileBaseAddress, archiveFileMapping.fileSizeInBytes ) == 0 )
+	case WM_LBUTTONDBLCLK:
 	{
-		setUserMessage( &pContext->userMessage, "Invalid zip" );
-		return;
-	}
+		char buffer[256];
+		printf("DOUBLECLICK!");
+		messageHandled = true;
 
-#if 0
-	const uint32_t romsInArchive = countRomsInZipArchive( &zipArchive );
-	if( romsInArchive == 0u )
-	{
-		setUserMessage( &pContext->userMessage, "Zip w/o roms" );
-		return;
-	}
-	else if( romsInArchive == 1u )
-	{
-		const ZipArchiveEntry romEntry = findFirstRomEntryInZipArchive( &zipArchive );
-
-		const ZipDecompressionResult decompressionResult = decompressZipArchiveEntry( &zipArchive, &romEntry, pContext->pUncompressBuffer );
-		if( decompressionResult == ZipDecompressionResult::NotSupported )
+		UINT stateMask = LVIS_SELECTED;
+		const int itemCount = ListView_GetItemCount(hwnd);
+		for( int itemIndex = 0; itemIndex < itemCount; ++itemIndex )
 		{
-			setUserMessage( &pContext->userMessage, "Unsupported Zip" );
-			return;
+			const int itemState = ListView_GetItemState(hwnd, itemIndex, stateMask);
+			if( itemState & stateMask )
+			{
+				ListView_GetItemText(hwnd, itemIndex, 0, buffer, 256);
+				printf("%s", buffer);
+			}
 		}
 
-		const char* pFileExtension = findLastInString( romEntry.pFileName, romEntry.fileNameLength, '.');
-		uint32_t fileNameLength = romEntry.fileNameLength;
-		if( pFileExtension != nullptr )
-		{
-			fileNameLength = castSizeToUint32( pFileExtension - romEntry.pFileName );
-		}
+		printf("DOUBLECLICK!");
 
-		loadRomData( pContext, romEntry.pFileName, fileNameLength, pContext->pUncompressBuffer, romEntry.uncompressedSizeInBytes );
+		
+		break;
 	}
-#endif
+
+	case LVM_SETHOTITEM:
+	{
+		printf("set hot item!");
+		break;
+	}
+	}
+
+	if( !messageHandled )
+	{
+		return CallWindowProc(pContext->pTest, hwnd, message, wparam, lparam);
+	}
+
+	return false;
+}
+
+HWND createRomArchiveSelectionMenu( Win32ApplicationContext* pContext )
+{
+	HWND pListWindowHandle = CreateWindowA(WC_LISTVIEWA, "Select rom to load from archive", WS_OVERLAPPED | WS_SYSMENU | LVS_SINGLESEL | LVS_REPORT, 
+		0, 0, pContext->windowWidth, pContext->windowHeight,
+		pContext->pWindowHandle, NULL, pContext->pInstanceHandle, NULL);
+		
+	if( pListWindowHandle == INVALID_HANDLE_VALUE )
+	{
+		MessageBoxA(0, "Error creating Rom Archive List.\n", "Error!", 0);
+		return nullptr;
+	}
+
+	LVCOLUMNA nameColumn = {};
+	nameColumn.mask  		= LVCF_FMT | LVCF_TEXT | LVCF_WIDTH;
+	nameColumn.cx 			= 250;
+	nameColumn.pszText 		= "Rom File Name";
+	nameColumn.fmt 			= LVCFMT_LEFT;
+
+	if (ListView_InsertColumn(pListWindowHandle, 0, &nameColumn) == -1)
+		return nullptr;
+
+	pContext->pTest = (WNDPROC)GetWindowLongPtrA(pListWindowHandle, GWLP_WNDPROC);
+	SetWindowLongPtr( pListWindowHandle, GWLP_WNDPROC, (LONG_PTR)RomArchiveWindowProc );
+	SetWindowLongPtr( pListWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
+
+	return pListWindowHandle;
 }
 
 void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
@@ -901,52 +938,120 @@ void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
 		return;
 	}
 
+	uint8_t useFileMapping = 1u;
+	uint8_t foundValidRom = 0u;
+	uint32_t uncompressedRomDataSizeInBytes = 0u;
 	if( isGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
 	{
-		const GBRomHeader gbRomHeader = getGBRomHeader( romFileMapping.pFileBaseAddress );
-		if( gbRomHeader.colorCompatibility == 0xC0 )
-		{
-			MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
-			return;
-		}
-
-		char romBaseFileName[ MAX_PATH ];
-		getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), pFixedRomPath );
-		CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
-		
-		const uint32_t romBaseFileNameLength = castSizeToUint32( strlen( romBaseFileName ) );
-
-		if( !loadRomData( pContext, romBaseFileName, romBaseFileNameLength,  romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
-		{
-			unmapFileMapping( &romFileMapping );
-			return;
-		}
-
-		Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
-		pEmulatorContext->romMapping = romFileMapping;
+		foundValidRom = 1u;
+		useFileMapping = 1u;
+		goto loadRom;
 	}
-	else if( isGZipArchiveData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
-	{	
-		GZipArchive gzipArchive;
-		if( openGZipArchive( &gzipArchive, romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) == 0 )
-		{
-			setUserMessage( &pContext->userMessage, "Invalid zip" );
-			return;
-		}
 
-		if( !gzipArchive.flags.FNAME )
+	{
+		ZipArchive zipArchive;
+		if( openZipArchive( &zipArchive, romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
 		{
-			setUserMessage( &pContext->userMessage, "No file in gzip" );
-			return;
-		}
+			if( zipArchive.pEocd->centralDirRecordCount == 0u )
+			{
+				setUserMessage( &pContext->userMessage, "No file in zip" );
+				return;
+			}
 
-		const char* pFileName = getGZipCompressedFileName( &gzipArchive );
-		uncompressGZipArchive( &gzipArchive, pContext->pUncompressBuffer, gbMaxRomSizeInBytes );
+			const uint32_t romCount = countRomsInZipArchive( &zipArchive );
+			if( romCount == 1u )
+			{
+				const ZipArchiveEntry romEntry = findFirstRomEntryInZipArchive( &zipArchive );
+				if( uncompressZipArchiveEntry( &zipArchive, &romEntry, pContext->pUncompressBuffer, &uncompressedRomDataSizeInBytes, gbMaxRomSizeInBytes ) == UncompressResult::Success )
+				{
+					if( isGBRomData( pContext->pUncompressBuffer, uncompressedRomDataSizeInBytes ) )
+					{
+						foundValidRom = 1u;
+						goto loadCompressedRom;
+					}
+				}
+			}
+			else
+			{
+				HWND pListView = createRomArchiveSelectionMenu( pContext );
+				EnableWindow( pContext->pWindowHandle, FALSE );
+
+				int counter = 0;
+				for( ZipArchiveEntry romEntry = findFirstRomEntryInZipArchive( &zipArchive ); !isLastZipArchiveEntry( &romEntry ); romEntry = findNextZipArchiveEntry( &zipArchive, &romEntry ) )
+				{
+					LVITEMA lvI = {};
+
+					// Initialize LVITEM members that are common to all items.
+					lvI.pszText   	= (LPSTR)romEntry.pFileName;
+					lvI.cchTextMax 	= romEntry.fileNameLength;
+					lvI.mask      	= LVIF_TEXT;
+					lvI.iItem	  	= counter++;
+
+					if( ListView_InsertItem(pListView, &lvI) == -1 )
+					{
+						MessageBoxA( pContext->pWindowHandle, "BLA", "BLA", 0);
+					}
+				}
+
+				ShowWindow(pListView, SW_SHOW);
+			}
+		}
 	}
-	else
+
+	{
+		GZipData gzipData;
+		if( openGZipData( &gzipData, romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+		{
+			if( !gzipData.flags.FNAME )
+			{
+				setUserMessage( &pContext->userMessage, "No file in gzip" );
+				return;
+			}
+
+			uncompressGZipData( &gzipData, pContext->pUncompressBuffer, &uncompressedRomDataSizeInBytes, gbMaxRomSizeInBytes );
+			if( isGBRomData( pContext->pUncompressBuffer, uncompressedRomDataSizeInBytes ) )
+			{
+				foundValidRom = 1u;
+				goto loadCompressedRom;
+			}
+		}
+	}
+
+loadCompressedRom:
+	useFileMapping = 0u;
+
+loadRom:
+	if( !foundValidRom )
 	{
 		setUserMessage( &pContext->userMessage, "Invalid rom" );
 		return;
+	}
+
+	const uint8_t* pRomData = useFileMapping ? romFileMapping.pFileBaseAddress : pContext->pUncompressBuffer;
+	const GBRomHeader gbRomHeader = getGBRomHeader( pRomData );
+
+	char romBaseFileName[ MAX_PATH ];
+	getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), pFixedRomPath );
+	CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
+	
+	const uint32_t romBaseFileNameLength = castSizeToUint32( strlen( romBaseFileName ) );
+
+	if( useFileMapping )
+	{
+		if( !loadRomData( pContext, romBaseFileName, romBaseFileNameLength,  romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+		{
+			unmapFileMapping( &romFileMapping );
+		}
+		else
+		{
+			Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
+			pEmulatorContext->romMapping = romFileMapping;
+			return;
+		}
+	}
+	else
+	{
+		loadRomData( pContext, romBaseFileName, romBaseFileNameLength, pContext->pUncompressBuffer, uncompressedRomDataSizeInBytes );
 	}
 }
 
@@ -956,12 +1061,11 @@ void openRomFile( Win32ApplicationContext* pContext )
 	OPENFILENAMEA parameters = {};
 	parameters.lStructSize 		= sizeof(OPENFILENAMEA);
 	parameters.hwndOwner   		= pContext->pWindowHandle;
-	parameters.lpstrFilter		= "GameBoy Rom (*.gb)\0*.gb\0GameBoy Color Rom (*.gbc)\0*.gbc\0Rom Archive (*.zip)\0*.zip\0\0";
+	parameters.lpstrFilter		= "All (.gb;.gbc;.zip)\0*.gb;*.gbc;*.zip\0GameBoy Rom (.gb)\0*.gb\0GameBoy Color Rom (.gbc)\0*.gbc\0Rom Archive (.zip)\0*.zip\0\0";
 	parameters.lpstrFile 		= romPath;
 	parameters.nMaxFile			= sizeof( romPath );
 	parameters.lpstrTitle		= "Load GameBoy/GameBoy Color rom file.";
 	parameters.Flags			= OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-	parameters.lpstrDefExt		= "gb";
 
 	const BOOL result = w32GetOpenFileNameA( &parameters );
 	if( result == FALSE )
@@ -1388,11 +1492,11 @@ void drawGBFrameBuffer( HDC pDeviceContext )
 	glDrawArrays( GL_TRIANGLES, 0, 6 );
 }
 
-LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	uint8_t messageHandled = false;
-
 	Win32ApplicationContext* pContext = (Win32ApplicationContext*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+
 	switch (message)
 	{
 	case WM_CLOSE:
@@ -1509,7 +1613,7 @@ uint8_t setupWindow( Win32ApplicationContext* pContext )
 	wndClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW | CS_DBLCLKS;
 	wndClass.hInstance 		= pContext->pInstanceHandle;
 	wndClass.lpszClassName 	= "K15_Win32Template";
-	wndClass.lpfnWndProc 	= K15_WNDPROC;
+	wndClass.lpfnWndProc 	= MainWindowProc;
 	wndClass.hCursor 		= LoadCursor(NULL, IDC_ARROW);
 	RegisterClassA(&wndClass);
 
@@ -1522,13 +1626,13 @@ uint8_t setupWindow( Win32ApplicationContext* pContext )
 	if( pContext->pWindowHandle == INVALID_HANDLE_VALUE )
 	{
 		MessageBoxA(0, "Error creating Window.\n", "Error!", 0);
-		return 0;
+		return 0u;
 	}
 
 	pContext->pDeviceContext = GetDC( pContext->pWindowHandle );
 	updateMonitorSettings( pContext );
 
-	return 1;
+	return 1u;
 }
 
 uint8_t setupContextMenu( Win32ApplicationContext* pContext )
@@ -1536,7 +1640,7 @@ uint8_t setupContextMenu( Win32ApplicationContext* pContext )
 	pContext->pContextMenu = CreatePopupMenu();
 	if( pContext->pContextMenu == nullptr )
 	{
-		return 0;
+		return 0u;
 	}
 
 	uint8_t result = 0;
@@ -1763,7 +1867,11 @@ uint8_t setupUi( Win32ApplicationContext* pContext )
 	{
 		return 0;
 	}
-	
+
+	INITCOMMONCONTROLSEX icex;
+    icex.dwICC = ICC_LISTVIEW_CLASSES;
+    InitCommonControlsEx(&icex);
+
 	SetWindowLongPtrA( pContext->pWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
 	ShowWindow(pContext->pWindowHandle, SW_SHOW);
 

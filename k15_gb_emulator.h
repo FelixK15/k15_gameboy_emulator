@@ -9,11 +9,21 @@
 #include "k15_gb_opcodes.h"
 #include "k15_gb_font.h"
 
+#define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 1
+#define MINIZ_LITTLE_ENDIAN 1
+#define MINIZ_HAS_64BIT_REGISTERS 1
+#define MINIZ_NO_STDIO
+#define MINIZ_NO_TIME
+#define MINIZ_NO_DEFLATE_APIS
+#define MINIZ_NO_ARCHIVE_WRITING_APIS
+#define MINIZ_NO_MALLOC
+#include "../thirdparty/miniz/miniz.c"
+
 //FK: Compiler specific functions
 #ifdef _MSC_VER
 #   include <intrin.h>
-#   define BreakPointHook() __nop()
-#   define DebugBreak       __debugbreak
+#   define BreakPointHook()         __nop()
+#   define DebugBreak               __debugbreak
 #else
 #   define BreakPointHook()
 #   define DebugBreak
@@ -832,58 +842,7 @@ struct ZipArchive
     uint32_t                                                dataSizeInBytes;
 };
 
-struct crc32
-{
-    uint32_t value = (uint32_t)~0;
-};
-
-crc32 calculateCrc32Checksum( crc32 crc, const uint8_t* pData, const uint32_t dataSizeInBytes )
-{
-    static uint32_t constexpr crc32Table[] = {
-        0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
-        0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988, 0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91,
-        0x1DB71064, 0x6AB020F2, 0xF3B97148, 0x84BE41DE, 0x1ADAD47D, 0x6DDDE4EB, 0xF4D4B551, 0x83D385C7,
-        0x136C9856, 0x646BA8C0, 0xFD62F97A, 0x8A65C9EC, 0x14015C4F, 0x63066CD9, 0xFA0F3D63, 0x8D080DF5,
-        0x3B6E20C8, 0x4C69105E, 0xD56041E4, 0xA2677172, 0x3C03E4D1, 0x4B04D447, 0xD20D85FD, 0xA50AB56B,
-        0x35B5A8FA, 0x42B2986C, 0xDBBBC9D6, 0xACBCF940, 0x32D86CE3, 0x45DF5C75, 0xDCD60DCF, 0xABD13D59,
-        0x26D930AC, 0x51DE003A, 0xC8D75180, 0xBFD06116, 0x21B4F4B5, 0x56B3C423, 0xCFBA9599, 0xB8BDA50F,
-        0x2802B89E, 0x5F058808, 0xC60CD9B2, 0xB10BE924, 0x2F6F7C87, 0x58684C11, 0xC1611DAB, 0xB6662D3D,
-        0x76DC4190, 0x01DB7106, 0x98D220BC, 0xEFD5102A, 0x71B18589, 0x06B6B51F, 0x9FBFE4A5, 0xE8B8D433,
-        0x7807C9A2, 0x0F00F934, 0x9609A88E, 0xE10E9818, 0x7F6A0DBB, 0x086D3D2D, 0x91646C97, 0xE6635C01,
-        0x6B6B51F4, 0x1C6C6162, 0x856530D8, 0xF262004E, 0x6C0695ED, 0x1B01A57B, 0x8208F4C1, 0xF50FC457,
-        0x65B0D9C6, 0x12B7E950, 0x8BBEB8EA, 0xFCB9887C, 0x62DD1DDF, 0x15DA2D49, 0x8CD37CF3, 0xFBD44C65,
-        0x4DB26158, 0x3AB551CE, 0xA3BC0074, 0xD4BB30E2, 0x4ADFA541, 0x3DD895D7, 0xA4D1C46D, 0xD3D6F4FB,
-        0x4369E96A, 0x346ED9FC, 0xAD678846, 0xDA60B8D0, 0x44042D73, 0x33031DE5, 0xAA0A4C5F, 0xDD0D7CC9,
-        0x5005713C, 0x270241AA, 0xBE0B1010, 0xC90C2086, 0x5768B525, 0x206F85B3, 0xB966D409, 0xCE61E49F,
-        0x5EDEF90E, 0x29D9C998, 0xB0D09822, 0xC7D7A8B4, 0x59B33D17, 0x2EB40D81, 0xB7BD5C3B, 0xC0BA6CAD,
-        0xEDB88320, 0x9ABFB3B6, 0x03B6E20C, 0x74B1D29A, 0xEAD54739, 0x9DD277AF, 0x04DB2615, 0x73DC1683,
-        0xE3630B12, 0x94643B84, 0x0D6D6A3E, 0x7A6A5AA8, 0xE40ECF0B, 0x9309FF9D, 0x0A00AE27, 0x7D079EB1,
-        0xF00F9344, 0x8708A3D2, 0x1E01F268, 0x6906C2FE, 0xF762575D, 0x806567CB, 0x196C3671, 0x6E6B06E7,
-        0xFED41B76, 0x89D32BE0, 0x10DA7A5A, 0x67DD4ACC, 0xF9B9DF6F, 0x8EBEEFF9, 0x17B7BE43, 0x60B08ED5,
-        0xD6D6A3E8, 0xA1D1937E, 0x38D8C2C4, 0x4FDFF252, 0xD1BB67F1, 0xA6BC5767, 0x3FB506DD, 0x48B2364B,
-        0xD80D2BDA, 0xAF0A1B4C, 0x36034AF6, 0x41047A60, 0xDF60EFC3, 0xA867DF55, 0x316E8EEF, 0x4669BE79,
-        0xCB61B38C, 0xBC66831A, 0x256FD2A0, 0x5268E236, 0xCC0C7795, 0xBB0B4703, 0x220216B9, 0x5505262F,
-        0xC5BA3BBE, 0xB2BD0B28, 0x2BB45A92, 0x5CB36A04, 0xC2D7FFA7, 0xB5D0CF31, 0x2CD99E8B, 0x5BDEAE1D,
-        0x9B64C2B0, 0xEC63F226, 0x756AA39C, 0x026D930A, 0x9C0906A9, 0xEB0E363F, 0x72076785, 0x05005713,
-        0x95BF4A82, 0xE2B87A14, 0x7BB12BAE, 0x0CB61B38, 0x92D28E9B, 0xE5D5BE0D, 0x7CDCEFB7, 0x0BDBDF21,
-        0x86D3D2D4, 0xF1D4E242, 0x68DDB3F8, 0x1FDA836E, 0x81BE16CD, 0xF6B9265B, 0x6FB077E1, 0x18B74777,
-        0x88085AE6, 0xFF0F6A70, 0x66063BCA, 0x11010B5C, 0x8F659EFF, 0xF862AE69, 0x616BFFD3, 0x166CCF45,
-        0xA00AE278, 0xD70DD2EE, 0x4E048354, 0x3903B3C2, 0xA7672661, 0xD06016F7, 0x4969474D, 0x3E6E77DB,
-        0xAED16A4A, 0xD9D65ADC, 0x40DF0B66, 0x37D83BF0, 0xA9BCAE53, 0xDEBB9EC5, 0x47B2CF7F, 0x30B5FFE9,
-        0xBDBDF21C, 0xCABAC28A, 0x53B39330, 0x24B4A3A6, 0xBAD03605, 0xCDD70693, 0x54DE5729, 0x23D967BF,
-        0xB3667A2E, 0xC4614AB8, 0x5D681B02, 0x2A6F2B94, 0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D
-    };
-
-	for(size_t byteIndex = 0; byteIndex < dataSizeInBytes; byteIndex++) {
-		const uint32_t t = (*pData ^ crc.value) & 0xFF;
-		crc.value=( crc.value >> 8 ) ^ crc32Table[t];
-	}
-	
-    crc.value = ~crc.value;
-	return crc;
-}
-
-struct GZipArchiveFlags
+struct GZipDataFlags
 {
     union
     {
@@ -907,16 +866,16 @@ struct GZipFooter
     uint32_t uncompressedSizeInBytes;
 };
 
-struct GZipArchive
+struct GZipData
 {
     const uint8_t*          pData;
     const GZipFooter*       pFooter;
     uint32_t                dataSizeInBytes;
     uint8_t                 compressionMethod;
-    GZipArchiveFlags        flags;
+    GZipDataFlags        flags;
 };
 
-enum class GZipUncompressResult : uint8_t
+enum class UncompressResult : uint8_t
 {
     Success,
     UnsupportedCompressionMethod,
@@ -1077,7 +1036,30 @@ const ZipEndOfCentralDirectory* findZipArchiveEndOfCentralDirectory( const uint8
     return (const ZipEndOfCentralDirectory*)( pZipData + eocdPos );
 }
 
-uint8_t isGZipArchiveData( const uint8_t* pGZipData, const uint32_t gzipDataSizeInBytes )
+uint8_t isValidZipArchive( const uint8_t* pZipArchiveData, const uint32_t zipArchiveDataSizeInBytes )
+{
+    if( zipArchiveDataSizeInBytes <= 28u )
+    {
+        return 0u;
+    }
+
+    //FK: check first file header signature
+    const uint8_t isZipArchive = (pZipArchiveData[0] == 0x50 && pZipArchiveData[1] == 0x4b && pZipArchiveData[2] == 0x03 && pZipArchiveData[3] == 0x04 );
+    if( !isZipArchive )
+    {
+        return 0u;
+    }
+
+    const ZipEndOfCentralDirectory* pZipEOCD = findZipArchiveEndOfCentralDirectory(pZipArchiveData, zipArchiveDataSizeInBytes);
+    if( pZipEOCD->signature != 0x06054b50 )
+    {
+        return 0u;
+    }
+
+    return 1u;
+}
+
+uint8_t isValidGZipData( const uint8_t* pGZipData, const uint32_t gzipDataSizeInBytes )
 {
     //FK: Check for file header size
     if( gzipDataSizeInBytes <= 18 )
@@ -1089,14 +1071,14 @@ uint8_t isGZipArchiveData( const uint8_t* pGZipData, const uint32_t gzipDataSize
     return isGzipHeader;
 }
 
-uint8_t openGZipArchive( GZipArchive* pOutArchive, const uint8_t* pGzipData, const uint32_t gzipDataSizeInBytes )
+uint8_t openGZipData( GZipData* pOutArchive, const uint8_t* pGzipData, const uint32_t gzipDataSizeInBytes )
 {
-    if( !isGZipArchiveData( pGzipData, gzipDataSizeInBytes) )
+    if( !isValidGZipData( pGzipData, gzipDataSizeInBytes) )
     {
         return 0u;
     }
 
-    GZipArchive archive;
+    GZipData archive;
     archive.dataSizeInBytes     = gzipDataSizeInBytes;
     archive.pData               = pGzipData;
     archive.compressionMethod   = *(pGzipData + 2u);
@@ -1108,7 +1090,7 @@ uint8_t openGZipArchive( GZipArchive* pOutArchive, const uint8_t* pGzipData, con
     return 1u;
 }
 
-const char* getGZipFileNameMember( const GZipArchive* pArchive )
+const char* getGZipFileNameMember( const GZipData* pArchive )
 {
     uint32_t dataOffset = 10u; //FK: Gzip header
     if( pArchive->flags.FEXTRA )
@@ -1122,13 +1104,13 @@ const char* getGZipFileNameMember( const GZipArchive* pArchive )
     return (const char*)( pArchive->pData + dataOffset );
 }
 
-struct GZipCompressedData
+struct DeflateCompressedData
 {
     const uint8_t* pCompressedData;
     uint32_t compressedDataSizeInBytes;
 };
 
-GZipCompressedData getGZipCompressedData( const GZipArchive* pArchive )
+DeflateCompressedData getGZipCompressedData( const GZipData* pArchive )
 {
     uint32_t dataOffset = 10u; //FK: Gzip header
     if( pArchive->flags.FEXTRA )
@@ -1157,14 +1139,14 @@ GZipCompressedData getGZipCompressedData( const GZipArchive* pArchive )
     const uint8_t* pCompressedDataStart = ( const uint8_t* )( pArchive->pData + dataOffset );
     const uint8_t* pCompressedDataEnd   = ( const uint8_t* )( pArchive->pFooter );
 
-    GZipCompressedData compressedData;
+    DeflateCompressedData compressedData;
     compressedData.pCompressedData              = pCompressedDataStart;
     compressedData.compressedDataSizeInBytes    = ( uint32_t )( pCompressedDataEnd - pCompressedDataStart );
 
     return compressedData;
 }
 
-const char* getGZipCompressedFileName( const GZipArchive* pArchive )
+const char* getGZipCompressedFileName( const GZipData* pArchive )
 {
     if( pArchive->flags.FNAME == 0 )
     {
@@ -1174,18 +1156,37 @@ const char* getGZipCompressedFileName( const GZipArchive* pArchive )
     return getGZipFileNameMember( pArchive );
 }
 
-BitStream createGZipBitStream( const GZipArchive* pArchive )
+size_t getGZipUncompressedDataSizeInBytes( const GZipData* pArchive )
 {
-    const GZipCompressedData compressedData = getGZipCompressedData( pArchive );
+    CompiletimeAssert(sizeof(uint32_t) == 4u);
+    const uint32_t* pUncompressedDataSizeInBytes = (uint32_t*)(pArchive->pData + pArchive->dataSizeInBytes - sizeof(uint32_t));
+    return (size_t)*pUncompressedDataSizeInBytes;
+}
+
+BitStream createGZipBitStream( const GZipData* pArchive )
+{
+    const DeflateCompressedData compressedData = getGZipCompressedData( pArchive );
     return createBitStream( compressedData.pCompressedData, compressedData.compressedDataSizeInBytes );
 }
 
-uint8_t uncompressDeflateStream( BitStream* pDeflateStream, MemoryWriteStream* pTargetStream )
+uint8_t uncompressDeflateStream( BitStream* pDeflateStream, MemoryWriteStream* pTargetStream, uint32_t* pOutBytesWritten )
 {
+#if 1
+    const size_t targetDataSizeInBytes = pTargetStream->pTargetDataEnd - pTargetStream->pTargetData;
+    const size_t deflateDataSizeInBytes = pDeflateStream->pDataEnd - pDeflateStream->pDataStart;
+    const size_t bytesWritten = tinfl_decompress_mem_to_mem(pTargetStream->pTargetData, targetDataSizeInBytes, pDeflateStream->pDataStart, deflateDataSizeInBytes, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF );
+    if( bytesWritten == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED )
+    {
+        return 0u;
+    }
+
+    *pOutBytesWritten = (uint32_t)bytesWritten;
+
+    return 1u;
+#else
     //FK: Reference: https://github.com/madler/zlib/blob/master/contrib/puff/puff.c
     //FK: Reference: https://www.w3.org/Graphics/PNG/RFC-1951
     //FK: Reference: https://www.infinitepartitions.com/art001.html
-#if 0
     while( true )
     {
         const uint8_t lastBlock         = readBit( pDeflateStream );
@@ -1195,66 +1196,28 @@ uint8_t uncompressDeflateStream( BitStream* pDeflateStream, MemoryWriteStream* p
         {
             case 0:
             {
-                //FK: Block is not compressed
-                moveToNextByteBoundary( pDeflateStream );
-                const uint8_t dataLengthLow         = readBits( pDeflateStream, 8u );
-                const uint8_t dataLengthHigh        = readBits( pDeflateStream, 8u );
-                const uint16_t dataLengthInBytes    = ( ( uint16_t )dataLengthLow << 8u | dataLengthHigh );
-
-                //FK: Skip nlen
-                skipBytes( pDeflateStream, 2u );
-                
-                const uint8_t* pBlockData = pDeflateStream->pDataCurrent;
-                if( !pushData( pTargetStream, pBlockData, dataLengthInBytes ) )
+                if( !readUncompressedDeflateBlock( pDeflateStream, pTargetStream ) )
                 {
                     return 0u;
                 }
-
-                skipBytes( pDeflateStream, dataLengthInBytes );
                 break;
             }
 
             case 1:
             {
-                //FK: Block compressed with static huffman
+                if( !uncompressStaticDeflateBlock( pDeflateStream, pTargetStream ) )
+                {
+                    return 0u;
+                }
                 break;
             }
 
             case 2:
             {
-                static constexpr uint8_t order[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 
-                    11, 4, 12, 3, 13, 2, 14, 1, 15 };
-
-#define MAXLCODES 286           /* maximum number of literal/length codes */
-#define MAXDCODES 30            /* maximum number of distance codes */
-#define MAXCODES (MAXLCODES+MAXDCODES)  /* maximum codes lengths to read */
-                uint16_t lengths[MAXCODES] = {0};
-                //FK: Block compressed with dynamic huffman
-                uint16_t nlit   = readBitsInverse( pDeflateStream, 5u ) + 257;
-                uint16_t ndist  = readBitsInverse( pDeflateStream, 5u ) + 1;
-                uint16_t nlen   = readBitsInverse( pDeflateStream, 4u ) + 4;
-
-                uint8_t index = 0u;
-                for( index = 0u; index < nlen; ++index )
-                {
-                    lengths[ order[ index ] ] = readBitsInverse( pDeflateStream, 3u );
-                }
-
-                uint8_t constructHuffmanTable( HuffmanTable* pOutHuffmanTable, const uint16_t* pCodes, const uint16_t codeLengths )
-                {
-
-                }
-
-                HuffmanTable lenCode;
-                if( !constructHuffmanTable( &lenCode, lenghts, 19 ) )
+                if( !uncompressDynamicDeflateBlock( pDeflateStream, pTargetStream ) )
                 {
                     return 0u;
                 }
-
-
-
-                BreakPointHook();
-
                 break;
             }
         }
@@ -1264,41 +1227,45 @@ uint8_t uncompressDeflateStream( BitStream* pDeflateStream, MemoryWriteStream* p
             break;
         }
     }
-#endif
+
     return 0u;
+#endif
 }
 
-GZipUncompressResult uncompressGZipArchive( const GZipArchive* pArchive, uint8_t* pTargetBuffer, const uint32_t targetBufferCapacityInBytes )
+UncompressResult uncompressGZipData( const GZipData* pArchive, uint8_t* pTargetBuffer, uint32_t* pTargetSizeInBytes, const uint32_t targetBufferCapacityInBytes )
 {
-    if( pArchive->compressionMethod != 8u )
+    if( pArchive->compressionMethod != 8u &&
+        pArchive->compressionMethod != 0u )
     {
-        return GZipUncompressResult::UnsupportedCompressionMethod;
+        return UncompressResult::UnsupportedCompressionMethod;
     }
 
     if( pArchive->pFooter->uncompressedSizeInBytes > targetBufferCapacityInBytes )
     {
-        return GZipUncompressResult::TargetBufferTooSmall;
+        return UncompressResult::TargetBufferTooSmall;
     }
 
-    BitStream decodeStream          = createGZipBitStream( pArchive );
-    MemoryWriteStream writeStream   = createMemoryWriteStream( pTargetBuffer, targetBufferCapacityInBytes );
-    if( !uncompressDeflateStream( &decodeStream, &writeStream ) )
+    *pTargetSizeInBytes = pArchive->pFooter->uncompressedSizeInBytes;
+
+    if( pArchive->compressionMethod == 0u )
     {
-        return GZipUncompressResult::TargetBufferTooSmall;
+        const DeflateCompressedData gzipData = getGZipCompressedData( pArchive );
+        memcpy( pTargetBuffer, gzipData.pCompressedData, gzipData.compressedDataSizeInBytes );
+        return UncompressResult::Success;
     }
-
-    return GZipUncompressResult::ChecksumError;
-}
-
-uint8_t isValidZipArchive( const uint8_t* pZipArchiveData, const uint32_t zipArchiveDataSizeInBytes )
-{
-    //FK: Check for file header size
-    if( zipArchiveDataSizeInBytes <= 30 )
+    else if( pArchive->compressionMethod == 8u )
     {
-        return 0u;
+        BitStream decodeStream          = createGZipBitStream( pArchive );
+        MemoryWriteStream writeStream   = createMemoryWriteStream( pTargetBuffer, targetBufferCapacityInBytes );
+        if( !uncompressDeflateStream( &decodeStream, &writeStream, pTargetSizeInBytes ) )
+        {
+            return UncompressResult::TargetBufferTooSmall;
+        }
+
+        return UncompressResult::Success;
     }
 
-    return ( pZipArchiveData[0] == 'P' && pZipArchiveData[1] == 'K' && pZipArchiveData[2] == '\3' && pZipArchiveData[3] == '\4' );
+    return UncompressResult::ChecksumError;
 }
 
 char* trimTrailingWhitespaces( char* pString )
@@ -1519,21 +1486,38 @@ enum class ZipDecompressionResult : uint8_t
     NotSupported
 };
 
-struct ZipLocalFileEntry
-{
-    const uint8_t* pDataStart;
-    uint32_t    dataSizeInBytes;
-};
-
-ZipLocalFileEntry getZipArchiveEntryFile( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry )
+DeflateCompressedData getZipArchiveEntryCompressedData( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry )
 {
     ZipLocalFileHeader localFileHeader;
     memcpy( &localFileHeader, pZipArchive->pData + pZipArchiveEntry->absoluteOffsetToFileHeader, sizeof( localFileHeader ) );
 
-    ZipLocalFileEntry localFileEntry;
-    localFileEntry.pDataStart       = pZipArchive->pData + pZipArchiveEntry->absoluteOffsetToFileHeader + sizeof( localFileHeader ) + localFileHeader.fileNameLength + localFileHeader.extraFieldLength;
-    localFileEntry.dataSizeInBytes  = localFileHeader.compressedSizeInBytes;
-    return localFileEntry;
+    DeflateCompressedData compressedData;
+    compressedData.pCompressedData              = pZipArchive->pData + pZipArchiveEntry->absoluteOffsetToFileHeader + sizeof( localFileHeader ) + localFileHeader.fileNameLength + localFileHeader.extraFieldLength;
+    compressedData.compressedDataSizeInBytes    = localFileHeader.compressedSizeInBytes;
+    return compressedData;
+}
+
+BitStream createZipArchiveEntryBitStream( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry )
+{
+    const DeflateCompressedData compressedData = getZipArchiveEntryCompressedData( pZipArchive, pZipArchiveEntry );
+    return createBitStream( compressedData.pCompressedData, compressedData.compressedDataSizeInBytes );
+}
+
+UncompressResult uncompressZipArchiveEntry( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry, uint8_t* pTargetBuffer, uint32_t* pTargetSizeInBytes, const uint32_t targetBufferCapacityInBytes )
+{
+    if( pZipArchiveEntry->uncompressedSizeInBytes > targetBufferCapacityInBytes )
+    {
+        return UncompressResult::TargetBufferTooSmall;
+    }
+
+    BitStream decodeStream          = createZipArchiveEntryBitStream( pZipArchive, pZipArchiveEntry );
+    MemoryWriteStream writeStream   = createMemoryWriteStream( pTargetBuffer, targetBufferCapacityInBytes );
+    if( !uncompressDeflateStream( &decodeStream, &writeStream, pTargetSizeInBytes ) )
+    {
+        return UncompressResult::TargetBufferTooSmall;
+    }
+
+    return UncompressResult::Success;
 }
 
 #if 0
