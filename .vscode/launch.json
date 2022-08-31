@@ -128,7 +128,7 @@
             //"args": [ "-r", "../../roms/Dawn_fixed.gb"],                                            //PASS
 
             //####  GAMES
-            "args": [ "-r", "../../roms/gunzip.c.gz" ],                                                 //test zip implementation
+            //"args": [ "-r", "../../roms/gunzip.c.gz" ],                                                 //test zip implementation
             //"args": [ "-r", "../../roms/roms.zip" ],                                                 //test zip implementation
             //"args": [ "-r", "../../roms/Addams Family, The (Japan).zip" ],                           //test zip implementation
             

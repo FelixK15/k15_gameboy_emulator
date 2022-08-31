@@ -79,6 +79,7 @@ FOR /l %%G IN (20, -1, 8) DO (
 ::check if a path was found
 IF !FOUND_PATH!==0 (
 	echo Could not find valid Visual Studio installation.
+	exit /b 1
 ) ELSE (
 	echo Found Visual Studio installation at !VS_PATH!
 	echo Searching and executing vcvarsall.bat ...
@@ -96,4 +97,6 @@ IF !FOUND_PATH!==0 (
 	set CL_PATH="cl.exe"
 	set BUILD_COMMAND=!CL_PATH! !C_FILE_NAME! !CL_OPTIONS!
 	call !BUILD_COMMAND!
+	
+	exit /b %ERRORLEVEL%
 ) 

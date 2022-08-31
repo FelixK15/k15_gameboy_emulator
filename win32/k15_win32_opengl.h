@@ -374,7 +374,7 @@ void loadOpenGL4FunctionPointers()
 	RuntimeAssert(glBlendFuncSeparate != nullptr);
 }
 
-HGLRC createOpenGLDummyContext( HWND hwnd, HDC hdc )
+bool8_t createOpenGLDummyContext( HWND hwnd, HDC hdc )
 {
 	PIXELFORMATDESCRIPTOR pfd =
 	{
@@ -396,13 +396,29 @@ HGLRC createOpenGLDummyContext( HWND hwnd, HDC hdc )
 		0, 0, 0
 	};
 
-	int pixelFormat = w32ChoosePixelFormat(hdc, &pfd); 
-	w32SetPixelFormat(hdc, pixelFormat, &pfd);
+	int pixelFormat = w32ChoosePixelFormat(hdc, &pfd);
+	if( pixelFormat == 0 )
+	{
+		return 0;
+	}
+
+	if( w32SetPixelFormat(hdc, pixelFormat, &pfd) == FALSE )
+	{
+		return 0;
+	}
 
 	const HGLRC pOpenGLContext = w32glCreateContext(hdc);
-	w32glMakeCurrent(hdc, pOpenGLContext);
+	if( pOpenGLContext == nullptr )
+	{
+		return 0;
+	}
 
-	return pOpenGLContext;
+	if( w32glMakeCurrent(hdc, pOpenGLContext) == FALSE )
+	{
+		return 0;
+	}
+
+	return 1;
 }
 
 HGLRC createOpenGL4Context( HWND hwnd, HDC hdc )
@@ -421,7 +437,10 @@ HGLRC createOpenGL4Context( HWND hwnd, HDC hdc )
 	int pixelFormat;
 	UINT numFormats;
 	w32glChoosePixelFormatARB( hdc, pixelFormatAttributeList, nullptr, 1, &pixelFormat, &numFormats );
-	w32SetPixelFormat( hdc, pixelFormat, nullptr );
+	if( w32SetPixelFormat( hdc, pixelFormat, nullptr ) == FALSE )
+	{
+		return nullptr;
+	}
 
 	const int contextAttributeList[] = {
 		WGL_CONTEXT_MAJOR_VERSION_ARB, 4,
@@ -432,13 +451,21 @@ HGLRC createOpenGL4Context( HWND hwnd, HDC hdc )
 	};
 
 	const HGLRC pOpenGLContext = w32glCreateContextAttribsARB( hdc, nullptr, contextAttributeList );
-	w32glMakeCurrent( hdc, pOpenGLContext );
-	w32glDeleteContext( pOldOpenGLContext );
+	if( pOpenGLContext == nullptr )
+	{
+		return nullptr;
+	}
 
+	if( w32glMakeCurrent( hdc, pOpenGLContext ) == FALSE )
+	{
+		return nullptr;
+	}
+
+	w32glDeleteContext( pOldOpenGLContext );
 	return pOpenGLContext;
 }
 
-void compileOpenGLShader(GLuint shader, const char* pShaderSource, uint32_t shaderSourceLength )
+bool8_t compileOpenGLShader(GLuint shader, const char* pShaderSource, uint32_t shaderSourceLength, char* pLogBuffer, size_t logBufferCapacityInBytes )
 {
 	const char* shaderSources[] = {
 		pShaderSource
@@ -452,15 +479,14 @@ void compileOpenGLShader(GLuint shader, const char* pShaderSource, uint32_t shad
 
 	if( compileStatus == 1 )
 	{
-		return;
+		return 1;
 	}
 
 	GLint logLength = 0;
 	glGetShaderiv( shader, GL_INFO_LOG_LENGTH, &logLength );
 
-	char infoLogBuffer[1024];
-	glGetShaderInfoLog( shader, sizeof(infoLogBuffer), nullptr, infoLogBuffer );
-	printf( "%s", infoLogBuffer );
+	glGetShaderInfoLog( shader, (GLsizei)logBufferCapacityInBytes, nullptr, pLogBuffer );
+	return 0;
 }
 
 #endif 

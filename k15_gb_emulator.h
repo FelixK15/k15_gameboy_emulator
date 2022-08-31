@@ -9,6 +9,12 @@
 #include "k15_gb_opcodes.h"
 #include "k15_gb_font.h"
 
+#ifdef _MSC_VER
+#   pragma warning( push )
+#   pragma warning( disable : 4334)
+#endif
+
+// Your function
 #define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 1
 #define MINIZ_LITTLE_ENDIAN 1
 #define MINIZ_HAS_64BIT_REGISTERS 1
@@ -18,6 +24,11 @@
 #define MINIZ_NO_ARCHIVE_WRITING_APIS
 #define MINIZ_NO_MALLOC
 #include "../thirdparty/miniz/miniz.c"
+
+#ifdef _MSC_VER
+#   pragma warning( pop ) 
+#endif
+
 
 //FK: Compiler specific functions
 #ifdef _MSC_VER
@@ -49,6 +60,8 @@
 #else
     #define RuntimeAssert(x)        if(!(x)) DebugBreak()
 #endif
+
+typedef uint8_t bool8_t;
 
 static constexpr uint8_t    gbStateVersion = 6;
 static constexpr uint32_t   gbStateFourCC  = FourCC( 'K', 'G', 'B', 'C' ); //FK: FourCC of state files
@@ -447,9 +460,9 @@ struct GBMemoryMapper
 
     GBMemoryAccess      memoryAccess;
     GBLcdStatus         lcdStatus;  //FK: Mirror lcd status to check whether we can read from VRAM and/or OAM 
-    uint8_t             lcdEnabled; //FK: Mirror lcd enabled flag to check whether we can read from VRAM and/or OAM
-    uint8_t             dmaActive;  //FK: Mirror dma flag to check whether we can read only from HRAM
-    uint8_t             ramEnabled; //FK: Mirror ram enabled flag to check whether we can write to external RAM
+    bool8_t             lcdEnabled; //FK: Mirror lcd enabled flag to check whether we can read from VRAM and/or OAM
+    bool8_t             dmaActive;  //FK: Mirror dma flag to check whether we can read only from HRAM
+    bool8_t             ramEnabled; //FK: Mirror ram enabled flag to check whether we can write to external RAM
 };
 
 struct GBRomHeader
@@ -555,7 +568,7 @@ struct GBCartridge
     uint8_t             highBankValue;
     uint8_t             lowBankValue;
 
-    GBRomHeader   header;
+    GBRomHeader         header;
     uint8_t             ramBankCount;
     uint8_t             mappedRamBankNumber;
     uint8_t             ramEnabled                  : 1;
@@ -661,77 +674,77 @@ static inline int32_t castSizeToInt32( const size_t value )
     return (int32_t)value;
 }
 
-uint8_t isInVideoRamAddressRange( const uint16_t address )
+bool8_t isInVideoRamAddressRange( const uint16_t address )
 {
     return address >= 0x8000 && address < 0xA000;
 }
 
-uint8_t isInOAMAddressRange( const uint16_t address )
+bool8_t isInOAMAddressRange( const uint16_t address )
 {
     return address >= 0xFE00 && address < 0xFEA0;
 }
 
-uint8_t isInCartridgeRomAddressRange( const uint16_t address )
+bool8_t isInCartridgeRomAddressRange( const uint16_t address )
 {
     return address >= 0x0000 && address < 0x8000;
 }
 
-uint8_t isInMBC1BankingModeSelectRegisterRange( const uint16_t address )
+bool8_t isInMBC1BankingModeSelectRegisterRange( const uint16_t address )
 {
     return address >= 0x6000 && address < 0x8000;
 }
 
-uint8_t isInMBC1RamBankNumberRegisterRange( const uint16_t address )
+bool8_t isInMBC1RamBankNumberRegisterRange( const uint16_t address )
 {
     return address >= 0x4000 && address < 0x6000;
 }
 
-uint8_t isInMBC1RomBankNumberRegisterRange( const uint16_t address )
+bool8_t isInMBC1RomBankNumberRegisterRange( const uint16_t address )
 {
     return address >= 0x2000 && address < 0x4000;
 }
 
-uint8_t isInMBC5LowRomBankNumberRegisterRange( const uint16_t address )
+bool8_t isInMBC5LowRomBankNumberRegisterRange( const uint16_t address )
 {
     return address >= 0x2000 && address < 0x3000;
 }
 
-uint8_t isInMBC5HighRomBankNumberRegisterRange( const uint16_t address )
+bool8_t isInMBC5HighRomBankNumberRegisterRange( const uint16_t address )
 {
     return address >= 0x3000 && address < 0x4000;
 }
 
-uint8_t isInMBC5RamBankNumberRegisterRange( const uint16_t address )
+bool8_t isInMBC5RamBankNumberRegisterRange( const uint16_t address )
 {
     return address >= 0x4000 && address < 0x6000;
 }
 
-uint8_t isInRamEnableRegisterRange( const uint16_t address )
+bool8_t isInRamEnableRegisterRange( const uint16_t address )
 {
     return address >= 0x0000 && address < 0x2000;
 }
 
-uint8_t isInExternalRamRange( const uint16_t address )
+bool8_t isInExternalRamRange( const uint16_t address )
 {
     return address >= 0xA000 && address < 0xC000;
 }
 
-uint8_t isInIORegisterRange( const uint16_t address )
+bool8_t isInIORegisterRange( const uint16_t address )
 {
     return address >= 0xFF00 && address < 0xFF80;
 }
 
-uint8_t isInHighRamAddressRange( const uint16_t address )
+bool8_t isInHighRamAddressRange( const uint16_t address )
 {
     return address >= 0xFF80 && address < 0xFFFF;
 }
 
-uint8_t isInWorkRamRange( const uint16_t address )
+bool8_t isInWorkRamRange( const uint16_t address )
 {
     return address >= 0xC000 && address < 0xCFFF;
 }
 
-uint8_t isInEchoRamRange( const uint16_t address )
+bool8_t isInEchoRamRange( const uint16_t address )
 {
     return address >= 0xE000 && address < 0xFDFF;
 }
@@ -803,7 +816,7 @@ uint8_t calculateGBRomHeaderChecksum( const uint8_t* pRomData )
     return checksum;
 }
 
-uint8_t isGBRomData( const uint8_t* pRomData, const size_t romDataSizeInBytes )
+bool8_t isGBRomData( const uint8_t* pRomData, const size_t romDataSizeInBytes )
 {
     if( romDataSizeInBytes < gbMinRomSizeInBytes || romDataSizeInBytes > gbMaxRomSizeInBytes )
     {
@@ -872,7 +885,7 @@ struct GZipData
     const GZipFooter*       pFooter;
     uint32_t                dataSizeInBytes;
     uint8_t                 compressionMethod;
-    GZipDataFlags        flags;
+    GZipDataFlags           flags;
 };
 
 enum class UncompressResult : uint8_t
@@ -912,7 +925,7 @@ MemoryWriteStream createMemoryWriteStream( uint8_t* pTargetBuffer, const uint32_
     return writeStream;
 }
 
-uint8_t pushData( MemoryWriteStream* pWriteStream, const uint8_t* pData, const uint32_t dataSizeInBytes )
+bool8_t pushData( MemoryWriteStream* pWriteStream, const uint8_t* pData, const uint32_t dataSizeInBytes )
 {
     if( pWriteStream->pTargetData + dataSizeInBytes < pWriteStream->pTargetDataEnd )
     {
@@ -1036,7 +1049,7 @@ const ZipEndOfCentralDirectory* findZipArchiveEndOfCentralDirectory( const uint8
     return (const ZipEndOfCentralDirectory*)( pZipData + eocdPos );
 }
 
-uint8_t isValidZipArchive( const uint8_t* pZipArchiveData, const uint32_t zipArchiveDataSizeInBytes )
+bool8_t isValidZipArchive( const uint8_t* pZipArchiveData, const uint32_t zipArchiveDataSizeInBytes )
 {
     if( zipArchiveDataSizeInBytes <= 28u )
     {
@@ -1044,7 +1057,7 @@ uint8_t isValidZipArchive( const uint8_t* pZipArchiveData, const uint32_t zipArc
     }
 
     //FK: check first file header signature
-    const uint8_t isZipArchive = (pZipArchiveData[0] == 0x50 && pZipArchiveData[1] == 0x4b && pZipArchiveData[2] == 0x03 && pZipArchiveData[3] == 0x04 );
+    const bool8_t isZipArchive = (pZipArchiveData[0] == 0x50 && pZipArchiveData[1] == 0x4b && pZipArchiveData[2] == 0x03 && pZipArchiveData[3] == 0x04 );
     if( !isZipArchive )
     {
         return 0u;
@@ -1059,7 +1072,7 @@ uint8_t isValidZipArchive( const uint8_t* pZipArchiveData, const uint32_t zipArc
     return 1u;
 }
 
-uint8_t isValidGZipData( const uint8_t* pGZipData, const uint32_t gzipDataSizeInBytes )
+bool8_t isValidGZipData( const uint8_t* pGZipData, const uint32_t gzipDataSizeInBytes )
 {
     //FK: Check for file header size
     if( gzipDataSizeInBytes <= 18 )
@@ -1067,11 +1080,11 @@ uint8_t isValidGZipData( const uint8_t* pGZipData, const uint32_t gzipDataSizeIn
         return 0u;
     }
 
-    const uint8_t isGzipHeader = ( pGZipData[0] == 0x1F && pGZipData[1] == 0x8b );
+    const bool8_t isGzipHeader = ( pGZipData[0] == 0x1F && pGZipData[1] == 0x8b );
     return isGzipHeader;
 }
 
-uint8_t openGZipData( GZipData* pOutArchive, const uint8_t* pGzipData, const uint32_t gzipDataSizeInBytes )
+bool8_t openGZipData( GZipData* pOutArchive, const uint8_t* pGzipData, const uint32_t gzipDataSizeInBytes )
 {
     if( !isValidGZipData( pGzipData, gzipDataSizeInBytes) )
     {
@@ -1169,7 +1182,7 @@ BitStream createGZipBitStream( const GZipData* pArchive )
     return createBitStream( compressedData.pCompressedData, compressedData.compressedDataSizeInBytes );
 }
 
-uint8_t uncompressDeflateStream( BitStream* pDeflateStream, MemoryWriteStream* pTargetStream, uint32_t* pOutBytesWritten )
+bool8_t uncompressDeflateStream( BitStream* pDeflateStream, MemoryWriteStream* pTargetStream, uint32_t* pOutBytesWritten )
 {
 #if 1
     const size_t targetDataSizeInBytes = pTargetStream->pTargetDataEnd - pTargetStream->pTargetData;
@@ -1369,12 +1382,12 @@ ZipArchiveEntry findNextZipArchiveEntry( const ZipArchive* pZipArchive, const Zi
     return createZipArchiveEntry( pZipArchive, pPrevEntry->absoluteOffsetToNextEntry, pPrevEntry->recordIndex );
 }
 
-uint8_t isLastZipArchiveEntry( const ZipArchiveEntry* pEntry )
+bool8_t isLastZipArchiveEntry( const ZipArchiveEntry* pEntry )
 {
     return pEntry->absoluteOffsetToNextEntry == 0u;
 }
 
-uint8_t areStringsEqual( const char* pStringA, const char* pStringB, const uint32_t stringLength )
+bool8_t areStringsEqual( const char* pStringA, const char* pStringB, const uint32_t stringLength )
 {
     for( uint32_t charIndex = 0u; charIndex < stringLength; ++charIndex )
     {
@@ -1404,7 +1417,7 @@ const char* findLastInString( const char* pString, uint32_t stringLength, const 
     return nullptr;
 }
 
-uint8_t filePathHasRomFileExtension( const char* pFilePath, const uint16_t filePathLength )
+bool8_t filePathHasRomFileExtension( const char* pFilePath, const uint16_t filePathLength )
 {
     const char* pFileExtension = findLastInString( pFilePath, filePathLength, '.' );
     if( pFileExtension != nullptr )
@@ -1463,7 +1476,7 @@ uint32_t countRomsInZipArchive( const ZipArchive* pZipArchive )
     return romCount;
 }
 
-uint8_t openZipArchive( ZipArchive* pOutZipArchive, const uint8_t* pZipData, const uint32_t zipDataSizeInBytes )
+bool8_t openZipArchive( ZipArchive* pOutZipArchive, const uint8_t* pZipData, const uint32_t zipDataSizeInBytes )
 {
     if( !isValidZipArchive( pZipData, zipDataSizeInBytes ) )
 	{
@@ -1486,21 +1499,40 @@ enum class ZipDecompressionResult : uint8_t
     NotSupported
 };
 
-DeflateCompressedData getZipArchiveEntryCompressedData( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry )
+DeflateCompressedData getZipArchiveCompressedData( const ZipArchive* pZipArchive, uint32_t absoluteFileOffsetToFileHeader )
 {
     ZipLocalFileHeader localFileHeader;
-    memcpy( &localFileHeader, pZipArchive->pData + pZipArchiveEntry->absoluteOffsetToFileHeader, sizeof( localFileHeader ) );
+    memcpy( &localFileHeader, pZipArchive->pData + absoluteFileOffsetToFileHeader, sizeof( localFileHeader ) );
 
     DeflateCompressedData compressedData;
-    compressedData.pCompressedData              = pZipArchive->pData + pZipArchiveEntry->absoluteOffsetToFileHeader + sizeof( localFileHeader ) + localFileHeader.fileNameLength + localFileHeader.extraFieldLength;
+    compressedData.pCompressedData              = pZipArchive->pData + absoluteFileOffsetToFileHeader + sizeof( localFileHeader ) + localFileHeader.fileNameLength + localFileHeader.extraFieldLength;
     compressedData.compressedDataSizeInBytes    = localFileHeader.compressedSizeInBytes;
     return compressedData;
+}
+
+DeflateCompressedData getZipArchiveEntryCompressedData( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry )
+{
+    return getZipArchiveCompressedData( pZipArchive, pZipArchiveEntry->absoluteOffsetToFileHeader );
 }
 
 BitStream createZipArchiveEntryBitStream( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry )
 {
     const DeflateCompressedData compressedData = getZipArchiveEntryCompressedData( pZipArchive, pZipArchiveEntry );
     return createBitStream( compressedData.pCompressedData, compressedData.compressedDataSizeInBytes );
+}
+
+UncompressResult uncompressZipArchiveEntryAtFileOffset( const ZipArchive* pZipArchive, uint32_t absoluteFileOffsetToFileHeader, uint8_t* pTargetBuffer, uint32_t* pTargetSizeInBytes, const uint32_t targetBufferCapacityInBytes )
+{
+    const DeflateCompressedData compressedData = getZipArchiveCompressedData( pZipArchive, absoluteFileOffsetToFileHeader );
+
+    BitStream decodeStream          = createBitStream( compressedData.pCompressedData, compressedData.compressedDataSizeInBytes );
+    MemoryWriteStream writeStream   = createMemoryWriteStream( pTargetBuffer, targetBufferCapacityInBytes );
+    if( !uncompressDeflateStream( &decodeStream, &writeStream, pTargetSizeInBytes ) )
+    {
+        return UncompressResult::TargetBufferTooSmall;
+    }
+
+    return UncompressResult::Success;
 }
 
 UncompressResult uncompressZipArchiveEntry( const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipArchiveEntry, uint8_t* pTargetBuffer, uint32_t* pTargetSizeInBytes, const uint32_t targetBufferCapacityInBytes )
@@ -1510,14 +1542,7 @@ UncompressResult uncompressZipArchiveEntry( const ZipArchive* pZipArchive, const
         return UncompressResult::TargetBufferTooSmall;
     }
 
-    BitStream decodeStream          = createZipArchiveEntryBitStream( pZipArchive, pZipArchiveEntry );
-    MemoryWriteStream writeStream   = createMemoryWriteStream( pTargetBuffer, targetBufferCapacityInBytes );
-    if( !uncompressDeflateStream( &decodeStream, &writeStream, pTargetSizeInBytes ) )
-    {
-        return UncompressResult::TargetBufferTooSmall;
-    }
-
-    return UncompressResult::Success;
+    return uncompressZipArchiveEntryAtFileOffset( pZipArchive, pZipArchiveEntry->absoluteOffsetToFileHeader, pTargetBuffer, pTargetSizeInBytes, targetBufferCapacityInBytes );
 }
 
 #if 0
@@ -1554,7 +1579,7 @@ const uint8_t* readUncompressedDeflateBlock( uint16_t* pOutSizeInBytes, ZipDefla
 }
 #endif
 
-uint8_t isValidGBRomData( const uint8_t* pRomData, const uint32_t romSizeInBytes )
+bool8_t isValidGBRomData( const uint8_t* pRomData, const uint32_t romSizeInBytes )
 {
     if( romSizeInBytes < Kbyte( 32u ) )
     {
@@ -1657,7 +1682,7 @@ void mapCartridgeRamBank( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper
     memcpy( pMemoryMapper->pRamBankSwitch, pRamBank, gbRamBankSizeInBytes );
 }
 
-uint8_t isGBEmulatorRomMapped( const GBEmulatorInstance* pEmulatorInstance )
+bool8_t isGBEmulatorRomMapped( const GBEmulatorInstance* pEmulatorInstance )
 {
     return pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr;
 }
@@ -1894,7 +1919,7 @@ GBStateLoadResult loadGBEmulatorState( GBEmulatorInstance* pEmulatorInstance, co
     return K15_GB_STATE_LOAD_SUCCESS;
 }
 
-uint8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
+bool8_t allowReadFromMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
     //FK: Don't allow VRAM and OAM access while ppu is in mode 3 or 2 (drawing and oam search respectively)
     if( pMemoryMapper->lcdEnabled )
@@ -1957,7 +1982,7 @@ uint8_t* getMappedMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t address
     return pMemoryMapper->pBaseAddress + addressOffset;
 }
 
-uint8_t allowWriteToMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
+bool8_t allowWriteToMemoryAddress( GBMemoryMapper* pMemoryMapper, uint16_t addressOffset )
 {
     if( isInIORegisterRange( addressOffset ) )
     {
@@ -2033,7 +2058,7 @@ void write16BitValueToMappedMemory( GBMemoryMapper* pMemoryMapper, uint16_t addr
     write8BitValueToMappedMemory( pMemoryMapper, addressOffset + 1, msn );
 }
 
-uint8_t isCartridgeTypeSupported( const GBCartridgeType cartridgeType )
+bool8_t isCartridgeTypeSupported( const GBCartridgeType cartridgeType )
 {
     switch( cartridgeType )
     {
@@ -2863,7 +2888,7 @@ void tickTimerInternalDivCounterForCycles( GBTimerState* pTimerState, uint8_t cy
     uint16_t nextInternalDivCounter     = currentInternalDivCounter + 1;
     while( cycleCount > 0 )
     {
-        const uint8_t fallingEdge = ( ( counterFrequencyMask & currentInternalDivCounter ) > 0 ) && 
+        const bool8_t fallingEdge = ( ( counterFrequencyMask & currentInternalDivCounter ) > 0 ) && 
                                     ( ( counterFrequencyMask & nextInternalDivCounter ) == 0 );
 
         currentInternalDivCounter = nextInternalDivCounter++;
@@ -2994,11 +3019,11 @@ uint8_t convertOutputLevelToVolumeShift( const uint8_t outputLevel )
         case 0b00:
             return 4u;
         case 0b01:
-            return 0;
+            return 0u;
         case 0b10:
-            return 1;
+            return 1u;
         case 0b11:
-            return 2;
+            return 2u;
     }
 
     IllegalCodePath();
@@ -3089,7 +3114,7 @@ uint16_t pop16BitValueFromStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryM
 
 void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper )
 {
-    const uint8_t interruptEnable       = *pCpuState->pIE;
+    const bool8_t interruptEnable       = *pCpuState->pIE;
     const uint8_t interruptFlags        = *pCpuState->pIF;
     const uint8_t interruptHandleMask   = ( interruptEnable & interruptFlags );
     if( interruptHandleMask > 0u )
@@ -3101,10 +3126,6 @@ void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
                 const uint8_t interruptFlag = ( 1 << interruptIndex );
                 if( interruptHandleMask & interruptFlag )
                 {
-                    if( interruptFlag == TimerInterrupt )
-                    {
-                        BreakPointHook();
-                    }
                     push16BitValueToStack(pCpuState, pMemoryMapper, pCpuState->registers.PC);
                     pCpuState->registers.PC = 0x40 + 0x08 * interruptIndex;
 
@@ -4227,12 +4248,12 @@ uint8_t handleInput( const uint8_t queryJoypadValue, GBEmulatorJoypadState joyPa
     return registerValue;
 }
 
-uint8_t isLargeRamCartridge( uint32_t ramSizeInBytes )
+bool8_t isLargeRamCartridge( uint32_t ramSizeInBytes )
 {
     return ramSizeInBytes > Kbyte( 8 );
 }
 
-uint8_t isLargeRomCartridge( uint32_t romSizeInBytes )
+bool8_t isLargeRomCartridge( uint32_t romSizeInBytes )
 {
     return romSizeInBytes >= Mbyte( 1 );
 }
@@ -4268,24 +4289,24 @@ uint16_t fixMBC5RomBankNumber( const uint16_t romBankCount, const uint8_t lowBan
     return fixedRomBankNumber;
 }
 
-uint8_t isMBC1CartridgeType( GBCartridgeType cartridgeType )
+bool8_t isMBC1CartridgeType( GBCartridgeType cartridgeType )
 {
     switch( cartridgeType )
     {
         case ROM_MBC1:
         case ROM_MBC1_RAM:
         case ROM_MBC1_RAM_BATT:
-            return true;
+            return 1;
 
         default:
-            return false;
+            return 0;
     }
 
     IllegalCodePath();
-    return false;
+    return 0;
 }
 
-uint8_t isMBC5CartridgeType( GBCartridgeType cartridgeType )
+bool8_t isMBC5CartridgeType( GBCartridgeType cartridgeType )
 {
     switch( cartridgeType )
     {
@@ -4295,14 +4316,14 @@ uint8_t isMBC5CartridgeType( GBCartridgeType cartridgeType )
         case ROM_MBC5_RUMBLE:     
         case ROM_MBC5_RUMBLE_SRAM:
         case ROM_MBC5_RUMBLE_SRAM_BATT:
-            return true;
+            return 1;
 
         default:
-            return false;
+            return 0;
     }
 
     IllegalCodePath();
-    return false;
+    return 0;
 }
 
 void handleMBC1Write( GBCartridge* pCartridge, GBMemoryMapper* pMemoryMapper )
@@ -4496,7 +4517,7 @@ void handleCartridgeWrites( GBEmulatorInstance* pEmulatorInstance )
     }
 }
 
-uint8_t isUnmappedIORegisterAddress( const uint16_t address )
+bool8_t isUnmappedIORegisterAddress( const uint16_t address )
 {
     switch( address )
     {
@@ -4609,7 +4630,7 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             }
 
             //FK: Check for falling edge with new frequency - a falling edge results in a timer increment!
-            const uint8_t fallingEdge = ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) > 0 ) && 
+            const bool8_t fallingEdge = ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) > 0 ) && 
                                         ( ( ( 1 << oldCounterFrequencyBit ) & pTimerState->internalDivCounter ) == 0 );
 
             if( fallingEdge )
@@ -4838,7 +4859,7 @@ GBEmulatorInstanceEventMask runGBEmulatorForCycles( GBEmulatorInstance* pInstanc
     pInstance->flags.value = 0;
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    uint8_t runFrame = 0;
+    bool8_t runFrame = 0;
     if( pInstance->debug.continueExecution )
     {
         pInstance->debug.continueExecution    = 0;
