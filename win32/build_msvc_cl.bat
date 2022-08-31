@@ -27,13 +27,14 @@ set EXE_OUTPUT_PATH="!BUILD_FOLDER!\!PROJECT_NAME!.exe"
 set COMPILER_OPTIONS=/nologo /FC /TP /W3 /Fe!EXE_OUTPUT_PATH! /Fo!OBJ_OUTPUT_PATH!
 if "%BUILD_CONFIG%"=="debug" (
 	echo Build config = debug
-	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Zi /GS /MTd
+	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Zi /GS
 ) else (
 	echo Build config = optimized release
 	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /O2 /GL /Gw /MT /DK15_RELEASE_BUILD
 )
 
-set CL_OPTIONS=!COMPILER_OPTIONS!
+set LINKER_OPTIONS=/SUBSYSTEM:WINDOWS
+set CL_OPTIONS=!COMPILER_OPTIONS! /link !LINKER_OPTIONS!
 
 ::is cl.exe part of PATH?
 where /Q cl.exe
@@ -97,6 +98,7 @@ IF exist !VS_WHERE_PATH! (
 ::check if a path was found
 IF !FOUND_PATH!==0 (
 	echo Could not find valid Visual Studio installation.
+	exit /b 1
 ) ELSE (
 	echo Found Visual Studio installation at !VS_PATH!
 	echo Searching and executing !VCVARS_FILE! ...
@@ -120,4 +122,6 @@ IF !FOUND_PATH!==0 (
 	echo Starting build process...
 	set BUILD_COMMAND=!CL_PATH! !C_FILE_NAME! !CL_OPTIONS!
 	call !BUILD_COMMAND!
+	
+	exit /b %ERRORLEVEL%
 ) 

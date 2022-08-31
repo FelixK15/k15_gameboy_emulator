@@ -2,6 +2,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <commctrl.h>
 
 #define XINPUT_GAMEPAD_DPAD_UP          0x0001
 #define XINPUT_GAMEPAD_DPAD_DOWN        0x0002
@@ -60,6 +61,8 @@ PFNDRAGQUERYFILEAPROC		w32DragQueryFileA		= nullptr;
 PFNDRAGFINISHPROC			w32DragFinish			= nullptr;
 PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 
+#define restrict_modifier __restrict
+
 #include <audioclient.h>
 #include <mmdeviceapi.h>
 #include <commdlg.h>
@@ -95,6 +98,10 @@ const CLSID CLSID_MMDeviceEnumerator 		= _uuidof(MMDeviceEnumerator);
 constexpr uint32_t gbMenuOpenRom 			= 1u;
 constexpr uint32_t gbMenuClose 				= 2u;
 
+constexpr uint32_t dlgList					= 2u;
+constexpr uint32_t dlgOk					= 3u;
+constexpr uint32_t dlgAbort					= 4u;
+
 constexpr uint32_t gbMenuScale0 			= 10u;
 constexpr uint32_t gbMenuFullscreen			= 25u;
 constexpr uint32_t gbMenuShowUserMessage	= 26u;
@@ -110,6 +117,8 @@ constexpr uint32_t gbMenuSpeed4x			= 39u;
 constexpr uint32_t gbMenuSpeed8x			= 40u;
 
 constexpr uint32_t gbMenuResetEmulator 		= 50u;
+
+constexpr uint32_t gbPaintTimerId			= 150u;
 
 constexpr uint8_t gbDefaultScale = 2u;
 
@@ -142,9 +151,9 @@ struct Win32Settings
 {
 	uint8_t scaleFactor;
 	uint8_t stateSlot;
-	uint8_t	fullscreen;
-	uint8_t maximized;
-	uint8_t showUserMessage;
+	bool8_t	fullscreen;
+	bool8_t maximized;
+	bool8_t showUserMessage;
 	int32_t	windowPosX;
 	int32_t	windowPosY;
 };
@@ -178,6 +187,13 @@ enum class Win32EmulatorKeyboardActionButtonBindings
 	COUNT
 };
 
+enum class Win32RomSelectionWindowResult
+{
+	RomLoadedSuccessfully,
+	RomLoadingFailed,
+	Aborted,
+};
+
 struct Win32UserMessage
 {
 	const char* 	pText;
@@ -203,14 +219,31 @@ struct Win32EmulatorContext
 	uint8_t				cyclePerHostFrameFactor		= 1u;
 };
 
+enum class RomSourceType : uint8_t
+{
+	ZipArchive,
+};
+
+struct Win32RomSelectionDialogData
+{
+	union
+	{
+		const ZipArchive* pZipArchive;
+	} source;
+
+	uint8_t* pUncompressedBuffer;
+	uint32_t bytesWrittenToUncompressedBuffer;
+	RomSourceType sourceType;
+};
+
 struct Win32ApplicationContext
 {
+	char 						mainWindowClass[64]								= {};
 	Win32EmulatorContext		emulatorContext									= {};
 	Win32UserMessage			userMessage										= {};
-
 	HINSTANCE					pInstanceHandle									= nullptr;
 	HMONITOR					pMonitorHandle									= nullptr;
-	HWND						pWindowHandle									= nullptr;
+	HWND						pMainWindowHandle								= nullptr;
 	HMENU						pFileMenuItems 									= nullptr;
 	HMENU						pViewMenuItems 									= nullptr;
 	HMENU						pScaleMenuItems 								= nullptr;
@@ -220,6 +253,7 @@ struct Win32ApplicationContext
 	HGLRC						pOpenGLContext									= nullptr;
 	HDC							pDeviceContext									= nullptr;
 	uint8_t* 					pGameboyRGBVideoBuffer 							= nullptr;
+	uint8_t*					pUncompressBuffer								= nullptr;
 	char 						gameTitle[16] 									= {};
 	uint32_t					monitorWidth									= 0u;
 	uint32_t					monitorHeight									= 0u;
@@ -251,12 +285,12 @@ struct Win32ApplicationContext
 	GLuint						gameboyVertexArray								= 0u;
 
 	uint8_t						xinputControllerCount							= 0u;
-	uint8_t   					leftMouseDown									= 0u;
-	uint8_t						fullscreen										= 0u;
-	uint8_t						vsyncEnabled									= 0u;
-	uint8_t						windowMaximized									= 0u;
-	uint8_t						hasFocus										= 1u;
-	uint8_t						showUserMessage									= 1u;
+	bool8_t   					leftMouseDown									= 0u;
+	bool8_t						fullscreen										= 0u;
+	bool8_t						vsyncEnabled									= 0u;
+	bool8_t						windowMaximized									= 0u;
+	bool8_t						hasFocus										= 1u;
+	bool8_t						showUserMessage									= 1u;
 };
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
@@ -280,7 +314,7 @@ Win32Settings serializeSettings( Win32ApplicationContext* pContext )
 	return settings;
 }
 
-uint8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
+bool8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
 {
 	const HANDLE pFileHandle = CreateFileA( pPath, GENERIC_WRITE, 0u, nullptr, CREATE_ALWAYS, 0u, nullptr );
 	if( pFileHandle == INVALID_HANDLE_VALUE )
@@ -302,7 +336,7 @@ uint8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pPath )
 	return writeResult == TRUE;
 }
 
-uint8_t loadSettingsFromFile( Win32Settings* pOutSettings, const char* pPath )
+bool8_t loadSettingsFromFile( Win32Settings* pOutSettings, const char* pPath )
 {
 	const HANDLE pFileHandle = CreateFileA( pPath, GENERIC_READ, 0u, nullptr, OPEN_EXISTING, 0u, nullptr );
 	if( pFileHandle == INVALID_HANDLE_VALUE )
@@ -420,6 +454,7 @@ void parseCommandLineArguments( Win32GBEmulatorArguments* pOutArguments, LPSTR p
 				if( arg == 'r' )
 				{
 					strcpy_s( pOutArguments->romPath, sizeof( pOutArguments->romPath ), argParam );
+					trimTrailingWhitespaces( pOutArguments->romPath );
 				}
 
 				pArgParam 			= argParam;
@@ -529,9 +564,9 @@ void generateStateFileName( char* pStateFileNameBuffer, size_t stateFileNameLeng
 	sprintf_s( pStateFileNameBuffer, stateFileNameLength, "%s_%d%s", pRomBaseFileName, stateSlotIndex, gbStateFileExtension );
 }
 
-void generateRamFileName( char* pRamFileNameBuffer, size_t ramFileNameLength, const char* pRomBaseFileName )
+void generateRamFileName( char* pRamFileNameBuffer, size_t ramFileNameLength, const char* pRomBaseFileName, uint32_t romBaseFileNameLength )
 {
-	sprintf_s( pRamFileNameBuffer, ramFileNameLength, "%s%s", pRomBaseFileName, gbRamFileExtension );
+	sprintf_s( pRamFileNameBuffer, ramFileNameLength, "%.*s%s", romBaseFileNameLength, pRomBaseFileName, gbRamFileExtension );
 }
 
 void unmapFileMapping( Win32FileMapping* pFileMapping )
@@ -555,7 +590,7 @@ void unmapFileMapping( Win32FileMapping* pFileMapping )
 	}
 }
 
-uint8_t mapFileForReading( Win32FileMapping* pOutFileMapping, const char* pFileName )
+bool8_t mapFileForReading( Win32FileMapping* pOutFileMapping, const char* pFileName )
 {
 	const HANDLE pFileHandle = CreateFileA( pFileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0u, nullptr );
 	if( pFileHandle== INVALID_HANDLE_VALUE )
@@ -594,7 +629,7 @@ uint8_t mapFileForReading( Win32FileMapping* pOutFileMapping, const char* pFileN
 	return 1;
 }
 
-uint8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileName, const size_t fileSizeInBytes )
+bool8_t mapFileForWriting( Win32FileMapping* pOutFileMapping, const char* pFileName, const size_t fileSizeInBytes )
 {
 	const HANDLE pFileHandle = CreateFileA( pFileName, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, 0u, nullptr );
 	if( pFileHandle == INVALID_HANDLE_VALUE )
@@ -685,7 +720,7 @@ void saveStateInSlot( GBEmulatorInstance* pEmulatorInstance, const char* pStateF
 
 void updateMonitorSettings( Win32ApplicationContext* pContext )
 {
-	pContext->pMonitorHandle = MonitorFromWindow( pContext->pWindowHandle, MONITOR_DEFAULTTOPRIMARY );
+	pContext->pMonitorHandle = MonitorFromWindow( pContext->pMainWindowHandle, MONITOR_DEFAULTTOPRIMARY );
 
 	MONITORINFOEX monitorInfo = {};
 	monitorInfo.cbSize = sizeof(MONITORINFOEX);
@@ -705,7 +740,7 @@ void updateMonitorSettings( Win32ApplicationContext* pContext )
 
 	TITLEBARINFO titleBarInfo = {};
 	titleBarInfo.cbSize = sizeof( TITLEBARINFO );
-	GetTitleBarInfo( pContext->pWindowHandle, &titleBarInfo );
+	GetTitleBarInfo( pContext->pMainWindowHandle, &titleBarInfo );
 
 	const uint32_t menuHeightInPixels		= ( uint32_t )GetSystemMetrics( SM_CYMENU );
 	const uint32_t titleBarHeightInPixels 	= ( uint32_t )( titleBarInfo.rcTitleBar.bottom - titleBarInfo.rcTitleBar.top );
@@ -781,80 +816,474 @@ void getRomBaseFileName( char* pRomBaseFileNameBuffer, size_t romBaseFileNameBuf
 	*pRomPathFileExtension = '.';
 }
 
-void loadRomFile( Win32ApplicationContext* pContext, char* pRomPath )
+bool8_t loadRomData( Win32ApplicationContext* pContext, const char* pRomName, uint32_t romNameLength, const uint8_t* pRomData, const uint32_t romDataSizeInBytes )
 {
-	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
-
-	char fixedRomPath[ MAX_PATH ];
-	strcpy_s( fixedRomPath, sizeof( fixedRomPath ), pRomPath );
-	char* pFixedRomPath = fixRomFileName( fixedRomPath );
-	
-	char romBaseFileName[ MAX_PATH ];
-	CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
-
-	getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), pFixedRomPath );
-
-	Win32FileMapping romFileMapping;
-	if( mapFileForReading( &romFileMapping, pFixedRomPath ) == 0 )
-	{
-		setUserMessage( &pContext->userMessage, "Can't map rom" );
-		return;
-	}
-
-	if( !isValidGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+	if( !isValidGBRomData( pRomData, romDataSizeInBytes ) )
 	{
 		setUserMessage( &pContext->userMessage, "Rom file invalid" );
-		unmapFileMapping( &romFileMapping );
-		return;
+		return 0u;
 	}
 
-	const GBCartridgeHeader header = getGBCartridgeHeader( romFileMapping.pFileBaseAddress );
+	const GBRomHeader header = getGBRomHeader( pRomData );
 	if( header.colorCompatibility == 0xC0 )
 	{
-		MessageBoxA( pContext->pWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
-		return;
+		MessageBoxA( pContext->pMainWindowHandle, "GameBoy Color roms are currently not supported.", "Not supported", MB_OK );
+		return 0u;
 	}
 
-	unmapFileMapping( &pEmulatorContext->romMapping );
-	unmapFileMapping( &pEmulatorContext->ramMapping );
+	unmapFileMapping( &pContext->emulatorContext.romMapping );
+	unmapFileMapping( &pContext->emulatorContext.ramMapping );
 
-	const uint8_t* pRomBaseAddress 	= romFileMapping.pFileBaseAddress;
-	uint8_t* pRamBaseAddress 		= nullptr;
+	uint8_t* pRamBaseAddress = nullptr;
 
 	Win32FileMapping ramFileMapping;
 	const size_t ramSizeInBytes = mapRamSizeToByteSize( header.ramSize );
 	if( ramSizeInBytes > 0 )
 	{
 		char ramFileName[MAX_PATH] = {0};
-		generateRamFileName( ramFileName, sizeof( ramFileName ), romBaseFileName );
+		generateRamFileName( ramFileName, sizeof( ramFileName ), pRomName, romNameLength );
 
 		if( mapFileForWriting( &ramFileMapping, ramFileName, ramSizeInBytes ) == 0 )
 		{
 			setUserMessage( &pContext->userMessage, "Can't map ram" );
-			unmapFileMapping( &romFileMapping );
-			return;
+			return 0u;
 		}
 
 		pRamBaseAddress = ramFileMapping.pFileBaseAddress;
 	}
 
-	const GBMapCartridgeResult result = loadGBEmulatorRom( pEmulatorContext->pEmulatorInstance, pRomBaseAddress, pRamBaseAddress );
+	const GBMapCartridgeResult result = loadGBEmulatorRom( pContext->emulatorContext.pEmulatorInstance, pRomData, pRamBaseAddress );
 	if( result == K15_GB_CARTRIDGE_TYPE_UNSUPPORTED )
 	{
-		unmapFileMapping( &romFileMapping );
 		unmapFileMapping( &ramFileMapping );
-		MessageBoxA( pContext->pWindowHandle, "This rom type is currently not supported.", "Rom not supported.", MB_OK );
-		return;
+		MessageBoxA( pContext->pMainWindowHandle, "This rom type is currently not supported.", "Rom not supported.", MB_OK );
+		return 0u;
 	}
 
-	strcpy_s( pEmulatorContext->romBaseFileName, sizeof( pEmulatorContext->romBaseFileName ), romBaseFileName );
+	strcpy_s( pContext->emulatorContext.romBaseFileName, sizeof( pContext->emulatorContext.romBaseFileName ), pRomName );
 	setUserMessage( &pContext->userMessage, "Rom loaded!");
 
-	//FK: TODO: only enable if is has been verified that the rom has been successfully loaded
 	enableRomMenuItems( pContext );
 
-	pEmulatorContext->romMapping = romFileMapping;
-	pEmulatorContext->ramMapping = ramFileMapping;
+	pContext->emulatorContext.ramMapping = ramFileMapping;
+
+	return 1u;
+}
+
+INT_PTR initializeRomListFromZipArchive( HWND pListHWND, const ZipArchive* pZipArchive )
+{
+	const uint32_t romCount = countRomsInZipArchive( pZipArchive );
+	SendMessageA( pListHWND, LB_INITSTORAGE, romCount, Mbyte(1) );
+
+	ZipArchiveEntry archiveEntry = findFirstZipArchiveEntry( pZipArchive );
+	char nameBuffer[MAX_PATH];
+
+	do
+	{
+		if( filePathHasRomFileExtension( archiveEntry.pFileName, archiveEntry.fileNameLength ) )
+		{
+			memcpy( nameBuffer, archiveEntry.pFileName, archiveEntry.fileNameLength );
+			nameBuffer[archiveEntry.fileNameLength] = 0;
+
+			SendMessageA( pListHWND, LB_ADDSTRING, 0, (LPARAM)nameBuffer );
+		}
+
+		if( isLastZipArchiveEntry( &archiveEntry ) )
+		{
+			break;
+		}
+
+		archiveEntry = findNextZipArchiveEntry( pZipArchive, &archiveEntry );
+	} while ( true );
+	
+	return TRUE;
+}
+
+bool8_t loadRomFromZipArchive( uint8_t* pUncompressedRomMemory, uint32_t* pUncompressedRomMemorySizeInBytes, const ZipArchive* pZipArchive, const ZipArchiveEntry* pZipEntry )
+{
+	if( uncompressZipArchiveEntry( pZipArchive, pZipEntry, pUncompressedRomMemory, pUncompressedRomMemorySizeInBytes, gbMaxRomSizeInBytes ) == UncompressResult::Success )
+	{
+		if( isGBRomData( pUncompressedRomMemory, *pUncompressedRomMemorySizeInBytes ) )
+		{
+			return 1u;
+		}
+	}
+
+	return 0u;
+}
+
+bool8_t loadFirstRomFromZipArchive( uint8_t* pUncompressedRomMemory, uint32_t* pUncompressedRomMemorySizeInBytes, const ZipArchive* pZipArchive )
+{
+	const ZipArchiveEntry romEntry = findFirstRomEntryInZipArchive( pZipArchive );
+	return loadRomFromZipArchive( pUncompressedRomMemory, pUncompressedRomMemorySizeInBytes, pZipArchive, &romEntry );
+}
+
+bool8_t loadRomFromZipArchiveByIndex( uint8_t* pUncompressedRomMemory, uint32_t* pUncompressedRomMemorySizeInBytes, const ZipArchive* pZipArchive, const int entryIndex )
+{
+	ZipArchiveEntry archiveEntry = findFirstZipArchiveEntry( pZipArchive );
+	int index = 0;
+
+	do
+	{
+		if( index == entryIndex )
+		{
+			return loadRomFromZipArchive( pUncompressedRomMemory, pUncompressedRomMemorySizeInBytes, pZipArchive, &archiveEntry );
+		}
+
+		if( isLastZipArchiveEntry( &archiveEntry ) )
+		{
+			break;
+		}
+
+		archiveEntry = findNextZipArchiveEntry( pZipArchive, &archiveEntry );
+		
+		if( filePathHasRomFileExtension( archiveEntry.pFileName, archiveEntry.fileNameLength ) )
+		{
+			++index;
+		}
+	} while ( true );
+
+	return 0;
+}
+
+Win32RomSelectionWindowResult loadSelectedRomFromRomSelectionWindow( Win32RomSelectionDialogData* pDialogData, HWND pListHandle )
+{
+	const int selectedItemIndex = (int)SendMessageA( pListHandle, LB_GETCURSEL, 0, 0 );
+	switch( pDialogData->sourceType )
+	{
+		case RomSourceType::ZipArchive:
+		{
+			const bool8_t loadedSuccessfully = loadRomFromZipArchiveByIndex( pDialogData->pUncompressedBuffer, &pDialogData->bytesWrittenToUncompressedBuffer, pDialogData->source.pZipArchive, selectedItemIndex );
+			if( loadedSuccessfully )
+			{
+				return Win32RomSelectionWindowResult::RomLoadedSuccessfully;
+			}
+			break;
+		}
+	}
+
+	return Win32RomSelectionWindowResult::RomLoadingFailed;
+}
+
+INT_PTR RomSelectionDialogProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+	switch( message )
+	{
+		case WM_INITDIALOG:
+		{
+			HWND pListHWND = GetDlgItem( hwnd, dlgList );
+			Win32RomSelectionDialogData* pDialogData = (Win32RomSelectionDialogData*)lparam;
+			
+			switch( pDialogData->sourceType )
+			{
+				case RomSourceType::ZipArchive:
+				{
+					SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)pDialogData);
+					return initializeRomListFromZipArchive( pListHWND, pDialogData->source.pZipArchive );
+				}
+
+				default:
+				{
+					IllegalCodePath();
+					break;
+				}
+			}
+			break;
+		}
+
+		case WM_COMMAND:
+		{
+			const WORD notificationCode = HIWORD(wparam);
+			switch( notificationCode )
+			{
+				case BN_CLICKED:
+				{
+					const WORD ctrlId = LOWORD(wparam);
+					if( ctrlId == dlgAbort )
+					{
+						EndDialog(hwnd, (INT_PTR)Win32RomSelectionWindowResult::Aborted);
+						break;
+					}
+					else if( ctrlId == dlgOk )
+					{
+						HWND pListHandle = (HWND)lparam;
+						Win32RomSelectionDialogData* pDialogData = (Win32RomSelectionDialogData*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+					
+						const Win32RomSelectionWindowResult result = loadSelectedRomFromRomSelectionWindow( pDialogData, pListHandle );
+						EndDialog(hwnd, (INT_PTR)result);
+						break;
+					}
+				}
+
+				case LBN_DBLCLK:
+				{
+					HWND pListHandle = (HWND)lparam;
+					Win32RomSelectionDialogData* pDialogData = (Win32RomSelectionDialogData*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+
+					const Win32RomSelectionWindowResult result = loadSelectedRomFromRomSelectionWindow( pDialogData, pListHandle );
+					EndDialog(hwnd, (INT_PTR)result);
+					break;
+				}
+			}
+			break;
+		}
+
+		case WM_CLOSE:
+		{
+			EndDialog(hwnd, (INT_PTR)Win32RomSelectionWindowResult::Aborted);
+			break;
+		}
+	}
+
+	return FALSE;
+}
+
+LPWORD lpwAlign(LPWORD lpIn)
+{
+	const uint32_t shiftAmount = (size_t)lpIn % sizeof( DWORD );
+	return lpIn + shiftAmount;
+}
+
+LPDLGTEMPLATE generateRomSelectionDialogTemplate( uint8_t* pBuffer )
+{
+	LPDLGITEMTEMPLATE lpdit;
+    LPWORD lpw;
+    LPWSTR lpwsz;
+    int nchar;
+
+	LPDLGTEMPLATE pDialogTemplate = (LPDLGTEMPLATE)pBuffer;
+    pDialogTemplate->style = WS_POPUP | WS_BORDER | WS_SYSMENU | DS_MODALFRAME | WS_CAPTION;
+    pDialogTemplate->cdit = 4;         // Number of controls
+    pDialogTemplate->x  = 10;  pDialogTemplate->y  = 10;
+    pDialogTemplate->cx = 300; pDialogTemplate->cy = 450;
+
+    lpw = (LPWORD)(pDialogTemplate + 1);
+    *lpw++ = 0;             // No menu
+    *lpw++ = 0;             // Predefined dialog box class (by default)
+
+    lpwsz = (LPWSTR)lpw;
+    nchar = 1 + MultiByteToWideChar(CP_ACP, 0, "Select rom from zip archive", -1, lpwsz, 50);
+    lpw += nchar;
+
+ 	//-----------------------
+    // Define a static text control.
+    //-----------------------
+    lpw = lpwAlign(lpw);    // Align DLGITEMTEMPLATE on DWORD boundary
+    lpdit = (LPDLGITEMTEMPLATE)lpw;
+    lpdit->x  = 10; lpdit->y  = 10;
+    lpdit->cx = 140; lpdit->cy = 20;
+    lpdit->id = 1;    // Text identifier
+    lpdit->style = WS_CHILD | WS_VISIBLE | SS_LEFT;
+
+    lpw = (LPWORD)(lpdit + 1);
+    *lpw++ = 0xFFFF;
+    *lpw++ = 0x0082;        // Static class
+
+ 	lpwsz = (LPWSTR)lpw;
+    nchar = 1 + MultiByteToWideChar(CP_ACP, 0, "Select a rom to load from this list:", -1, lpwsz, 50);
+    lpw += nchar;
+    *lpw++ = 0;             // No creation data
+
+ 	//-----------------------
+    // Define a List Box button.
+    //-----------------------
+    lpw = lpwAlign(lpw);    // Align DLGITEMTEMPLATE on DWORD boundary
+    lpdit = (LPDLGITEMTEMPLATE)lpw;
+    lpdit->x  = 10; 	lpdit->y  	= 30;
+    lpdit->cx = 280; 	lpdit->cy 	= 400;
+    lpdit->id = dlgList;
+    lpdit->style = WS_CHILD | WS_VISIBLE | LBS_STANDARD;
+
+    lpw = (LPWORD)(lpdit + 1);
+    *lpw++ = 0xFFFF;
+    *lpw++ = 0x0083;        // List Box class atom
+
+ 	lpwsz = (LPWSTR)lpw;
+    nchar = 1 + MultiByteToWideChar(CP_ACP, 0, "Test", -1, lpwsz, 50);
+    lpw += nchar;
+    *lpw++ = 0;             // No creation data
+
+    //-----------------------
+    // Define an OK button.
+    //-----------------------
+    lpw = lpwAlign(lpw);    // Align DLGITEMTEMPLATE on DWORD boundary
+    lpdit = (LPDLGITEMTEMPLATE)lpw;
+    lpdit->x  = 10; lpdit->y  = 430;
+    lpdit->cx = 40; lpdit->cy = 10;
+    lpdit->id = dlgOk;       // OK button identifier
+    lpdit->style = WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON;
+
+    lpw = (LPWORD)(lpdit + 1);
+    *lpw++ = 0xFFFF;
+    *lpw++ = 0x0080;        // Button class
+
+    lpwsz = (LPWSTR)lpw;
+    nchar = 1 + MultiByteToWideChar(CP_ACP, 0, "Load Rom", -1, lpwsz, 50);
+    lpw += nchar;
+    *lpw++ = 0;             // No creation data
+
+	//-----------------------
+    // Define an Abort button.
+    //-----------------------
+    lpw = lpwAlign(lpw);    // Align DLGITEMTEMPLATE on DWORD boundary
+    lpdit = (LPDLGITEMTEMPLATE)lpw;
+    lpdit->x  = 60; lpdit->y  = 430;
+    lpdit->cx = 40; lpdit->cy = 10;
+    lpdit->id = dlgAbort;
+    lpdit->style = WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON;
+
+    lpw = (LPWORD)(lpdit + 1);
+    *lpw++ = 0xFFFF;
+    *lpw++ = 0x0080;        // Button class
+
+    lpwsz = (LPWSTR)lpw;
+    nchar = 1 + MultiByteToWideChar(CP_ACP, 0, "Abort", -1, lpwsz, 50);
+    lpw += nchar;
+    *lpw++ = 0;             // No creation data
+
+	return pDialogTemplate;
+}
+
+Win32RomSelectionWindowResult createZipArchiveRomSelectionDisplay( uint8_t* pUncompressedBuffer, uint32_t* pOutBytesWrittenToUncompressBuffer, HWND pParentWindow, const ZipArchive* pZipArchive )
+{
+    uint8_t localBuffer[1024];
+	LPDLGTEMPLATE pDialogTemplate = generateRomSelectionDialogTemplate( localBuffer );
+
+	Win32RomSelectionDialogData romSelectionDialogData = {};
+	romSelectionDialogData.sourceType = RomSourceType::ZipArchive;
+	romSelectionDialogData.source.pZipArchive = pZipArchive;
+	romSelectionDialogData.pUncompressedBuffer = pUncompressedBuffer;
+
+	const Win32RomSelectionWindowResult dialogResult = ( Win32RomSelectionWindowResult )DialogBoxIndirectParamA( nullptr, pDialogTemplate, pParentWindow, RomSelectionDialogProc, (LPARAM)&romSelectionDialogData );
+	*pOutBytesWrittenToUncompressBuffer = romSelectionDialogData.bytesWrittenToUncompressedBuffer;
+
+    return dialogResult;
+}
+
+Win32RomSelectionWindowResult loadRomFromZipArchiveUsingSelectionWindow( uint8_t* pUncompressBuffer, uint32_t* pOutBytesWrittenToUncompressBuffer, HWND pRomSelectionWindowParent, const ZipArchive* pZipArchive )
+{
+	return createZipArchiveRomSelectionDisplay( pUncompressBuffer, pOutBytesWrittenToUncompressBuffer, pRomSelectionWindowParent, pZipArchive );
+}
+
+bool8_t loadRomFile( Win32ApplicationContext* pContext, const char* pRomPath )
+{	
+	char fixedRomPath[ MAX_PATH ];
+	strcpy_s( fixedRomPath, sizeof( fixedRomPath ), pRomPath );
+	char* pFixedRomPath = fixRomFileName( fixedRomPath );
+
+	Win32FileMapping romFileMapping;
+	if( mapFileForReading( &romFileMapping, pFixedRomPath ) == 0 )
+	{
+		setUserMessage( &pContext->userMessage, "Can't map rom" );
+		return 0;
+	}
+
+	bool8_t useFileMapping = 1u;
+	bool8_t foundValidRom = 0u;
+	uint32_t uncompressedRomDataSizeInBytes = 0u;
+	uint8_t* pUncompressedRomData = pContext->pUncompressBuffer;
+	if( isGBRomData( romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+	{
+		foundValidRom = 1u;
+		useFileMapping = 1u;
+		goto loadRom;
+	}
+
+	{
+		ZipArchive zipArchive;
+		if( openZipArchive( &zipArchive, romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+		{
+			if( zipArchive.pEocd->centralDirRecordCount == 0u )
+			{
+				setUserMessage( &pContext->userMessage, "No file in zip" );
+				return 0;
+			}
+
+			const uint32_t romCount = countRomsInZipArchive( &zipArchive );
+			if( romCount == 1u )
+			{
+				if( loadFirstRomFromZipArchive( pUncompressedRomData, &uncompressedRomDataSizeInBytes, &zipArchive ) )
+				{
+					foundValidRom = 1u;
+					goto loadCompressedRom;
+				}
+			}
+			else
+			{
+				const Win32RomSelectionWindowResult selectionWindowResult = loadRomFromZipArchiveUsingSelectionWindow( pUncompressedRomData, &uncompressedRomDataSizeInBytes, pContext->pMainWindowHandle, &zipArchive );
+				if( selectionWindowResult == Win32RomSelectionWindowResult::RomLoadedSuccessfully )
+				{
+					foundValidRom = 1u;
+					goto loadCompressedRom;
+				}
+				else if( selectionWindowResult == Win32RomSelectionWindowResult::Aborted )
+				{
+					return 0u;
+				}
+			}
+		}
+	}
+
+	{
+		GZipData gzipData;
+		if( openGZipData( &gzipData, romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+		{
+			if( !gzipData.flags.FNAME )
+			{
+				setUserMessage( &pContext->userMessage, "No file in gzip" );
+				return 0;
+			}
+
+			uncompressGZipData( &gzipData, pUncompressedRomData, &uncompressedRomDataSizeInBytes, gbMaxRomSizeInBytes );
+			if( isGBRomData( pUncompressedRomData, uncompressedRomDataSizeInBytes ) )
+			{
+				foundValidRom = 1u;
+				goto loadCompressedRom;
+			}
+		}
+	}
+
+loadCompressedRom:
+	useFileMapping = 0u;
+
+loadRom:
+	if( !foundValidRom )
+	{
+		setUserMessage( &pContext->userMessage, "invalid file" );
+		return 0;
+	}
+
+	const uint8_t* pRomData = useFileMapping ? romFileMapping.pFileBaseAddress : pUncompressedRomData;
+	const GBRomHeader gbRomHeader = getGBRomHeader( pRomData );
+
+	char romBaseFileName[ MAX_PATH ];
+	getRomBaseFileName( romBaseFileName, sizeof( romBaseFileName ), pFixedRomPath );
+	CompiletimeAssert( sizeof( romBaseFileName ) == sizeof( Win32EmulatorContext::romBaseFileName ) );
+	
+	const uint32_t romBaseFileNameLength = castSizeToUint32( strlen( romBaseFileName ) );
+
+	if( useFileMapping )
+	{
+		if( !loadRomData( pContext, romBaseFileName, romBaseFileNameLength,  romFileMapping.pFileBaseAddress, romFileMapping.fileSizeInBytes ) )
+		{
+			unmapFileMapping( &romFileMapping );
+			return 0;
+		}
+		else
+		{
+			Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
+			pEmulatorContext->romMapping = romFileMapping;
+			return 1;
+		}
+	}
+	{
+		if( !loadRomData( pContext, romBaseFileName, romBaseFileNameLength, pContext->pUncompressBuffer, uncompressedRomDataSizeInBytes ) )
+		{
+			return 0;
+		}
+	}
+
+	return 1;
 }
 
 void openRomFile( Win32ApplicationContext* pContext )
@@ -862,13 +1291,12 @@ void openRomFile( Win32ApplicationContext* pContext )
 	char romPath[MAX_PATH] = { 0 };
 	OPENFILENAMEA parameters = {};
 	parameters.lStructSize 		= sizeof(OPENFILENAMEA);
-	parameters.hwndOwner   		= pContext->pWindowHandle;
-	parameters.lpstrFilter		= "GameBoy Rom (*.gb)\0*.gb\0GameBoy Color Rom (*.gbc)\0*.gbc\0\0";
+	parameters.hwndOwner   		= pContext->pMainWindowHandle;
+	parameters.lpstrFilter		= "All (.gb;.gbc;.zip)\0*.gb;*.gbc;*.zip\0GameBoy Rom (.gb)\0*.gb\0GameBoy Color Rom (.gbc)\0*.gbc\0Rom Archive (.zip)\0*.zip\0\0";
 	parameters.lpstrFile 		= romPath;
 	parameters.nMaxFile			= sizeof( romPath );
 	parameters.lpstrTitle		= "Load GameBoy/GameBoy Color rom file.";
 	parameters.Flags			= OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-	parameters.lpstrDefExt		= "gb";
 
 	const BOOL result = w32GetOpenFileNameA( &parameters );
 	if( result == FALSE )
@@ -909,7 +1337,7 @@ void setFrameBufferScale( Win32ApplicationContext* pContext, uint8_t scale )
 		pContext->windowWidth  = windowWidth;
 		pContext->windowHeight = windowHeight;
 
-		SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, 
+		SetWindowPos( pContext->pMainWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, 
 			pContext->windowWidth, pContext->windowHeight, 0u );
 	}
 	
@@ -923,12 +1351,12 @@ void enableFullscreen( Win32ApplicationContext* pContext )
 	const LONG fullscreenWindowStyle 	=  pContext->windowStyle & ~( WS_CAPTION | WS_THICKFRAME );
 	const LONG fullscreenWindowStyleEx 	=  pContext->windowStyleEx & ~( WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE ) ;
 
-	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   fullscreenWindowStyle );
-	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, fullscreenWindowStyleEx );
+	SetWindowLongA( pContext->pMainWindowHandle, GWL_STYLE,   fullscreenWindowStyle );
+	SetWindowLongA( pContext->pMainWindowHandle, GWL_EXSTYLE, fullscreenWindowStyleEx );
 
 	//FK: Remove menu temporarily when entering fullscreen
-	SetMenu( pContext->pWindowHandle, nullptr );
-	SetWindowPos( pContext->pWindowHandle, HWND_TOP, pContext->monitorPosX, pContext->monitorPosY, 
+	SetMenu( pContext->pMainWindowHandle, nullptr );
+	SetWindowPos( pContext->pMainWindowHandle, HWND_TOP, pContext->monitorPosX, pContext->monitorPosY, 
 		pContext->monitorWidth, pContext->monitorHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING );
 
 	setFrameBufferScale( pContext, pContext->fullscreenFrameBufferScale );
@@ -936,15 +1364,15 @@ void enableFullscreen( Win32ApplicationContext* pContext )
 
 void disableFullscreen( Win32ApplicationContext* pContext )
 {
-	SetWindowLongA( pContext->pWindowHandle, GWL_STYLE,   pContext->windowStyle );
-	SetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE, pContext->windowStyleEx );
+	SetWindowLongA( pContext->pMainWindowHandle, GWL_STYLE,   pContext->windowStyle );
+	SetWindowLongA( pContext->pMainWindowHandle, GWL_EXSTYLE, pContext->windowStyleEx );
 
 	//FK: Also clear maximized flag when leaving fullscreen for a better UX
 	pContext->windowMaximized = 0;
 	pContext->fullscreen = 0;
 
 	setFrameBufferScale( pContext, pContext->menuFrameBufferScale );
-	SetMenu( pContext->pWindowHandle, pContext->pMenuBar );
+	SetMenu( pContext->pMainWindowHandle, pContext->pMenuBar );
 }
 
 void hideUserMessage( Win32ApplicationContext* pContext )
@@ -1059,7 +1487,7 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 			break;
 
 		case gbMenuClose:
-			PostMessage( pContext->pWindowHandle, WM_CLOSE, 0u, 0u );
+			PostMessage( pContext->pMainWindowHandle, WM_CLOSE, 0u, 0u );
 			break;
 
 		case gbMenuFullscreen:
@@ -1118,7 +1546,7 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 void handleWindowResize( Win32ApplicationContext* pContext, WPARAM wparam )
 {
 	RECT clientRect = {0};
-	GetClientRect(pContext->pWindowHandle, &clientRect);
+	GetClientRect(pContext->pMainWindowHandle, &clientRect);
 
 	pContext->windowWidth  = clientRect.right - clientRect.left;
 	pContext->windowHeight = clientRect.bottom - clientRect.top;
@@ -1140,7 +1568,7 @@ void handleWindowResize( Win32ApplicationContext* pContext, WPARAM wparam )
 			const uint32_t windowWidth = windowRect.right - windowRect.left;
 			const uint32_t windowHeight = windowRect.bottom - windowRect.top;
 
-			SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
+			SetWindowPos( pContext->pMainWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, windowWidth, windowHeight, 0u );
 		}
 		else if( wparam == SIZE_MAXIMIZED )
 		{
@@ -1165,15 +1593,7 @@ void handleDropFiles( Win32ApplicationContext* pContext, WPARAM wparam )
 		return;
 	}
 
-	char* pFileExtension = strrchr( filePathBuffer, '.' );
-	if( strcmp( pFileExtension, ".gb") != 0 &&
-		strcmp( pFileExtension, ".gbc" ) != 0 )
-	{
-		setUserMessage( &pContext->userMessage, "Invalid rom" );
-		return;	
-	}
-
-	loadRomFile( pContext, filePathBuffer );
+	loadRomFile( pContext, (const char*)filePathBuffer );
 	w32DragFinish( pDropInfo );
 }
 
@@ -1193,6 +1613,25 @@ void handleDeviceChanged( Win32ApplicationContext* pContext, WPARAM wparam )
 		{
 			setUserMessage( &pContext->userMessage, "Pad removed!");
 		}
+	}
+}
+
+void handleEnterSizeMove( Win32ApplicationContext* pContext )
+{
+	SetTimer( pContext->pMainWindowHandle, gbPaintTimerId, 1u, nullptr );
+}
+
+void handleExitSizeMove( Win32ApplicationContext* pContext )
+{
+	KillTimer( pContext->pMainWindowHandle, gbPaintTimerId );
+} 
+
+void handleTimer( Win32ApplicationContext* pContext, WPARAM wparam )
+{
+	if( wparam == gbPaintTimerId )
+	{
+		//FK: Force WM_PAINT
+		InvalidateRect( pContext->pMainWindowHandle, nullptr, FALSE );
 	}
 }
 
@@ -1219,13 +1658,13 @@ void handleLeftButtonDown( Win32ApplicationContext* pContext, LPARAM lparam )
 	mousePos.y = ( ( lparam >> 16 ) & 0xFFFF );
 
 	RECT windowRect = {};
-	GetWindowRect(pContext->pWindowHandle, &windowRect);
+	GetWindowRect(pContext->pMainWindowHandle, &windowRect);
 
-	ClientToScreen(pContext->pWindowHandle, &mousePos);
+	ClientToScreen(pContext->pMainWindowHandle, &mousePos);
 	pContext->leftMouseDownDeltaX = (int16_t)(windowRect.left - mousePos.x);
 	pContext->leftMouseDownDeltaY = (int16_t)(windowRect.top  - mousePos.y);
 
-	SetCapture( pContext->pWindowHandle );
+	SetCapture( pContext->pMainWindowHandle );
 }
 
 void handleRightButtonDown( Win32ApplicationContext* pContext, LPARAM lparam )
@@ -1234,8 +1673,8 @@ void handleRightButtonDown( Win32ApplicationContext* pContext, LPARAM lparam )
 	mousePos.x = ( ( lparam >>  0 ) & 0xFFFF );
 	mousePos.y = ( ( lparam >> 16 ) & 0xFFFF );
 
-	ClientToScreen( pContext->pWindowHandle, &mousePos );
-	TrackPopupMenu( pContext->pContextMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON | TPM_VERPOSANIMATION, mousePos.x, mousePos.y, 0, pContext->pWindowHandle, nullptr );
+	ClientToScreen( pContext->pMainWindowHandle, &mousePos );
+	TrackPopupMenu( pContext->pContextMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON | TPM_VERPOSANIMATION, mousePos.x, mousePos.y, 0, pContext->pMainWindowHandle, nullptr );
 }
 
 void handleLeftButtonUp( Win32ApplicationContext* pContext )
@@ -1273,8 +1712,8 @@ void handleMouseMove( Win32ApplicationContext* pContext, LPARAM lparam )
 	const uint16_t windowWidth 	= (uint16_t)(windowRect.right - windowRect.left);
 	const uint16_t windowHeight = (uint16_t)(windowRect.bottom - windowRect.top);
 
-	ClientToScreen(pContext->pWindowHandle, &pos);
-	MoveWindow(pContext->pWindowHandle, pos.x, pos.y, windowWidth, windowHeight, TRUE);
+	ClientToScreen(pContext->pMainWindowHandle, &pos);
+	MoveWindow(pContext->pMainWindowHandle, pos.x, pos.y, windowWidth, windowHeight, TRUE);
 }
 
 void drawGBFrameBuffer( HDC pDeviceContext )
@@ -1284,11 +1723,11 @@ void drawGBFrameBuffer( HDC pDeviceContext )
 	glDrawArrays( GL_TRIANGLES, 0, 6 );
 }
 
-LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	uint8_t messageHandled = false;
-
+	bool8_t messageHandled = 0;
 	Win32ApplicationContext* pContext = (Win32ApplicationContext*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+
 	switch (message)
 	{
 	case WM_CLOSE:
@@ -1297,16 +1736,18 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 		writeSettingsToFile( &settings, pSettingsPath );
 
 		PostQuitMessage(0);
-		messageHandled = true;
+		messageHandled = 1;
 		break;
 	}
 
 	case WM_PAINT:
 	{
-		messageHandled = true;
+		messageHandled = 1;
 
 		PAINTSTRUCT ps;
 		HDC pDeviceContext = BeginPaint( hwnd, &ps );
+
+		//FK: TODO: Update Emulator...?
 		drawGBFrameBuffer( pDeviceContext );
 		w32SwapBuffers( pDeviceContext );
 		EndPaint( hwnd, &ps );
@@ -1319,6 +1760,18 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 
 	case WM_KILLFOCUS:
 		pContext->hasFocus = 0;
+		break;
+
+	case WM_TIMER:
+		handleTimer( pContext, wparam );
+		break;
+
+	case WM_ENTERSIZEMOVE:
+		handleEnterSizeMove( pContext );
+		break;
+
+	case WM_EXITSIZEMOVE:
+		handleExitSizeMove( pContext );
 		break;
 
 	case WM_LBUTTONDOWN:
@@ -1345,10 +1798,6 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 		handleWindowMinMaxInfo( lparam );
 		break;
 
-	case WM_SYSKEYDOWN:
-		printf("syskeydown\n");
-		break;
-
 	case WM_COMMAND:
 		handleWindowCommand( pContext, wparam );
 		break;
@@ -1370,15 +1819,15 @@ LRESULT CALLBACK K15_WNDPROC(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 		break;
 	}
 
-	if (messageHandled == false)
+	if (messageHandled == 0)
 	{
 		return DefWindowProc(hwnd, message, wparam, lparam);
 	}
 
-	return false;
+	return 0;
 }
 
-uint8_t setupWindow( Win32ApplicationContext* pContext )
+bool8_t setupWindowClasses( Win32ApplicationContext* pContext )
 {
 	constexpr DWORD windowStyle = WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME;
 
@@ -1391,38 +1840,26 @@ uint8_t setupWindow( Win32ApplicationContext* pContext )
 	pContext->windowHeight 	= windowRect.bottom - windowRect.top;
 	pContext->windowStyle	= windowStyle;
 
-	WNDCLASSA wndClass 		= {0};
-	wndClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW | CS_DBLCLKS;
-	wndClass.hInstance 		= pContext->pInstanceHandle;
-	wndClass.lpszClassName 	= "K15_Win32Template";
-	wndClass.lpfnWndProc 	= K15_WNDPROC;
-	wndClass.hCursor 		= LoadCursor(NULL, IDC_ARROW);
-	RegisterClassA(&wndClass);
+	strcpy_s( pContext->mainWindowClass, "MainEmulatorWindow" );
 
-	pContext->pWindowHandle = CreateWindowExA( WS_EX_ACCEPTFILES,
-		"K15_Win32Template", "K15 GB Emulator", 
-		windowStyle, CW_USEDEFAULT, CW_USEDEFAULT,
-		pContext->windowWidth, pContext->windowHeight, 
-		0, 0, pContext->pInstanceHandle, 0);
+	WNDCLASSA mainWindowClass 		= {};
+	mainWindowClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW | CS_DBLCLKS;
+	mainWindowClass.hInstance 		= pContext->pInstanceHandle;
+	mainWindowClass.lpszClassName 	= pContext->mainWindowClass;
+	mainWindowClass.lpfnWndProc 	= MainWindowProc;
+	mainWindowClass.hCursor 		= LoadCursor(NULL, IDC_ARROW);
 
-	if( pContext->pWindowHandle == INVALID_HANDLE_VALUE )
-	{
-		MessageBoxA(0, "Error creating Window.\n", "Error!", 0);
-		return 0;
-	}
+	RegisterClassA(&mainWindowClass);
 
-	pContext->pDeviceContext = GetDC( pContext->pWindowHandle );
-	updateMonitorSettings( pContext );
-
-	return 1;
+	return 1u;
 }
 
-uint8_t setupContextMenu( Win32ApplicationContext* pContext )
+bool8_t setupContextMenu( Win32ApplicationContext* pContext )
 {
 	pContext->pContextMenu = CreatePopupMenu();
 	if( pContext->pContextMenu == nullptr )
 	{
-		return 0;
+		return 0u;
 	}
 
 	uint8_t result = 0;
@@ -1435,7 +1872,7 @@ uint8_t setupContextMenu( Win32ApplicationContext* pContext )
 	return result;
 }
 
-uint8_t setupMenu( Win32ApplicationContext* pContext )
+bool8_t setupMenu( Win32ApplicationContext* pContext )
 {
 	pContext->pFileMenuItems 	= CreateMenu();
 	pContext->pViewMenuItems 	= CreateMenu();
@@ -1452,7 +1889,7 @@ uint8_t setupMenu( Win32ApplicationContext* pContext )
 		return 0;	
 	}
 
-	uint8_t result = 0;
+	bool8_t result = 0;
 
 	//FK: File menu
 	result |= AppendMenuA( pContext->pFileMenuItems, MF_STRING, gbMenuOpenRom, "&Open Rom..." );
@@ -1497,7 +1934,7 @@ uint8_t setupMenu( Win32ApplicationContext* pContext )
 	return result;
 }
 
-void loadXInputFunctionPointers()
+bool8_t loadXInputFunctionPointers()
 {
 	HMODULE pXinputModule = getLibraryHandle("xinput1_4.dll");
 	if( pXinputModule == nullptr )
@@ -1507,11 +1944,13 @@ void loadXInputFunctionPointers()
 
 	if( pXinputModule == nullptr )
 	{
-		return;
+		return 0;
 	}
 
 	w32XInputGetState = (PFNXINPUTGETSTATEPROC)GetProcAddress( pXinputModule, "XInputGetState");
 	RuntimeAssert(w32XInputGetState != nullptr);
+
+	return 1;
 }
 
 void loadWin32FunctionPointers()
@@ -1532,14 +1971,14 @@ void loadWin32FunctionPointers()
 	const HMODULE pNtModule = getLibraryHandle("ntdll.dll");
 	RuntimeAssert( pNtModule != nullptr );
 
-	w32ChoosePixelFormat = (PFNCHOOSEPIXELFORMATPROC)GetProcAddress( pGDIModule, "ChoosePixelFormat" );
-	w32SetPixelFormat	 = (PFNSETPIXELFORMATPROC)GetProcAddress( pGDIModule, "SetPixelFormat" );
-	w32SwapBuffers		 = (PFNSWAPBUFFERSPROC)GetProcAddress( pGDIModule, "SwapBuffers");
-	w32GetOpenFileNameA  = (PFNGETOPENFILENAMEAPROC)GetProcAddress( pComDlg32Module, "GetOpenFileNameA" );
-	w32PathStripPathA	 = (PFNPATHSTRIPPATHAPROC)GetProcAddress( pShlwapiModule, "PathStripPathA" );
-	w32DragQueryFileA	 = (PFNDRAGQUERYFILEAPROC)GetProcAddress( pShell32Module, "DragQueryFileA" );
-	w32DragFinish		 = (PFNDRAGFINISHPROC)GetProcAddress( pShell32Module, "DragFinish" );
-	w32NtDelayExecution	 = (PFNNTDELAYEXECUTIONPROC)GetProcAddress( pNtModule, "NtDelayExecution" );
+	w32ChoosePixelFormat 	= (PFNCHOOSEPIXELFORMATPROC)GetProcAddress( pGDIModule, "ChoosePixelFormat" );
+	w32SetPixelFormat	 	= (PFNSETPIXELFORMATPROC)GetProcAddress( pGDIModule, "SetPixelFormat" );
+	w32SwapBuffers		 	= (PFNSWAPBUFFERSPROC)GetProcAddress( pGDIModule, "SwapBuffers");
+	w32GetOpenFileNameA  	= (PFNGETOPENFILENAMEAPROC)GetProcAddress( pComDlg32Module, "GetOpenFileNameA" );
+	w32PathStripPathA	 	= (PFNPATHSTRIPPATHAPROC)GetProcAddress( pShlwapiModule, "PathStripPathA" );
+	w32DragQueryFileA	 	= (PFNDRAGQUERYFILEAPROC)GetProcAddress( pShell32Module, "DragQueryFileA" );
+	w32DragFinish		 	= (PFNDRAGFINISHPROC)GetProcAddress( pShell32Module, "DragFinish" );
+	w32NtDelayExecution	 	= (PFNNTDELAYEXECUTIONPROC)GetProcAddress( pNtModule, "NtDelayExecution" );
 
 	RuntimeAssert( w32ChoosePixelFormat != nullptr );
 	RuntimeAssert( w32SetPixelFormat != nullptr );
@@ -1551,7 +1990,7 @@ void loadWin32FunctionPointers()
 	RuntimeAssert( w32NtDelayExecution != nullptr );
 }
 
-void generateOpenGLShaders( Win32ApplicationContext* pContext  )
+uint8_t generateOpenGLShaders( Win32ApplicationContext* pContext  )
 {
 	constexpr char vertexShaderSource[] = R"(
 		#version 410
@@ -1585,8 +2024,16 @@ void generateOpenGLShaders( Win32ApplicationContext* pContext  )
 
 	pContext->gameboyFrameBufferShader 	= glCreateProgram();
 
-	compileOpenGLShader( vertexShader, vertexShaderSource, sizeof( vertexShaderSource ) );
-	compileOpenGLShader( pixelShader, pixelShaderSource, sizeof( pixelShaderSource ) );
+	char logBuffer[1024];
+	if( !compileOpenGLShader( vertexShader, vertexShaderSource, sizeof( vertexShaderSource ), logBuffer, sizeof(logBuffer) ) )
+	{
+		return 0;
+	}
+
+	if( !compileOpenGLShader( pixelShader, pixelShaderSource, sizeof( pixelShaderSource ), logBuffer, sizeof(logBuffer) ) )
+	{
+		return 0;
+	}
 
 	glAttachShader( pContext->gameboyFrameBufferShader, vertexShader );
 	glAttachShader( pContext->gameboyFrameBufferShader, pixelShader );
@@ -1597,27 +2044,41 @@ void generateOpenGLShaders( Win32ApplicationContext* pContext  )
 	glDeleteShader( pixelShader );
 
 	glUseProgram( pContext->gameboyFrameBufferShader );
+
+	return 1;
 }
 
-void createOpenGLContext( Win32ApplicationContext* pContext )
+bool8_t createOpenGLContext( Win32ApplicationContext* pContext )
 {
 	const HMODULE pOpenGL32Module = getLibraryHandle("opengl32.dll");
-
+	RuntimeAssert( pOpenGL32Module != nullptr );
+	
 	loadWin32OpenGLFunctionPointers( pOpenGL32Module );
-	createOpenGLDummyContext( pContext->pWindowHandle, pContext->pDeviceContext );
+	if( !createOpenGLDummyContext( pContext->pMainWindowHandle, pContext->pDeviceContext ) )
+	{
+		return 0;
+	}
+
 	loadWGLOpenGLFunctionPointers();
 	
-	pContext->pOpenGLContext = createOpenGL4Context( pContext->pWindowHandle, pContext->pDeviceContext );
-	
+	pContext->pOpenGLContext = createOpenGL4Context( pContext->pMainWindowHandle, pContext->pDeviceContext );
+	if( pContext->pOpenGLContext == nullptr )
+	{
+		return 0;
+	}
+
 	loadOpenGL4FunctionPointers();
 
-	constexpr uint8_t enableVsync = 0;
+	constexpr bool8_t enableVsync = 0;
+	
 	//FK: Try to disable v-sync...
 	w32glSwapIntervalEXT( enableVsync );
 
 	//FK: 	Since vsync behavior can be overriden by the gpu driver, we have to
 	//		check if vsync is actually disabled or not
 	pContext->vsyncEnabled = w32glGetSwapIntervalEXT();
+
+	return 1;
 }
 
 void generateOpenGLTextures(Win32ApplicationContext* pContext)
@@ -1632,11 +2093,36 @@ void generateOpenGLTextures(Win32ApplicationContext* pContext)
 	glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGB8, gbHorizontalResolutionInPixels, gbVerticalResolutionInPixels);
 }
 
-uint8_t setupUi( Win32ApplicationContext* pContext )
+bool8_t setupMainWindow( Win32ApplicationContext* pContext )
 {
-	if( setupWindow( pContext ) == 0 )
+	pContext->pMainWindowHandle = CreateWindowExA( WS_EX_ACCEPTFILES,
+		pContext->mainWindowClass, "K15 GB Emulator", 
+		pContext->windowStyle, CW_USEDEFAULT, CW_USEDEFAULT,
+		pContext->windowWidth, pContext->windowHeight, 
+		0, 0, pContext->pInstanceHandle, 0);
+
+	if( pContext->pMainWindowHandle == nullptr )
+	{
+		MessageBoxA(0, "Error creating Window.\n", "Error!", 0);
+		return 0u;
+	}
+
+	pContext->pDeviceContext = GetDC( pContext->pMainWindowHandle );
+	updateMonitorSettings( pContext );
+
+	return 1u;
+}
+
+bool8_t setupUi( Win32ApplicationContext* pContext )
+{
+	if( setupWindowClasses( pContext ) == 0 )
 	{
 		//FK: TODO: User friendly error message
+		return 0;
+	}
+
+	if( setupMainWindow( pContext ) == 0 )
+	{
 		return 0;
 	}
 
@@ -1649,22 +2135,36 @@ uint8_t setupUi( Win32ApplicationContext* pContext )
 	{
 		return 0;
 	}
-	
-	SetWindowLongPtrA( pContext->pWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
-	ShowWindow(pContext->pWindowHandle, SW_SHOW);
 
-	pContext->windowStyle 	= GetWindowLongA( pContext->pWindowHandle, GWL_STYLE );
-	pContext->windowStyleEx = GetWindowLongA( pContext->pWindowHandle, GWL_EXSTYLE );
+	SetWindowLongPtrA( pContext->pMainWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
+	ShowWindow(pContext->pMainWindowHandle, SW_SHOW);
 
-	SetMenu( pContext->pWindowHandle, pContext->pMenuBar );
+	pContext->windowStyle 	= GetWindowLongA( pContext->pMainWindowHandle, GWL_STYLE );
+	pContext->windowStyleEx = GetWindowLongA( pContext->pMainWindowHandle, GWL_EXSTYLE );
+
+	SetMenu( pContext->pMainWindowHandle, pContext->pMenuBar );
 
 	return 1;
 }
 
-void setupOpenGL( Win32ApplicationContext* pContext )
+bool8_t setupOpenGL( Win32ApplicationContext* pContext )
 {
-	createOpenGLContext( pContext );
-	generateOpenGLShaders( pContext );
+	//FK: at address 0x200000000 for better debugging of memory errors (eg: access violation > 0x200000000 indicated emulator instance memory is at fault)
+	pContext->pGameboyRGBVideoBuffer = (uint8_t*)VirtualAlloc( ( LPVOID )0x200000000, (gbVerticalResolutionInPixels*gbHorizontalResolutionInPixels*3), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
+	if( pContext->pGameboyRGBVideoBuffer == nullptr )
+	{
+		return 0;
+	}
+
+	if( !createOpenGLContext( pContext ) )
+	{
+		return 0;
+	}
+
+	if(! generateOpenGLShaders( pContext ) )
+	{
+		return 0;
+	}
 
 	constexpr size_t gameboyFrameVertexBufferSizeInBytes = sizeof(float) * 4 * 6;
 
@@ -1687,13 +2187,12 @@ void setupOpenGL( Win32ApplicationContext* pContext )
 	glEnableVertexAttribArray(1);
 
 	updateGameboyFrameVertexBuffer( pContext );
-
-	//FK: at address 0x200000000 for better debugging of memory errors (eg: access violation > 0x200000000 indicated emulator instance memory is at fault)
-	pContext->pGameboyRGBVideoBuffer = (uint8_t*)VirtualAlloc( ( LPVOID )0x200000000, (gbVerticalResolutionInPixels*gbHorizontalResolutionInPixels*3), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
 	generateOpenGLTextures( pContext );
+
+	return 1;
 }
 
-uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32InputType dominantInputType, const uint8_t connectedXInputControllerCount )
+bool8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32InputType dominantInputType, const uint8_t connectedXInputControllerCount )
 {
 	if( connectedXInputControllerCount == 0 )
 	{
@@ -1730,9 +2229,9 @@ uint8_t queryControllerInput( GBEmulatorJoypadState* pJoypadState, const Win32In
 	return 1;
 }
 
-uint8_t queryKeyboardInput( GBEmulatorJoypadState* pJoypadState, const int* pDigipadKeyboardMappings, const int* pActionButtonKeyboardMappings, const Win32InputType dominantInputType )
+bool8_t queryKeyboardInput( GBEmulatorJoypadState* pJoypadState, const int* pDigipadKeyboardMappings, const int* pActionButtonKeyboardMappings, const Win32InputType dominantInputType )
 {
-	uint8_t keyboardPressed = 0;
+	bool8_t keyboardPressed = 0;
 	GBEmulatorJoypadState joypadState;
 	for( size_t keyboardMappingIndex = 0u; keyboardMappingIndex < ( size_t )Win32EmulatorKeyboardDigipadBindings::COUNT; ++keyboardMappingIndex )
 	{
@@ -1774,20 +2273,13 @@ void setDefaultKeyboardBinding( int* pDigipadMappings, int* pActionButtonMapping
 	pActionButtonMappings[(uint8_t)Win32EmulatorKeyboardActionButtonBindings::SELECT] 	= VK_SPACE;
 }
 
-uint8_t setupEmulator( Win32EmulatorContext* pContext )
+bool8_t setupEmulator( Win32EmulatorContext* pContext )
 {
 	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorMemoryRequirementsInBytes();
 
 	//FK: at address 0x100000000 for better debugging of memory errors (eg: access violation > 0x100000000 indicated emulator instance memory is at fault)
 	uint8_t* pEmulatorInstanceMemory = (uint8_t*)VirtualAlloc( ( LPVOID )0x100000000, emulatorMemorySizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
 	if( pEmulatorInstanceMemory == nullptr )
-	{
-		return 0;
-	}
-
-	constexpr size_t gbFrameBufferSizeInBytes = calculateGBEmulatorFrameBuffersSizeInBytes();
-	uint8_t* pEmulatorBackBufferMemory = (uint8_t*)VirtualAlloc( nullptr, gbFrameBufferSizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
-	if( pEmulatorBackBufferMemory == nullptr )
 	{
 		return 0;
 	}
@@ -1931,11 +2423,11 @@ void applySettings( const Win32Settings* pSettings, Win32ApplicationContext* pCo
 	pContext->windowPosY = pSettings->windowPosY;
 	setFrameBufferScale( pContext, pSettings->scaleFactor );
 
-	SetWindowPos( pContext->pWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, 0u, 0u, SWP_NOSIZE );
+	SetWindowPos( pContext->pMainWindowHandle, nullptr, pContext->windowPosX, pContext->windowPosY, 0u, 0u, SWP_NOSIZE );
 
 	if( pSettings->maximized )
 	{
-		ShowWindow( pContext->pWindowHandle, SW_MAXIMIZE );
+		ShowWindow( pContext->pMainWindowHandle, SW_MAXIMIZE );
 	}
 
 	if( pSettings->fullscreen )
@@ -1949,7 +2441,7 @@ void applySettings( const Win32Settings* pSettings, Win32ApplicationContext* pCo
 	}
 }
 
-uint8_t verifySettings( const Win32Settings* pSettings, Win32ApplicationContext* pContext )
+bool8_t verifySettings( const Win32Settings* pSettings, Win32ApplicationContext* pContext )
 {
 	if( pSettings->stateSlot > 3 || pSettings->stateSlot == 0 )
 	{
@@ -1989,7 +2481,7 @@ void updateUserMessage( Win32UserMessage* pUserMessage, const uint32_t deltaTime
 
 void runVsyncMainLoop( Win32ApplicationContext* pContext )
 {
-	uint8_t loopRunning = true;
+	bool8_t loopRunning = true;
 	MSG msg = {0};
 
 	Win32EmulatorContext* pEmulatorContext = &pContext->emulatorContext;
@@ -2053,7 +2545,7 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 
 void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 {
-	uint8_t loopRunning = true;
+	bool8_t loopRunning = true;
 	MSG msg = {0};
 
 	LARGE_INTEGER start;
@@ -2145,10 +2637,20 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	Win32ApplicationContext appContext;
 	appContext.pInstanceHandle = hInstance;
 
-	allocateDebugConsole();
+	//FK: Allocate buffer for largest possible rom as an uncompress buffer in case a compressed archive is loaded
+	appContext.pUncompressBuffer = (uint8_t*)VirtualAlloc( nullptr, gbMaxRomSizeInBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
+	if( appContext.pUncompressBuffer == nullptr )
+	{
+		return 1;
+	}
 
 	loadWin32FunctionPointers();
-	loadXInputFunctionPointers();
+	
+	if( !loadXInputFunctionPointers() )
+	{
+		DebugBreak();
+		return 1;
+	}
 
 	if( !setupUi( &appContext ) )
 	{
@@ -2156,9 +2658,18 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		return 1;
 	}
 
-	setupOpenGL( &appContext );
-	setupEmulator( &appContext.emulatorContext );
-	
+	if( !setupOpenGL( &appContext ) )
+	{
+		DebugBreak();
+		return 1;
+	}
+
+	if( !setupEmulator( &appContext.emulatorContext ) )
+	{
+		DebugBreak();
+		return 1;
+	}
+
 	Win32GBEmulatorArguments args;
 	parseCommandLineArguments( &args, lpCmdLine );
 
