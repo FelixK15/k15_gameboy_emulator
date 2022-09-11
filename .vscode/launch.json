@@ -9,7 +9,11 @@
             "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/win32/build_debug/k15_win32_cl_gb_emulator.exe",
-            
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/win32/build_debug/",
+            "environment": [],
+            "preLaunchTask": "Build K15 GB Emulator - DEBUG",
+
             //#### TESTS
             //### MOONEYE
             //## PPU ACCEPTANCE
@@ -148,10 +152,6 @@
             //"args": [ "-r", "../../roms/Castlevania - The Adventure (Europe).gb" ],                 //Works, 16x8 Sprite issue
             //"args": [ "-r", "../../roms/Donkey Kong Land (USA, Europe) (SGB Enhanced).gb" ],        //Works but weird palette
             //"args": [ "-r", "../../roms/Donkey Kong Land III (USA, Europe) (SGB Enhanced).gb" ],    //Works but weird palette
-            
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/win32/build_debug/",
-            "environment": [],
         },
         {
             "name": "(Win32) Launch Release",
@@ -162,6 +162,7 @@
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/win32/build_debug/",
             "environment": [],
+            "preLaunchTask": "Build K15 GB Emulator - RELEASE"
         },
         {
             "name": "convert bitmap to c array",

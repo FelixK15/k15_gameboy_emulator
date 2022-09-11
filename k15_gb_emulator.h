@@ -1,6 +1,6 @@
 #include "stdint.h"
 
-#define K15_ENABLE_EMULATOR_DEBUG_FEATURES      0
+#define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
 #define K15_BREAK_ON_ILLEGAL_INSTRUCTION        1
 
@@ -72,6 +72,7 @@ static constexpr char       gbStateFileExtension[]                  = ".k15_gb_s
 static constexpr uint32_t   gbCyclesPerFrame                        = 70224u;
 static constexpr uint32_t   gbSerialClockCyclesPerBitTransfer       = 512u;
 static constexpr uint32_t   gbEmulatorFrameRate                     = 60u;
+static constexpr uint16_t   gbOpcodeHistoryBufferCapacity           = 1024u;
 static constexpr uint8_t    gbOAMSizeInBytes                        = 0x9Fu;
 static constexpr uint8_t    gbDMACycleCount                         = 160u;
 static constexpr uint8_t    gbSpriteHeight                          = 16u;
@@ -83,7 +84,6 @@ static constexpr uint8_t    gbHorizontalResolutionInTiles           = gbHorizont
 static constexpr uint8_t    gbVerticalResolutionInTiles             = gbVerticalResolutionInPixels / gbTileResolutionInPixels;
 static constexpr uint8_t    gbBackgroundTileCount                   = 32u; //FK: BG maps are 32x32 tiles
 static constexpr uint8_t    gbTileSizeInBytes                       = 16u; //FK: 8x8 pixels with 2bpp
-static constexpr uint8_t    gbOpcodeHistoryBufferCapacity           = 255u;
 static constexpr uint8_t    gbObjectAttributeCapacity               = 40u;
 static constexpr uint8_t    gbSpritesPerScanline                    = 10u; //FK: the hardware allowed no more than 10 sprites per scanline
 static constexpr uint8_t    gbFrameBufferScanlineSizeInBytes        = gbHorizontalResolutionInPixels / 4;
@@ -523,7 +523,7 @@ struct GBEmulatorDebug
     uint8_t                     pauseAtBreakpoint       : 1;
 
     uint16_t                    breakpointAddress;
-    uint8_t                     opcodeHistorySize;
+    uint16_t                    opcodeHistorySize;
 };
 #endif
 
@@ -1416,6 +1416,18 @@ const char* findLastInString( const char* pString, uint32_t stringLength, const 
     }
 
     return nullptr;
+}
+
+char* convert8BitAddressToHexString( uint8_t value, char* pBuffer, size_t bufferLengthInBytes )
+{
+    sprintf_s( pBuffer, bufferLengthInBytes, "%02X", value );
+    return pBuffer;
+}
+
+char* convert16BitAddressToHexString( uint16_t value, char* pBuffer, size_t bufferLengthInBytes )
+{
+    sprintf_s( pBuffer, bufferLengthInBytes, "%04X", value );
+    return pBuffer;
 }
 
 bool8_t filePathHasRomFileExtension( const char* pFilePath, const uint16_t filePathLength )

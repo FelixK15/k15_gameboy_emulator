@@ -2,7 +2,8 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <commctrl.h>
+
+#include <CommCtrl.h>
 
 #define XINPUT_GAMEPAD_DPAD_UP          0x0001
 #define XINPUT_GAMEPAD_DPAD_DOWN        0x0002
@@ -50,6 +51,7 @@ typedef BOOL 		(WINAPI *PFNGETOPENFILENAMEAPROC)(OPENFILENAMEA*);
 typedef UINT 		(WINAPI *PFNDRAGQUERYFILEAPROC)(HDROP hDrop, UINT iFile, LPSTR lpszFile, UINT cch);
 typedef void 		(WINAPI *PFNDRAGFINISHPROC)(HDROP hDrop);
 typedef UINT		(WINAPI *PFNNTDELAYEXECUTIONPROC)(BOOLEAN Alertable, PLARGE_INTEGER DelayInterval);
+typedef BOOL		(WINAPI *PFNINITCOMMONCONTROLSEX)(const INITCOMMONCONTROLSEX*);
 
 PFNXINPUTGETSTATEPROC		w32XInputGetState 		= nullptr;
 PFNCHOOSEPIXELFORMATPROC 	w32ChoosePixelFormat 	= nullptr;
@@ -60,6 +62,7 @@ PFNPATHSTRIPPATHAPROC		w32PathStripPathA		= nullptr;
 PFNDRAGQUERYFILEAPROC		w32DragQueryFileA		= nullptr;
 PFNDRAGFINISHPROC			w32DragFinish			= nullptr;
 PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
+PFNINITCOMMONCONTROLSEX		w32InitCommonControlsEx	= nullptr;
 
 #define restrict_modifier __restrict
 
@@ -87,6 +90,9 @@ PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 
 constexpr float pi 		= 3.14159f;
 constexpr float twoPi 	= 6.28318f;
+
+constexpr char sMainWindowClassName[]				= "MainWindowClass";
+constexpr char sMemoryDebuggerWindowClassName[] 	= "MemoryDebuggerWindowClass";
 
 constexpr uint32_t gbMaxRomHistoryCount 	= 32u;
 
@@ -236,10 +242,15 @@ struct Win32RomSelectionDialogData
 	RomSourceType sourceType;
 };
 
+struct Win32MemoryDebuggerContext
+{
+	HWND pWindowHandle;
+};
+
 struct Win32ApplicationContext
 {
-	char 						mainWindowClass[64]								= {};
 	Win32EmulatorContext		emulatorContext									= {};
+	Win32MemoryDebuggerContext	memoryDebuggerContext 							= {};
 	Win32UserMessage			userMessage										= {};
 	HINSTANCE					pInstanceHandle									= nullptr;
 	HMONITOR					pMonitorHandle									= nullptr;
@@ -860,8 +871,8 @@ bool8_t loadRomData( Win32ApplicationContext* pContext, const char* pRomName, ui
 		return 0u;
 	}
 
-	strcpy_s( pContext->emulatorContext.romBaseFileName, sizeof( pContext->emulatorContext.romBaseFileName ), pRomName );
 	setUserMessage( &pContext->userMessage, "Rom loaded!");
+	strcpy_s( pContext->emulatorContext.romBaseFileName, sizeof( pContext->emulatorContext.romBaseFileName ), pRomName );
 
 	enableRomMenuItems( pContext );
 
@@ -1723,6 +1734,23 @@ void drawGBFrameBuffer( HDC pDeviceContext )
 	glDrawArrays( GL_TRIANGLES, 0, 6 );
 }
 
+LRESULT CALLBACK MemoryDebuggerWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+	bool8_t messageHandled = 0;
+	switch( message )
+	{
+		default:
+			break;
+	}
+
+	if( !messageHandled )
+	{
+		return DefWindowProcA(hwnd, message, wparam, lparam);
+	}
+
+	return 0;
+}
+
 LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	bool8_t messageHandled = 0;
@@ -1840,16 +1868,22 @@ bool8_t setupWindowClasses( Win32ApplicationContext* pContext )
 	pContext->windowHeight 	= windowRect.bottom - windowRect.top;
 	pContext->windowStyle	= windowStyle;
 
-	strcpy_s( pContext->mainWindowClass, "MainEmulatorWindow" );
-
 	WNDCLASSA mainWindowClass 		= {};
 	mainWindowClass.style 			= CS_HREDRAW | CS_OWNDC | CS_VREDRAW | CS_DBLCLKS;
 	mainWindowClass.hInstance 		= pContext->pInstanceHandle;
-	mainWindowClass.lpszClassName 	= pContext->mainWindowClass;
+	mainWindowClass.lpszClassName 	= sMainWindowClassName;
 	mainWindowClass.lpfnWndProc 	= MainWindowProc;
 	mainWindowClass.hCursor 		= LoadCursor(NULL, IDC_ARROW);
 
+	WNDCLASSA memDebuggerWindowClass  	= {};
+	memDebuggerWindowClass.style 			= CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
+	memDebuggerWindowClass.hInstance 		= pContext->pInstanceHandle;
+	memDebuggerWindowClass.lpszClassName 	= sMemoryDebuggerWindowClassName;
+	memDebuggerWindowClass.lpfnWndProc 		= MemoryDebuggerWindowProc;
+	memDebuggerWindowClass.hCursor 			= LoadCursor(NULL, IDC_ARROW);
+
 	RegisterClassA(&mainWindowClass);
+	RegisterClassA(&memDebuggerWindowClass);
 
 	return 1u;
 }
@@ -1971,6 +2005,9 @@ void loadWin32FunctionPointers()
 	const HMODULE pNtModule = getLibraryHandle("ntdll.dll");
 	RuntimeAssert( pNtModule != nullptr );
 
+	const HMODULE pComCtlModule = getLibraryHandle("Comctl32.dll");
+	RuntimeAssert( pComCtlModule != nullptr );
+
 	w32ChoosePixelFormat 	= (PFNCHOOSEPIXELFORMATPROC)GetProcAddress( pGDIModule, "ChoosePixelFormat" );
 	w32SetPixelFormat	 	= (PFNSETPIXELFORMATPROC)GetProcAddress( pGDIModule, "SetPixelFormat" );
 	w32SwapBuffers		 	= (PFNSWAPBUFFERSPROC)GetProcAddress( pGDIModule, "SwapBuffers");
@@ -1979,6 +2016,7 @@ void loadWin32FunctionPointers()
 	w32DragQueryFileA	 	= (PFNDRAGQUERYFILEAPROC)GetProcAddress( pShell32Module, "DragQueryFileA" );
 	w32DragFinish		 	= (PFNDRAGFINISHPROC)GetProcAddress( pShell32Module, "DragFinish" );
 	w32NtDelayExecution	 	= (PFNNTDELAYEXECUTIONPROC)GetProcAddress( pNtModule, "NtDelayExecution" );
+	w32InitCommonControlsEx	= (PFNINITCOMMONCONTROLSEX)GetProcAddress( pComCtlModule, "InitCommonControlsEx" );
 
 	RuntimeAssert( w32ChoosePixelFormat != nullptr );
 	RuntimeAssert( w32SetPixelFormat != nullptr );
@@ -1988,6 +2026,7 @@ void loadWin32FunctionPointers()
 	RuntimeAssert( w32DragQueryFileA != nullptr );
 	RuntimeAssert( w32DragFinish != nullptr );
 	RuntimeAssert( w32NtDelayExecution != nullptr );
+	RuntimeAssert( w32InitCommonControlsEx != nullptr );
 }
 
 uint8_t generateOpenGLShaders( Win32ApplicationContext* pContext  )
@@ -2096,7 +2135,7 @@ void generateOpenGLTextures(Win32ApplicationContext* pContext)
 bool8_t setupMainWindow( Win32ApplicationContext* pContext )
 {
 	pContext->pMainWindowHandle = CreateWindowExA( WS_EX_ACCEPTFILES,
-		pContext->mainWindowClass, "K15 GB Emulator", 
+		sMainWindowClassName, "K15 GB Emulator", 
 		pContext->windowStyle, CW_USEDEFAULT, CW_USEDEFAULT,
 		pContext->windowWidth, pContext->windowHeight, 
 		0, 0, pContext->pInstanceHandle, 0);
@@ -2107,14 +2146,99 @@ bool8_t setupMainWindow( Win32ApplicationContext* pContext )
 		return 0u;
 	}
 
+	SetWindowLongPtrA( pContext->pMainWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
+
 	pContext->pDeviceContext = GetDC( pContext->pMainWindowHandle );
 	updateMonitorSettings( pContext );
 
 	return 1u;
 }
 
+bool8_t setupMemoryDebuggerWindow( Win32MemoryDebuggerContext* pContext )
+{
+	constexpr DWORD windowStyle = WS_OVERLAPPEDWINDOW;
+
+	pContext->pWindowHandle = CreateWindowA( sMemoryDebuggerWindowClassName, "K15 GB Emulator - Memory Debugger", 
+		windowStyle, CW_USEDEFAULT, CW_USEDEFAULT, 700, 700, 0, 0, nullptr, 0);
+
+	if( pContext->pWindowHandle == nullptr )
+	{
+		MessageBoxA(0, "Error creating memory debugger Window.\n", "Error!", 0);
+		return 0u;
+	}
+
+	SetWindowLongPtrA( pContext->pWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
+
+	HWND pListHandle = CreateWindowA( WC_LISTVIEWA, "", WS_CHILD | LVS_REPORT | WS_VISIBLE | LVS_NOSORTHEADER | LVS_NOCOLUMNHEADER, 
+		0, 0, 700, 700, pContext->pWindowHandle, nullptr, nullptr, 0);
+
+	if( pListHandle == nullptr )
+	{
+		return 0u;
+	}
+
+	LVCOLUMNA columns[17] = {};
+	columns[0].mask = LVCF_FMT | LVCF_WIDTH | LVCF_SUBITEM;
+	columns[0].cx = 50;
+	columns[0].fmt = LVCFMT_LEFT;
+	columns[0].iSubItem = 0;
+	ListView_InsertColumn( pListHandle, 0, columns );
+
+	for( uint8_t columnIndex = 1; columnIndex < 17; ++columnIndex )
+	{
+		columns[columnIndex].mask = LVCF_FMT | LVCF_WIDTH | LVCF_SUBITEM;
+		columns[columnIndex].cx = 30;
+		columns[columnIndex].fmt = LVCFMT_LEFT;
+		columns[columnIndex].iSubItem = columnIndex;
+
+		ListView_InsertColumn( pListHandle, columnIndex, columns + columnIndex );
+	}
+
+	char addressTextBuffer[5] = {};
+	for( uint32_t address = 0; address < 0xFFFF; address += 16 )
+	{
+		LVITEMA addressItem 	= {};
+		addressItem.mask 		= LVIF_TEXT;
+		addressItem.iSubItem 	= 0;
+		addressItem.pszText 	= convert16BitAddressToHexString( address, addressTextBuffer, sizeof(addressTextBuffer) );
+		addressItem.cchTextMax 	= sizeof( addressTextBuffer );
+		ListView_InsertItem( pListHandle, &addressItem );
+	}
+
+	for( uint16_t counter = 0; counter <= 0xFFF; ++counter )
+	{
+		for( uint8_t columnIndex = 1; columnIndex < 17; ++columnIndex )
+		{
+			LVITEMA memoryValueItem 	= {};
+			memoryValueItem.mask 			= LVIF_TEXT;
+			memoryValueItem.iSubItem 		= columnIndex;
+			memoryValueItem.iItem 			= counter;
+			memoryValueItem.pszText 		= convert8BitAddressToHexString( 0xFF, addressTextBuffer, sizeof(addressTextBuffer) );
+			memoryValueItem.cchTextMax 		= sizeof( addressTextBuffer );
+			//ListView_InsertItem( pListHandle, &memoryValueItem );
+			ListView_SetItem( pListHandle, &memoryValueItem );
+		}
+	}
+
+	ShowWindow( pContext->pWindowHandle, SW_SHOW );
+
+	return 1u;
+}
+
+bool8_t initCommonControls()
+{
+	INITCOMMONCONTROLSEX icex = {};           // Structure for control initialization.
+    icex.dwICC = ICC_LISTVIEW_CLASSES;
+    return w32InitCommonControlsEx(&icex) == TRUE;
+}
+
 bool8_t setupUi( Win32ApplicationContext* pContext )
 {
+	if( initCommonControls() == 0 )
+	{
+		//return 0;
+	}
+
 	if( setupWindowClasses( pContext ) == 0 )
 	{
 		//FK: TODO: User friendly error message
@@ -2122,6 +2246,11 @@ bool8_t setupUi( Win32ApplicationContext* pContext )
 	}
 
 	if( setupMainWindow( pContext ) == 0 )
+	{
+		return 0;
+	}
+
+	if( setupMemoryDebuggerWindow( &pContext->memoryDebuggerContext ) == 0 )
 	{
 		return 0;
 	}
@@ -2136,7 +2265,6 @@ bool8_t setupUi( Win32ApplicationContext* pContext )
 		return 0;
 	}
 
-	SetWindowLongPtrA( pContext->pMainWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
 	ShowWindow(pContext->pMainWindowHandle, SW_SHOW);
 
 	pContext->windowStyle 	= GetWindowLongA( pContext->pMainWindowHandle, GWL_STYLE );
