@@ -4698,6 +4698,7 @@ void handleMappedIORegisterWrite( GBEmulatorInstance* pEmulatorInstance )
             break;
         }
         case K15_GB_MAPPED_IO_ADDRESS_NR42:
+        case K15_GB_MAPPED_IO_ADDRESS_NR44:
         {
             memoryValueBitMask = 0b11000000;
             break;
