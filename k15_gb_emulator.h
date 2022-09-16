@@ -287,6 +287,7 @@ struct GBCpuStateFlags
     uint8_t stop                : 1;
     uint8_t dma                 : 1;
     uint8_t haltBug             : 1;
+    uint8_t pendingEI           : 1;
 };
 
 struct GBCpuState
@@ -2157,6 +2158,7 @@ void initCpuState( GBMemoryMapper* pMemoryMapper, GBCpuState* pState )
     pState->flags.stop              = 0;
     pState->flags.halt              = 0;
     pState->flags.haltBug           = 0;
+    pState->flags.pendingEI         = 0;
 }
 
 void resetMemoryMapper( GBMemoryMapper* pMapper )
@@ -2810,7 +2812,7 @@ uint8_t convertTimerControlFrequencyBit( const uint8_t timerControlValue )
     return 0;
 }
 
-void updateSerial( GBCpuState* pCpuState, GBSerialState* pSerial, const uint8_t cycleCount )
+void tickSerial( GBCpuState* pCpuState, GBSerialState* pSerial, const uint8_t cycleCount )
 {
     if( !pSerial->initiateTransfer )
     {
@@ -2909,7 +2911,7 @@ void tickTimerInternalDivCounterForCycles( GBTimerState* pTimerState, uint8_t cy
     }
 }
 
-void updateTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cycleCount )
+void tickTimer( GBCpuState* pCpuState, GBTimerState* pTimer, const uint8_t cycleCount )
 {
     pTimer->timerLoading = 0;
     if( pTimer->timerOverflow )
@@ -2938,7 +2940,7 @@ void incrementLy( GBLcdRegisters* pLcdRegisters, uint8_t* pLy )
     pLcdStatus->LycEqLyFlag = ( *pLy == lyc );
 }
 
-void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
+void tickPPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycleCount )
 {
     if( !pPpuState->pLcdControl->enable )
     {
@@ -3019,6 +3021,21 @@ void updatePPU( GBCpuState* pCpuState, GBPpuState* pPpuState, const uint8_t cycl
     pLcdStatus->mode = lcdMode;
 }
 
+void tickDmaState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t cycleCostOfLastOpCode )
+{
+    if( pCpuState->flags.dma )
+    {
+        pCpuState->dmaCycleCounter += cycleCostOfLastOpCode;
+        if( pCpuState->dmaCycleCounter >= gbDMACycleCount )
+        {
+            pCpuState->flags.dma = 0;
+
+            //FK: Copy sprite attributes from dma address to OAM h
+            memcpy( pMemoryMapper->pSpriteAttributes, pMemoryMapper->pBaseAddress + pCpuState->dmaAddress, gbOAMSizeInBytes );
+        }
+    }
+}
+
 uint8_t convertOutputLevelToVolumeShift( const uint8_t outputLevel )
 {
     switch( outputLevel )
@@ -3037,7 +3054,7 @@ uint8_t convertOutputLevelToVolumeShift( const uint8_t outputLevel )
     return 0;
 }
 
-void updateAPU( GBApuState* pApuState, const uint8_t cycleCost )
+void tickAPU( GBApuState* pApuState, const uint8_t cycleCost )
 {
     pApuState->frameSequencer.cycleCounter += cycleCost;
     if( pApuState->frameSequencer.cycleCounter >= 512 )
@@ -3119,8 +3136,35 @@ uint16_t pop16BitValueFromStack( GBCpuState* pCpuState, GBMemoryMapper* pMemoryM
     return value;
 }
 
-void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper )
+void tickSystem( GBEmulatorInstance* pEmulatorInstance, const uint8_t cyclesCount )
 {
+    GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
+    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
+    GBApuState* pApuState           = pEmulatorInstance->pApuState;
+    GBPpuState* pPpuState           = pEmulatorInstance->pPpuState;
+    GBTimerState* pTimerState       = pEmulatorInstance->pTimerState;
+    GBSerialState* pSerialState     = pEmulatorInstance->pSerialState;
+  
+    tickDmaState( pCpuState, pMemoryMapper, cyclesCount ); 
+    tickPPU( pCpuState, pPpuState, cyclesCount );
+    tickAPU( pApuState, cyclesCount );
+    tickTimer( pCpuState, pTimerState, cyclesCount );
+    tickSerial( pCpuState, pSerialState, cyclesCount );
+
+    pCpuState->cycleCounter += cyclesCount;
+    if( pPpuState->cycleCounter >= gbCyclesPerFrame )
+    {
+        pEmulatorInstance->flags.vblank = 1;
+        pPpuState->cycleCounter -= gbCyclesPerFrame;
+        pCpuState->cycleCounter -= gbCyclesPerFrame;
+    }
+}
+
+void executePendingInterrupts( GBEmulatorInstance* pEmulatorInstance )
+{
+    GBCpuState* pCpuState           = pEmulatorInstance->pCpuState;
+    GBMemoryMapper* pMemoryMapper   = pEmulatorInstance->pMemoryMapper;
+
     const bool8_t interruptEnable       = *pCpuState->pIE;
     const uint8_t interruptFlags        = *pCpuState->pIF;
     const uint8_t interruptHandleMask   = ( interruptEnable & interruptFlags );
@@ -3139,12 +3183,9 @@ void executePendingInterrupts( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMap
                     *pCpuState->pIF &= ~interruptFlag;
 
                     pCpuState->flags.IME = 0;
-                    pCpuState->cycleCounter += 20;
-                    if( pCpuState->flags.halt )
-                    {
-                        pCpuState->cycleCounter += 4;
-                    }
 
+                    const uint8_t interruptHandlerCycleCost = pCpuState->flags.halt ? 24u : 20u;
+                    tickSystem( pEmulatorInstance, interruptHandlerCycleCost );
                     break;
                 }
             }
@@ -3908,7 +3949,7 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
         //EI
         case 0xFB:
         {   
-            pCpuState->flags.IME = 1;
+            pCpuState->flags.pendingEI = 1;
             break;
         }
 
@@ -4193,21 +4234,6 @@ uint8_t executeInstruction( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper
     }
 
     return pOpcode->cycleCosts[ opcodeCondition ];
-}
-
-void updateDmaState( GBCpuState* pCpuState, GBMemoryMapper* pMemoryMapper, uint8_t cycleCostOfLastOpCode )
-{
-    if( pCpuState->flags.dma )
-    {
-        pCpuState->dmaCycleCounter += cycleCostOfLastOpCode;
-        if( pCpuState->dmaCycleCounter >= gbDMACycleCount )
-        {
-            pCpuState->flags.dma = 0;
-
-            //FK: Copy sprite attributes from dma address to OAM h
-            memcpy( pMemoryMapper->pSpriteAttributes, pMemoryMapper->pBaseAddress + pCpuState->dmaAddress, gbOAMSizeInBytes );
-        }
-    }
 }
 
 GBEmulatorJoypadState fixJoypadState( GBEmulatorJoypadState joypadState )
@@ -4763,7 +4789,12 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
     GBSerialState* pSerialState     = pEmulatorInstance->pSerialState;
     GBCartridge* pCartridge         = pEmulatorInstance->pCartridge;
 
-    executePendingInterrupts( pCpuState, pMemoryMapper );
+    executePendingInterrupts( pEmulatorInstance );
+    if( pCpuState->flags.pendingEI )
+    {
+        pCpuState->flags.IME        = 1;
+        pCpuState->flags.pendingEI  = 0;
+    }
 
     uint8_t cycleCost = 4u; //FK: Default cycle cost when CPU is halted
 
@@ -4793,11 +4824,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         }
     }
 
-    updateDmaState( pCpuState, pMemoryMapper, cycleCost ); 
-    updatePPU( pCpuState, pPpuState, cycleCost );
-    updateAPU( pApuState, cycleCost );
-    updateTimer( pCpuState, pTimerState, cycleCost );
-    updateSerial( pCpuState, pSerialState, cycleCost );
+    tickSystem( pEmulatorInstance, cycleCost );
 
     pMemoryMapper->memoryAccess         = GBMemoryAccess_None;
     pMemoryMapper->lcdStatus            = *pPpuState->lcdRegisters.pStatus;
@@ -4912,18 +4939,6 @@ GBEmulatorInstanceEventMask runGBEmulatorForCycles( GBEmulatorInstance* pInstanc
             return K15_GB_NO_EVENT_FLAG;
         }
 #endif
-    }
-
-    pCpuState->cycleCounter += localCycleCounter;
-    if( pPpuState->cycleCounter >= gbCyclesPerFrame )
-    {
-        pInstance->flags.vblank = 1;
-        pPpuState->cycleCounter -= gbCyclesPerFrame;
-        pCpuState->cycleCounter -= gbCyclesPerFrame;
-    }
-    else
-    {
-        BreakPointHook();
     }
 
     return pInstance->flags.vblank == 1 ? K15_GB_VBLANK_EVENT_FLAG : K15_GB_NO_EVENT_FLAG;
