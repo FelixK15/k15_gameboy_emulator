@@ -15,3 +15,5 @@ bugs.plan.txt
 k15_win32_gb_emulator_release_disassembly.asm
 testroms/
 roms/
+win32/build_debug
+win32/build_release

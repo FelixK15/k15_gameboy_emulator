@@ -323,21 +323,7 @@ HWND setupWindow( HINSTANCE pInstance, const Win32Settings* pSettings )
 
 bool8_t setupOpenGL( Win32Context* pContext )
 {
-	loadWin32OpenGLFunctionPointers();
-
-	if( !createOpenGLDummyContext( pContext->pMainWindowHandle, pContext->pMainWindowDeviceContext ) )
-	{
-		return false;
-	}
-
-	loadWGLOpenGLFunctionPointers();
-
-	if( !createOpenGL4Context( pContext->pMainWindowHandle, pContext->pMainWindowDeviceContext ) )
-	{
-		return false;
-	}
-
-	loadOpenGL4FunctionPointers();
+	setupOpenGLAndCreateOpenGL4Context( pContext->pMainWindowHandle, pContext->pMainWindowDeviceContext );
 
 	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 	constexpr bool8_t enableVsync = true;

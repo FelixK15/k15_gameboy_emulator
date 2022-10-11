@@ -518,4 +518,25 @@ bool8_t compileOpenGLShader(GLuint shader, const char* pShaderSource, uint32_t s
 	return 0;
 }
 
+bool8_t setupOpenGLAndCreateOpenGL4Context( HWND hwnd, HDC dc )
+{
+	loadWin32OpenGLFunctionPointers();
+
+	if( !createOpenGLDummyContext( hwnd, dc ) )
+	{
+		return false;
+	}
+
+	loadWGLOpenGLFunctionPointers();
+
+	if( !createOpenGL4Context( hwnd, dc ) )
+	{
+		return false;
+	}
+
+	loadOpenGL4FunctionPointers();
+
+	return true;
+}
+
 #endif 
