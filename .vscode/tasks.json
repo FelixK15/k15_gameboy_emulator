@@ -4,13 +4,13 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build K15 GB Emulator - DEBUG",
+            "label": "Build K15 GB Debugger - DEBUG",
             "type": "shell",
             "options": {
                 "cwd": "win32"
             },
             "windows": {
-                "command": "build_msvc_cl.bat",
+                "command": "build_debugger_msvc_cl.bat",
                 "args": [
                     "debug"
                 ]
@@ -24,13 +24,33 @@
             },
         },
         {
+            "label": "Build K15 GB Emulator - DEBUG",
+            "type": "shell",
+            "options": {
+                "cwd": "win32"
+            },
+            "windows": {
+                "command": "build_emulator_msvc_cl.bat",
+                "args": [
+                    "debug"
+                ]
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+        },
+        {
             "label": "Build K15 GB Emulator - RELEASE",
             "type": "shell",
             "options": {
                 "cwd": "win32"
             },
             "windows": {
-                "command": "build_msvc_cl.bat",
+                "command": "build_emulator_msvc_cl.bat",
                 "args": [
                     "release"
                 ]
@@ -50,17 +70,6 @@
                 "command": "build_bootrom.bat"
             },
             "group": "build"
-        },
-        {
-            "label": "Dump disassembly of release build",
-            "type": "shell",
-            "options": {
-                "cwd": "win32"
-            },
-            "windows": {
-                "command": "disassemble_release.bat",
-                "args": []
-            }
         }
     ]
 }

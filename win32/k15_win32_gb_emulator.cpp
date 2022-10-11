@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
+#include <WinSock2.h>
 
 #define XINPUT_GAMEPAD_DPAD_UP          0x0001
 #define XINPUT_GAMEPAD_DPAD_DOWN        0x0002
@@ -41,8 +42,6 @@ typedef tagOFNA OPENFILENAMEA;
 
 DECLARE_HANDLE(HDROP);
 
-typedef int			(WINAPI *PFNCHOOSEPIXELFORMATPROC)(HDC hdc, CONST PIXELFORMATDESCRIPTOR* ppfd);
-typedef BOOL		(WINAPI *PFNSETPIXELFORMATPROC)(HDC hdc, int pixelFormat, CONST PIXELFORMATDESCRIPTOR* ppfd);
 typedef BOOL		(WINAPI *PFNSWAPBUFFERSPROC)(HDC hdc);
 typedef DWORD 		(WINAPI *PFNXINPUTGETSTATEPROC)(DWORD, XINPUT_STATE*);
 typedef void 		(WINAPI *PFNPATHSTRIPPATHAPROC)(LPSTR pszPath);
@@ -50,16 +49,16 @@ typedef BOOL 		(WINAPI *PFNGETOPENFILENAMEAPROC)(OPENFILENAMEA*);
 typedef UINT 		(WINAPI *PFNDRAGQUERYFILEAPROC)(HDROP hDrop, UINT iFile, LPSTR lpszFile, UINT cch);
 typedef void 		(WINAPI *PFNDRAGFINISHPROC)(HDROP hDrop);
 typedef UINT		(WINAPI *PFNNTDELAYEXECUTIONPROC)(BOOLEAN Alertable, PLARGE_INTEGER DelayInterval);
+typedef int			(WSAAPI *PFNWSASTARTUP)(WORD wVersionRequested, LPWSADATA lpWSAData);
 
 PFNXINPUTGETSTATEPROC		w32XInputGetState 		= nullptr;
-PFNCHOOSEPIXELFORMATPROC 	w32ChoosePixelFormat 	= nullptr;
-PFNSETPIXELFORMATPROC 	 	w32SetPixelFormat 		= nullptr;
 PFNSWAPBUFFERSPROC 		 	w32SwapBuffers 			= nullptr;
 PFNGETOPENFILENAMEAPROC 	w32GetOpenFileNameA 	= nullptr;
 PFNPATHSTRIPPATHAPROC		w32PathStripPathA		= nullptr;
 PFNDRAGQUERYFILEAPROC		w32DragQueryFileA		= nullptr;
 PFNDRAGFINISHPROC			w32DragFinish			= nullptr;
 PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
+PFNWSASTARTUP				w32WSAStartup			= nullptr;
 
 #define restrict_modifier __restrict
 
@@ -71,6 +70,7 @@ PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 #include <math.h>
 #include <stdio.h>
 #include "../k15_gb_emulator.h"
+#include "../k15_gb_emulator_test.h"
 #include "k15_win32_opengl.h"
 
 #define WIN32_PROFILE_FUNCTION(func) \
@@ -117,6 +117,10 @@ constexpr uint32_t gbMenuSpeed4x			= 39u;
 constexpr uint32_t gbMenuSpeed8x			= 40u;
 
 constexpr uint32_t gbMenuResetEmulator 		= 50u;
+
+constexpr uint32_t gbRunTest				= 60u;
+constexpr uint32_t gCreateTestHashes		= 61u;
+constexpr uint32_t gbDownloadTestRoms		= 62u;
 
 constexpr uint32_t gbPaintTimerId			= 150u;
 
@@ -248,6 +252,7 @@ struct Win32ApplicationContext
 	HMENU						pViewMenuItems 									= nullptr;
 	HMENU						pScaleMenuItems 								= nullptr;
 	HMENU						pStateMenuItems									= nullptr;
+	HMENU						pDebugMenuItems									= nullptr;
 	HMENU						pMenuBar										= nullptr;
 	HMENU						pContextMenu									= nullptr;
 	HGLRC						pOpenGLContext									= nullptr;
@@ -1477,6 +1482,72 @@ void setEmulatorSpeedFactor( Win32ApplicationContext* pContext, uint8_t speedFac
 	}
 }
 
+void getTestDownloadUrl(char* pTargetBufferDownloadUrl)
+{
+	constexpr char* pDefaultDownloadUrl = "http://www.k15tech.com/test_roms.zip";
+	constexpr char* pDownloadUrlFileName = "test_rom_url.txt";
+
+	const HANDLE pDownloadFileHandle = CreateFileA( pDownloadUrlFileName, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 
+		nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY, nullptr );
+
+	if( pDownloadFileHandle == INVALID_HANDLE_VALUE )
+	{
+		strcpy_s(pTargetBufferDownloadUrl, K15_TEST_ROM_DOWNLOAD_URL_MAX, pDefaultDownloadUrl);
+		return;
+	}
+
+	//FK: Eventhough we don't need this info we still have to supply 'bytesReadFromFile' because otherwise this will crash on Windows 7
+	DWORD bytesReadFromFile = 0;
+	ReadFile( pDownloadFileHandle, (LPVOID)pTargetBufferDownloadUrl, K15_TEST_ROM_DOWNLOAD_URL_MAX, &bytesReadFromFile, nullptr );
+
+	CloseHandle( pDownloadFileHandle );
+	return;
+}
+
+void downloadTestRoms()
+{
+	char testRomPath[K15_TEST_ROM_PATH_MAX] = {0};
+	size_t fixedPathLength = 0;
+	const DWORD pathLength = GetModuleFileNameA( nullptr, testRomPath, K15_TEST_ROM_PATH_MAX );
+	DWORD pathIndex = pathLength;
+
+	while( pathIndex > 0 )
+	{
+		if( testRomPath[pathIndex] == '\\' )
+		{
+			testRomPath[pathIndex] = '/';
+		}
+
+		if( testRomPath[pathIndex] == '/' && fixedPathLength == 0 )
+		{
+			fixedPathLength = pathLength - pathIndex;
+			testRomPath[pathIndex] = 0;
+		}
+
+		--pathIndex;
+	}
+
+	strcat_s(testRomPath, K15_TEST_ROM_PATH_MAX, "/test_roms/");
+
+	//FK: Check if directory already exists
+	const DWORD fileAttributes = GetFileAttributesA(testRomPath);
+	if( ( fileAttributes & FILE_ATTRIBUTE_DIRECTORY ) == 0 )
+	{	
+		char errorMessage[512] = {0};
+		sprintf_s( errorMessage, sizeof(errorMessage), "Couldn't create '%s' folder - file with the same name already exists.", testRomPath );
+		MessageBoxA( nullptr, errorMessage, "Error downloading test-roms", 0 );
+		return;
+	}
+
+	char testRomDownloadUrl[K15_TEST_ROM_DOWNLOAD_URL_MAX] = {0};
+	getTestDownloadUrl(testRomDownloadUrl);
+
+	if( !downloadTestRomArchive( testRomDownloadUrl, testRomPath ) )
+	{
+
+	}
+}
+
 void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 {
 	uint8_t changeFrameBufferScale = 0;
@@ -1520,6 +1591,10 @@ void handleWindowCommand( Win32ApplicationContext* pContext, WPARAM wparam )
 
 		case gbMenuResetEmulator:
 			resetGBEmulator( pContext->emulatorContext.pEmulatorInstance );
+			break;
+
+		case gbDownloadTestRoms:
+			downloadTestRoms();
 			break;
 
 		default:
@@ -1878,12 +1953,14 @@ bool8_t setupMenu( Win32ApplicationContext* pContext )
 	pContext->pViewMenuItems 	= CreateMenu();
 	pContext->pScaleMenuItems 	= CreateMenu();
 	pContext->pStateMenuItems	= CreateMenu();
+	pContext->pDebugMenuItems 	= CreateMenu();
 	pContext->pMenuBar			= CreateMenu();
 
 	if( pContext->pFileMenuItems 	== nullptr ||
 	 	pContext->pViewMenuItems 	== nullptr ||
 		pContext->pScaleMenuItems 	== nullptr ||
 		pContext->pStateMenuItems 	== nullptr ||
+		pContext->pDebugMenuItems 	== nullptr ||
 		pContext->pMenuBar 			== nullptr )
 	{
 		return 0;	
@@ -1921,15 +1998,22 @@ bool8_t setupMenu( Win32ApplicationContext* pContext )
 	}
 
 	//FK: View menu
-	result |= AppendMenuA( pContext->pViewMenuItems , MF_POPUP, 				(UINT_PTR)pContext->pScaleMenuItems, 	"&Scale" );
-	result |= AppendMenuA( pContext->pViewMenuItems , MF_STRING, 				gbMenuFullscreen, 						"Fullscreen\tF11" );
-	result |= AppendMenuA( pContext->pViewMenuItems , MF_SEPARATOR, 			0, 										nullptr );
-	result |= AppendMenuA( pContext->pViewMenuItems , MF_STRING | MF_CHECKED, 	gbMenuShowUserMessage,					"Show User Message" );
+	result |= AppendMenuA( pContext->pViewMenuItems, MF_POPUP, 					(UINT_PTR)pContext->pScaleMenuItems, 	"&Scale" 			);
+	result |= AppendMenuA( pContext->pViewMenuItems, MF_STRING, 				gbMenuFullscreen, 						"Fullscreen\tF11" 	);
+	result |= AppendMenuA( pContext->pViewMenuItems, MF_SEPARATOR, 				0, 										nullptr 			);
+	result |= AppendMenuA( pContext->pViewMenuItems, MF_STRING | MF_CHECKED, 	gbMenuShowUserMessage,					"Show User Message" );
+
+	//FK: Debug menu
+	result |= AppendMenuA( pContext->pDebugMenuItems, MF_STRING, 	gbRunTest, 			"Run Tests" 			);
+	result |= AppendMenuA( pContext->pDebugMenuItems, MF_STRING, 	gCreateTestHashes, 	"Generate Test Hashes "	);
+	result |= AppendMenuA( pContext->pDebugMenuItems, MF_SEPARATOR, 0, 					nullptr 				);
+	result |= AppendMenuA( pContext->pDebugMenuItems, MF_STRING, 	gbDownloadTestRoms,	"Download test roms" 	);
 
 
-	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pFileMenuItems,  "&File" );
-	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pViewMenuItems,  "&View" );
-	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pStateMenuItems, "&State" );
+	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pFileMenuItems,  "&File" 	);
+	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pViewMenuItems,  "&View" 	);
+	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pStateMenuItems, "&State" 	);
+	result |= AppendMenuA( pContext->pMenuBar, MF_POPUP, (UINT_PTR)pContext->pDebugMenuItems, "&Debug" 	);
 
 	return result;
 }
@@ -1971,23 +2055,24 @@ void loadWin32FunctionPointers()
 	const HMODULE pNtModule = getLibraryHandle("ntdll.dll");
 	RuntimeAssert( pNtModule != nullptr );
 
-	w32ChoosePixelFormat 	= (PFNCHOOSEPIXELFORMATPROC)GetProcAddress( pGDIModule, "ChoosePixelFormat" );
-	w32SetPixelFormat	 	= (PFNSETPIXELFORMATPROC)GetProcAddress( pGDIModule, "SetPixelFormat" );
+	const HMODULE pWSock2Module = getLibraryHandle("Ws2_32.dll");
+	RuntimeAssert( pWSock2Module != nullptr );
+
 	w32SwapBuffers		 	= (PFNSWAPBUFFERSPROC)GetProcAddress( pGDIModule, "SwapBuffers");
 	w32GetOpenFileNameA  	= (PFNGETOPENFILENAMEAPROC)GetProcAddress( pComDlg32Module, "GetOpenFileNameA" );
 	w32PathStripPathA	 	= (PFNPATHSTRIPPATHAPROC)GetProcAddress( pShlwapiModule, "PathStripPathA" );
 	w32DragQueryFileA	 	= (PFNDRAGQUERYFILEAPROC)GetProcAddress( pShell32Module, "DragQueryFileA" );
 	w32DragFinish		 	= (PFNDRAGFINISHPROC)GetProcAddress( pShell32Module, "DragFinish" );
 	w32NtDelayExecution	 	= (PFNNTDELAYEXECUTIONPROC)GetProcAddress( pNtModule, "NtDelayExecution" );
+	w32WSAStartup	 		= (PFNWSASTARTUP)GetProcAddress( pWSock2Module, "WSAStartup" );
 
-	RuntimeAssert( w32ChoosePixelFormat != nullptr );
-	RuntimeAssert( w32SetPixelFormat != nullptr );
 	RuntimeAssert( w32SwapBuffers != nullptr );
 	RuntimeAssert( w32GetOpenFileNameA != nullptr );
 	RuntimeAssert( w32PathStripPathA != nullptr );
 	RuntimeAssert( w32DragQueryFileA != nullptr );
 	RuntimeAssert( w32DragFinish != nullptr );
 	RuntimeAssert( w32NtDelayExecution != nullptr );
+	RuntimeAssert( w32WSAStartup != nullptr );
 }
 
 uint8_t generateOpenGLShaders( Win32ApplicationContext* pContext  )
@@ -2050,10 +2135,7 @@ uint8_t generateOpenGLShaders( Win32ApplicationContext* pContext  )
 
 bool8_t createOpenGLContext( Win32ApplicationContext* pContext )
 {
-	const HMODULE pOpenGL32Module = getLibraryHandle("opengl32.dll");
-	RuntimeAssert( pOpenGL32Module != nullptr );
-	
-	loadWin32OpenGLFunctionPointers( pOpenGL32Module );
+	loadWin32OpenGLFunctionPointers();
 	if( !createOpenGLDummyContext( pContext->pMainWindowHandle, pContext->pDeviceContext ) )
 	{
 		return 0;
@@ -2109,6 +2191,14 @@ bool8_t setupMainWindow( Win32ApplicationContext* pContext )
 
 	pContext->pDeviceContext = GetDC( pContext->pMainWindowHandle );
 	updateMonitorSettings( pContext );
+
+	return 1u;
+}
+
+bool8_t setupWinSock()
+{
+	WSADATA wsaData = {};
+	w32WSAStartup(0, &wsaData);
 
 	return 1u;
 }
@@ -2667,6 +2757,11 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	if( !setupEmulator( &appContext.emulatorContext ) )
 	{
 		DebugBreak();
+		return 1;
+	}
+
+	if( !setupWinSock() )
+	{
 		return 1;
 	}
 
