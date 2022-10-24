@@ -4,13 +4,13 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build K15 GB Emulator - DEBUG",
+            "label": "Build Emulator (Debug)",
             "type": "shell",
             "options": {
                 "cwd": "win32"
             },
             "windows": {
-                "command": "build_msvc_cl.bat",
+                "command": "build_emulator_msvc_cl.bat",
                 "args": [
                     "debug"
                 ]
@@ -21,16 +21,53 @@
             "group": {
                 "kind": "build",
                 "isDefault": true
-            },
+            }
         },
         {
-            "label": "Build K15 GB Emulator - RELEASE",
+            "label": "Build Emulator (Release)",
             "type": "shell",
             "options": {
                 "cwd": "win32"
             },
             "windows": {
-                "command": "build_msvc_cl.bat",
+                "command": "build_emulator_msvc_cl.bat",
+                "args": [
+                    "release"
+                ]
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": "build"
+        },
+                {
+            "label": "Build Debugger (Debug)",
+            "type": "shell",
+            "options": {
+                "cwd": "win32"
+            },
+            "windows": {
+                "command": "build_debugger_msvc_cl.bat",
+                "args": [
+                    "debug"
+                ]
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Build Debugger (Release)",
+            "type": "shell",
+            "options": {
+                "cwd": "win32"
+            },
+            "windows": {
+                "command": "build_debugger_msvc_cl.bat",
                 "args": [
                     "release"
                 ]

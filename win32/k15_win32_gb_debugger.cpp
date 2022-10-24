@@ -270,9 +270,12 @@ LRESULT CALLBACK TOOLWNDPROC(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 			storeSettings(&settings, pContext);
 			writeSettingsToFile( &settings, settingsFilePath );
 		}
+		break;
+	}
 
+	case WM_DESTROY:
+	{
 		PostQuitMessage(0);
-		messageHandled = true;
 		break;
 	}
 
@@ -529,7 +532,7 @@ void runDebuggerMainLoop( Win32Context* pContext )
 	while( loopRunning )
 	{
 		MSG msg;
-		if( PeekMessageA( &msg, pContext->pMainWindowHandle, 0, 0, PM_REMOVE ) > 0 )
+		if( PeekMessageA( &msg, nullptr, 0, 0, PM_REMOVE ) > 0 )
 		{
 			if (msg.message == WM_QUIT)
 			{

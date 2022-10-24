@@ -5,6 +5,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
+#include <WinSock2.h>
 
 #define XINPUT_GAMEPAD_DPAD_UP          0x0001
 #define XINPUT_GAMEPAD_DPAD_DOWN        0x0002
@@ -43,8 +44,6 @@ typedef tagOFNA OPENFILENAMEA;
 
 DECLARE_HANDLE(HDROP);
 
-typedef int			(WINAPI *PFNCHOOSEPIXELFORMATPROC)(HDC hdc, CONST PIXELFORMATDESCRIPTOR* ppfd);
-typedef BOOL		(WINAPI *PFNSETPIXELFORMATPROC)(HDC hdc, int pixelFormat, CONST PIXELFORMATDESCRIPTOR* ppfd);
 typedef BOOL		(WINAPI *PFNSWAPBUFFERSPROC)(HDC hdc);
 typedef DWORD 		(WINAPI *PFNXINPUTGETSTATEPROC)(DWORD, XINPUT_STATE*);
 typedef void 		(WINAPI *PFNPATHSTRIPPATHAPROC)(LPSTR pszPath);
@@ -53,15 +52,17 @@ typedef UINT 		(WINAPI *PFNDRAGQUERYFILEAPROC)(HDROP hDrop, UINT iFile, LPSTR lp
 typedef void 		(WINAPI *PFNDRAGFINISHPROC)(HDROP hDrop);
 typedef UINT		(WINAPI *PFNNTDELAYEXECUTIONPROC)(BOOLEAN Alertable, PLARGE_INTEGER DelayInterval);
 
+typedef int 		(WINAPI *PFNWSASTARTUPPROC)(WORD version, LPWSADATA pData);
+
 PFNXINPUTGETSTATEPROC		w32XInputGetState 		= nullptr;
-PFNCHOOSEPIXELFORMATPROC 	w32ChoosePixelFormat 	= nullptr;
-PFNSETPIXELFORMATPROC 	 	w32SetPixelFormat 		= nullptr;
 PFNSWAPBUFFERSPROC 		 	w32SwapBuffers 			= nullptr;
 PFNGETOPENFILENAMEAPROC 	w32GetOpenFileNameA 	= nullptr;
 PFNPATHSTRIPPATHAPROC		w32PathStripPathA		= nullptr;
 PFNDRAGQUERYFILEAPROC		w32DragQueryFileA		= nullptr;
 PFNDRAGFINISHPROC			w32DragFinish			= nullptr;
 PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
+
+PFNWSASTARTUPPROC 			w32WSAStartup			= nullptr;
 
 #define restrict_modifier __restrict
 
@@ -73,11 +74,7 @@ PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 #include <math.h>
 #include <stdio.h>
 #include "../k15_gb_emulator.h"
-<<<<<<< Updated upstream
-=======
-#include "../k15_gb_emulator_test.h"
 #include "../k15_gb_debugger_interface.h"
->>>>>>> Stashed changes
 #include "k15_win32_opengl.h"
 
 #define WIN32_PROFILE_FUNCTION(func) \
@@ -1743,7 +1740,11 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM l
 	{
 		Win32Settings settings = serializeSettings( pContext );
 		writeSettingsToFile( &settings, pSettingsPath );
+		break;
+	}
 
+	case WM_DESTROY:
+	{
 		PostQuitMessage(0);
 		messageHandled = 1;
 		break;
@@ -1980,23 +1981,24 @@ void loadWin32FunctionPointers()
 	const HMODULE pNtModule = getLibraryHandle("ntdll.dll");
 	RuntimeAssert( pNtModule != nullptr );
 
-	w32ChoosePixelFormat 	= (PFNCHOOSEPIXELFORMATPROC)GetProcAddress( pGDIModule, "ChoosePixelFormat" );
-	w32SetPixelFormat	 	= (PFNSETPIXELFORMATPROC)GetProcAddress( pGDIModule, "SetPixelFormat" );
+	const HMODULE pWSockModule = getLibraryHandle("Ws2_32.dll");
+	RuntimeAssert( pWSockModule != nullptr );
+
 	w32SwapBuffers		 	= (PFNSWAPBUFFERSPROC)GetProcAddress( pGDIModule, "SwapBuffers");
 	w32GetOpenFileNameA  	= (PFNGETOPENFILENAMEAPROC)GetProcAddress( pComDlg32Module, "GetOpenFileNameA" );
 	w32PathStripPathA	 	= (PFNPATHSTRIPPATHAPROC)GetProcAddress( pShlwapiModule, "PathStripPathA" );
 	w32DragQueryFileA	 	= (PFNDRAGQUERYFILEAPROC)GetProcAddress( pShell32Module, "DragQueryFileA" );
 	w32DragFinish		 	= (PFNDRAGFINISHPROC)GetProcAddress( pShell32Module, "DragFinish" );
 	w32NtDelayExecution	 	= (PFNNTDELAYEXECUTIONPROC)GetProcAddress( pNtModule, "NtDelayExecution" );
+	w32WSAStartup	 		= (PFNWSASTARTUPPROC)GetProcAddress( pWSockModule, "WSAStartup" );
 
-	RuntimeAssert( w32ChoosePixelFormat != nullptr );
-	RuntimeAssert( w32SetPixelFormat != nullptr );
 	RuntimeAssert( w32SwapBuffers != nullptr );
 	RuntimeAssert( w32GetOpenFileNameA != nullptr );
 	RuntimeAssert( w32PathStripPathA != nullptr );
 	RuntimeAssert( w32DragQueryFileA != nullptr );
 	RuntimeAssert( w32DragFinish != nullptr );
 	RuntimeAssert( w32NtDelayExecution != nullptr );
+	RuntimeAssert( w32WSAStartup != nullptr );
 }
 
 uint8_t generateOpenGLShaders( Win32ApplicationContext* pContext  )
@@ -2059,24 +2061,10 @@ uint8_t generateOpenGLShaders( Win32ApplicationContext* pContext  )
 
 bool8_t createOpenGLContext( Win32ApplicationContext* pContext )
 {
-	const HMODULE pOpenGL32Module = getLibraryHandle("opengl32.dll");
-	RuntimeAssert( pOpenGL32Module != nullptr );
-	
-	loadWin32OpenGLFunctionPointers( pOpenGL32Module );
-	if( !createOpenGLDummyContext( pContext->pMainWindowHandle, pContext->pDeviceContext ) )
+	if( !setupOpenGLAndCreateOpenGL4Context( pContext->pMainWindowHandle, pContext->pDeviceContext ) )
 	{
-		return 0;
+		return false;
 	}
-
-	loadWGLOpenGLFunctionPointers();
-	
-	pContext->pOpenGLContext = createOpenGL4Context( pContext->pMainWindowHandle, pContext->pDeviceContext );
-	if( pContext->pOpenGLContext == nullptr )
-	{
-		return 0;
-	}
-
-	loadOpenGL4FunctionPointers();
 
 	constexpr bool8_t enableVsync = 1;
 	
@@ -2122,8 +2110,6 @@ bool8_t setupMainWindow( Win32ApplicationContext* pContext )
 	return 1u;
 }
 
-<<<<<<< Updated upstream
-=======
 bool8_t setupNetworking( SOCKET* pOutSocket )
 {
 	WORD wsaVersion = MAKEWORD( 2, 2 );
@@ -2149,7 +2135,6 @@ bool8_t setupNetworking( SOCKET* pOutSocket )
 	return true;
 }
 
->>>>>>> Stashed changes
 bool8_t setupUi( Win32ApplicationContext* pContext )
 {
 	if( setupWindowClasses( pContext ) == 0 )
@@ -2729,14 +2714,11 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		return 1;
 	}
 
-<<<<<<< Updated upstream
-=======
 	if( !setupNetworking( &appContext.broadcastSocket ) )
 	{
 		return 1;
 	}
 
->>>>>>> Stashed changes
 	Win32GBEmulatorArguments args;
 	parseCommandLineArguments( &args, lpCmdLine );
 

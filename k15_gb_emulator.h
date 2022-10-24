@@ -1,4 +1,4 @@
-#include "stdint.h"
+#include "k15_types.h"
 
 #define K15_ENABLE_EMULATOR_DEBUG_FEATURES      0
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
@@ -1386,36 +1386,6 @@ ZipArchiveEntry findNextZipArchiveEntry( const ZipArchive* pZipArchive, const Zi
 bool8_t isLastZipArchiveEntry( const ZipArchiveEntry* pEntry )
 {
     return pEntry->absoluteOffsetToNextEntry == 0u;
-}
-
-bool8_t areStringsEqual( const char* pStringA, const char* pStringB, const uint32_t stringLength )
-{
-    for( uint32_t charIndex = 0u; charIndex < stringLength; ++charIndex )
-    {
-        if( pStringA[ charIndex ] != pStringB[ charIndex ] )
-        {
-            return 0u;
-        }
-    }
-
-    return 1u;
-}
-
-const char* findLastInString( const char* pString, uint32_t stringLength, const char needle )
-{
-    const char* pStringStart = pString;
-    const char* pStringEnd = pString + stringLength;
-    while( pStringStart != pStringEnd )
-    {
-        if( *pStringEnd == needle )
-        {
-            return pStringEnd;
-        }
-
-        --pStringEnd;
-    }
-
-    return nullptr;
 }
 
 bool8_t filePathHasRomFileExtension( const char* pFilePath, const uint16_t filePathLength )

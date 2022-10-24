@@ -79,6 +79,10 @@
 #define GL_TEXTURE_WRAP_T                       0x2803
 #define GL_WRITE_ONLY                     		0x88B9
 
+#define GL_VENDOR                         		0x1F00
+#define GL_NUM_EXTENSIONS                 		0x821D
+#define GL_EXTENSIONS                     		0x1F03
+
 typedef unsigned int 	GLenum;
 typedef unsigned char 	GLboolean;
 typedef unsigned int 	GLbitfield;
@@ -96,6 +100,7 @@ typedef double 			GLclampd;
 typedef void 			GLvoid;
 typedef char			GLchar;
 typedef ptrdiff_t 		GLsizeiptr;
+typedef intptr_t 		GLintptr;
 
 typedef GLvoid* (WINAPI *PFNWGLGETPROCADDRESSPROC)(const char*);
 typedef HGLRC	(WINAPI *PFNWGLCREATECONTEXTPROC)(HDC);
@@ -165,6 +170,12 @@ typedef GLvoid 			(APIENTRY *PFNGLBUFFERSTORAGEPROC) (GLenum target, GLsizeiptr 
 typedef GLvoid*			(APIENTRY *PFNGLMAPBUFFERPROC) (GLenum target, GLenum access);
 typedef GLboolean 		(APIENTRY *PFNGLUNMAPBUFFERPROC) (GLenum target);
 typedef GLvoid 			(APIENTRY *PFNGLCLEARCOLORPROC) (GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+typedef void 			(APIENTRY *PFNGLBUFFERDATAPROC) (GLenum target, GLsizeiptr size, const void *data, GLenum usage);
+typedef void 			(APIENTRY *PFNGLBUFFERSUBDATAPROC) (GLenum target, GLintptr offset, GLsizeiptr size, const void *data);
+typedef const GLubyte*	(APIENTRY *PFNGLGETSTRINGIPROC) (GLenum name, GLuint index);
+
+typedef int				(WINAPI *PFNCHOOSEPIXELFORMATPROC)(HDC hdc, CONST PIXELFORMATDESCRIPTOR* ppfd);
+typedef BOOL			(WINAPI *PFNSETPIXELFORMATPROC)(HDC hdc, int pixelFormat, CONST PIXELFORMATDESCRIPTOR* ppfd);
 
 PFNWGLSWAPINTERVALEXTPROC 			w32glSwapIntervalEXT 			= nullptr;
 PFNWGLGETSWAPINTERVALEXTPROC		w32glGetSwapIntervalEXT			= nullptr;
@@ -175,6 +186,9 @@ PFNWGLDELETECONTEXTPROC             w32glDeleteContext              = nullptr;
 PFNWGLGETCURRENTCONTEXTPROC         w32glGetCurrentContext          = nullptr;
 PFNWGLGETPROCADDRESSPROC            w32glGetProcAddress             = nullptr;
 PFNWGLMAKECURRENTPROC               w32glMakeCurrent                = nullptr;
+
+PFNCHOOSEPIXELFORMATPROC 			w32ChoosePixelFormat 			= nullptr;
+PFNSETPIXELFORMATPROC 				w32SetPixelFormat 				= nullptr;
 
 PFNGLGENTEXTURESPROC				glGenTextures					= nullptr;
 PFNGLCLEARCOLORPROC					glClearColor					= nullptr;
@@ -231,9 +245,18 @@ PFNGLDELETESHADERPROC                glDeleteShader             	= nullptr;
 PFNGLDELETEPROGRAMPROC               glDeleteProgram            	= nullptr;
 PFNGLBLENDEQUATIONSEPARATEPROC       glBlendEquationSeparate    	= nullptr;
 PFNGLBLENDFUNCSEPARATEPROC           glBlendFuncSeparate        	= nullptr;
+PFNGLBUFFERDATAPROC					 glBufferData					= nullptr;
+PFNGLBUFFERSUBDATAPROC				 glBufferSubData				= nullptr;
+PFNGLGETSTRINGIPROC					 glGetStringi					= nullptr;
 
-void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
+void loadWin32OpenGLFunctionPointers()
 {
+	HMODULE pOpenGL32Module = LoadLibraryA("opengl32.dll");
+	RuntimeAssert( pOpenGL32Module != nullptr );
+
+	HMODULE pGDIModule = LoadLibraryA("gdi32.dll");
+	RuntimeAssert( pGDIModule != nullptr );
+
 	//FK: wgl functions
 	w32glGetProcAddress 	= (PFNWGLGETPROCADDRESSPROC)GetProcAddress(pOpenGL32Module, "wglGetProcAddress");
 	w32glCreateContext      = (PFNWGLCREATECONTEXTPROC)GetProcAddress(pOpenGL32Module, "wglCreateContext");
@@ -261,6 +284,9 @@ void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
     glDrawElements          = (PFNGLDRAWELEMENTSPROC)GetProcAddress(pOpenGL32Module, "glDrawElements");
     glDeleteTextures        = (PFNGLDELETETEXTURESPROC)GetProcAddress(pOpenGL32Module, "glDeleteTextures");
 
+	w32ChoosePixelFormat = (PFNCHOOSEPIXELFORMATPROC)GetProcAddress(pGDIModule, "ChoosePixelFormat");
+	w32SetPixelFormat 	 = (PFNSETPIXELFORMATPROC)GetProcAddress(pGDIModule, "SetPixelFormat");
+
 	RuntimeAssert(glGenTextures != nullptr);
 	RuntimeAssert(glBindTexture != nullptr);
 	RuntimeAssert(glTexParameteri != nullptr);
@@ -284,6 +310,9 @@ void loadWin32OpenGLFunctionPointers( HMODULE pOpenGL32Module )
 	RuntimeAssert(w32glDeleteContext != nullptr );
 	RuntimeAssert(w32glGetCurrentContext != nullptr );
 	RuntimeAssert(w32glMakeCurrent != nullptr );
+
+	RuntimeAssert(w32ChoosePixelFormat != nullptr );
+	RuntimeAssert(w32SetPixelFormat != nullptr );
 }
 
 void loadWGLOpenGLFunctionPointers()
@@ -336,6 +365,9 @@ void loadOpenGL4FunctionPointers()
 	glDeleteProgram             = (PFNGLDELETEPROGRAMPROC)w32glGetProcAddress("glDeleteProgram");               
 	glBlendEquationSeparate     = (PFNGLBLENDEQUATIONSEPARATEPROC)w32glGetProcAddress("glBlendEquationSeparate");       
 	glBlendFuncSeparate         = (PFNGLBLENDFUNCSEPARATEPROC)w32glGetProcAddress("glBlendFuncSeparate");           
+	glBufferData 				= (PFNGLBUFFERDATAPROC)w32glGetProcAddress("glBufferData");
+	glBufferSubData				= (PFNGLBUFFERSUBDATAPROC)w32glGetProcAddress("glBufferSubData");
+	glGetStringi				= (PFNGLGETSTRINGIPROC)w32glGetProcAddress("glGetStringi");
 
 	RuntimeAssert(glTexStorage2D != nullptr);
 	RuntimeAssert(glGenBuffers != nullptr);
@@ -372,6 +404,9 @@ void loadOpenGL4FunctionPointers()
 	RuntimeAssert(glDeleteProgram != nullptr);
 	RuntimeAssert(glBlendEquationSeparate != nullptr);
 	RuntimeAssert(glBlendFuncSeparate != nullptr);
+	RuntimeAssert(glBufferData != nullptr);
+	RuntimeAssert(glBufferSubData != nullptr);
+	RuntimeAssert(glGetStringi != nullptr);
 }
 
 bool8_t createOpenGLDummyContext( HWND hwnd, HDC hdc )
@@ -425,23 +460,6 @@ HGLRC createOpenGL4Context( HWND hwnd, HDC hdc )
 {
 	const HGLRC pOldOpenGLContext = w32glGetCurrentContext();
 
-	const int pixelFormatAttributeList[] = {
-		WGL_DRAW_TO_WINDOW_ARB, 1,
-		WGL_SUPPORT_OPENGL_ARB, 1,
-		WGL_DOUBLE_BUFFER_ARB, 1,
-		WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
-		WGL_COLOR_BITS_ARB, 32,
-		0
-	};
-
-	int pixelFormat;
-	UINT numFormats;
-	w32glChoosePixelFormatARB( hdc, pixelFormatAttributeList, nullptr, 1, &pixelFormat, &numFormats );
-	if( w32SetPixelFormat( hdc, pixelFormat, nullptr ) == FALSE )
-	{
-		return nullptr;
-	}
-
 	const int contextAttributeList[] = {
 		WGL_CONTEXT_MAJOR_VERSION_ARB, 4,
 		WGL_CONTEXT_MINOR_VERSION_ARB, 1,
@@ -489,8 +507,6 @@ bool8_t compileOpenGLShader(GLuint shader, const char* pShaderSource, uint32_t s
 	return 0;
 }
 
-<<<<<<< Updated upstream
-=======
 HGLRC setupOpenGLAndCreateOpenGL4Context( HWND hwnd, HDC dc )
 {
 	loadWin32OpenGLFunctionPointers();
@@ -512,5 +528,4 @@ HGLRC setupOpenGLAndCreateOpenGL4Context( HWND hwnd, HDC dc )
 	return w32glGetCurrentContext();
 }
 
->>>>>>> Stashed changes
 #endif 
