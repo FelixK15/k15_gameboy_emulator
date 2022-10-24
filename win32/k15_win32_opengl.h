@@ -489,4 +489,28 @@ bool8_t compileOpenGLShader(GLuint shader, const char* pShaderSource, uint32_t s
 	return 0;
 }
 
+<<<<<<< Updated upstream
+=======
+HGLRC setupOpenGLAndCreateOpenGL4Context( HWND hwnd, HDC dc )
+{
+	loadWin32OpenGLFunctionPointers();
+
+	if( !createOpenGLDummyContext( hwnd, dc ) )
+	{
+		return nullptr;
+	}
+
+	loadWGLOpenGLFunctionPointers();
+
+	if( !createOpenGL4Context( hwnd, dc ) )
+	{
+		return nullptr;
+	}
+
+	loadOpenGL4FunctionPointers();
+
+	return w32glGetCurrentContext();
+}
+
+>>>>>>> Stashed changes
 #endif 

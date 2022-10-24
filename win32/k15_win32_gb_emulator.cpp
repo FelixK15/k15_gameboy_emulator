@@ -1,5 +1,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 
+#pragma comment(lib, "Ws2_32.lib")
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
@@ -71,6 +73,11 @@ PFNNTDELAYEXECUTIONPROC		w32NtDelayExecution		= nullptr;
 #include <math.h>
 #include <stdio.h>
 #include "../k15_gb_emulator.h"
+<<<<<<< Updated upstream
+=======
+#include "../k15_gb_emulator_test.h"
+#include "../k15_gb_debugger_interface.h"
+>>>>>>> Stashed changes
 #include "k15_win32_opengl.h"
 
 #define WIN32_PROFILE_FUNCTION(func) \
@@ -252,6 +259,8 @@ struct Win32ApplicationContext
 	HMENU						pContextMenu									= nullptr;
 	HGLRC						pOpenGLContext									= nullptr;
 	HDC							pDeviceContext									= nullptr;
+	SOCKET 						broadcastSocket									= INVALID_SOCKET;
+	SOCKET 						debuggerSocket									= INVALID_SOCKET;
 	uint8_t* 					pGameboyRGBVideoBuffer 							= nullptr;
 	uint8_t*					pUncompressBuffer								= nullptr;
 	char 						gameTitle[16] 									= {};
@@ -2069,7 +2078,7 @@ bool8_t createOpenGLContext( Win32ApplicationContext* pContext )
 
 	loadOpenGL4FunctionPointers();
 
-	constexpr bool8_t enableVsync = 0;
+	constexpr bool8_t enableVsync = 1;
 	
 	//FK: Try to disable v-sync...
 	w32glSwapIntervalEXT( enableVsync );
@@ -2113,6 +2122,34 @@ bool8_t setupMainWindow( Win32ApplicationContext* pContext )
 	return 1u;
 }
 
+<<<<<<< Updated upstream
+=======
+bool8_t setupNetworking( SOCKET* pOutSocket )
+{
+	WORD wsaVersion = MAKEWORD( 2, 2 );
+	WSADATA wsaData = {};
+	w32WSAStartup(wsaVersion, &wsaData);
+
+	SOCKET newSocket = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
+
+	char broadcast = 1;
+	setsockopt( newSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1 );
+
+	u_long mode = 1;  // 1 to enable non-blocking socket
+	ioctlsocket( newSocket, FIONBIO, &mode );
+
+	struct sockaddr_in receiveAddr = {};
+	receiveAddr.sin_family 		= AF_INET;
+	receiveAddr.sin_port 		= DebuggerBroadcastPort;
+	receiveAddr.sin_addr.s_addr = INADDR_ANY;
+
+	bind( newSocket, (const sockaddr*)&receiveAddr, sizeof( receiveAddr ) );
+
+	*pOutSocket = newSocket;
+	return true;
+}
+
+>>>>>>> Stashed changes
 bool8_t setupUi( Win32ApplicationContext* pContext )
 {
 	if( setupWindowClasses( pContext ) == 0 )
@@ -2479,6 +2516,26 @@ void updateUserMessage( Win32UserMessage* pUserMessage, const uint32_t deltaTime
 	pUserMessage->timeToLiveInMilliseconds -= deltaTimeInMicroSeconds;
 }
 
+void checkDebuggerConnection( Win32ApplicationContext* pContext )
+{
+	if( pContext->debuggerSocket != INVALID_SOCKET )
+	{
+		return;
+	}
+
+	DebuggerPacket packet;
+
+	struct sockaddr_in senderAddr;
+	int length = sizeof(sockaddr_in);
+
+	int bytes = recvfrom( pContext->broadcastSocket, (char*)&packet, sizeof(packet), 0, (sockaddr*)&senderAddr, &length );
+	if( bytes == sizeof( DebuggerPacket ) && isValidDebuggerPacket( &packet ) && packet.header.type == DebuggerPacketType::BROADCAST )
+	{
+		EmulatorPacket pingPacket = createPingEmulatorPacket( EmulatorHostPlatform::Windows );
+		sendto(pContext->broadcastSocket, (char*)&pingPacket, sizeof( pingPacket ), 0, ( const sockaddr* )&senderAddr, sizeof( senderAddr ) );
+	}
+}
+
 void runVsyncMainLoop( Win32ApplicationContext* pContext )
 {
 	bool8_t loopRunning = true;
@@ -2518,6 +2575,8 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 			queryGBEmulatorJoypadState( &joypadState, pEmulatorContext, pContext->xinputControllerCount );
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
+
+		checkDebuggerConnection( pContext );
 
 		const uint32_t gbCyclesPerSecond = gbCyclesPerFrame * gbEmulatorFrameRate;
 
@@ -2670,6 +2729,14 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		return 1;
 	}
 
+<<<<<<< Updated upstream
+=======
+	if( !setupNetworking( &appContext.broadcastSocket ) )
+	{
+		return 1;
+	}
+
+>>>>>>> Stashed changes
 	Win32GBEmulatorArguments args;
 	parseCommandLineArguments( &args, lpCmdLine );
 
