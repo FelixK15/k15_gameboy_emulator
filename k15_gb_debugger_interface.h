@@ -3,6 +3,8 @@
 
 #include "k15_types.h"
 
+#define K15_MAX_COMPUTER_NAME_LENGTH  64
+
 enum class DebuggerPacketType : uint8_t
 {
 	BROADCAST,
@@ -43,6 +45,7 @@ union EmulatorPacketPayload
 {
 	struct {
 		EmulatorHostPlatform platform;	
+		char 				 computerName[K15_MAX_COMPUTER_NAME_LENGTH];
 	} pingPayload;
 };
 
@@ -69,12 +72,13 @@ inline bool8_t isValidEmulatorPacket( const EmulatorPacket* pPacket )
     return pPacket->header.fourcc == EmulatorPacketFourCC;
 }
 
-inline EmulatorPacket createPingEmulatorPacket( EmulatorHostPlatform hostPlatform )
+inline EmulatorPacket createPingEmulatorPacket( EmulatorHostPlatform hostPlatform, const char* pComputerName )
 {
 	EmulatorPacket pingPacket = {};
 	pingPacket.header.fourcc 	= EmulatorPacketFourCC;
 	pingPacket.header.type 		= EmulatorPacketType::PING;
-	pingPacket.payload.pingPayload.platform = hostPlatform;
+	pingPacket.payload.pingPayload.platform 	= hostPlatform;
+	strcpy_s( pingPacket.payload.pingPayload.computerName, K15_MAX_COMPUTER_NAME_LENGTH, pComputerName );
 
 	return pingPacket;
 }

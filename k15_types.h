@@ -41,8 +41,8 @@ typedef uint32_t    fourcc32_t;
 typedef uint32_t    networkaddress_t;
 
 #define K15_FOUR_CC(a,b,c,d)    (fourcc32_t)( (fourcc32_t)a << 0 | (fourcc32_t)b << 8 | (fourcc32_t)c << 16 | (fourcc32_t)d << 24 )
-#define K15_IPV4_ADDRESS_MIN_STRING_LENGTH 8
-#define K15_IPV4_ADDRESS_MAX_STRING_LENGTH 16
+#define K15_IPV4_ADDRESS_MIN_STRING_LENGTH  8
+#define K15_IPV4_ADDRESS_MAX_STRING_LENGTH  16
 
 bool8_t areStringsEqual( const char* pStringA, const char* pStringB, const uint32_t stringLength )
 {

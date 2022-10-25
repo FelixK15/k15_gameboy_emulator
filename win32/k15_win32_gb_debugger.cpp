@@ -43,6 +43,7 @@ struct Win32Context
 	LARGE_INTEGER 		pcOld;
 
 	SOCKET 				broadcastSocket;
+	SOCKET 				debugSocket;
 	uint32_t			broadcastAddresses[ MaxBroadcastAddresses ];
 
 	uint32_t 			windowWidth;
@@ -54,12 +55,23 @@ struct Win32Context
 	bool8_t 			vsyncEnabled;
 };
 
+struct DebuggerTarget
+{
+	char name[K15_MAX_COMPUTER_NAME_LENGTH];
+	char address[K15_IPV4_ADDRESS_MAX_STRING_LENGTH];
+};
+
+#define K15_MAX_DEBUGGER_TARGETS 16
+
 struct DebuggerContext
 {
+	DebuggerTarget debuggerTargets[K15_MAX_DEBUGGER_TARGETS];
 	uint32_t* 	pBroadcastAddresses;
 	SOCKET 		broadcastSocket;
+	SOCKET 		emulatorSocket;
 	float 		timeUntilBroadcastInSeconds = BroadcastTimeIntervallInSeconds;
 	uint8_t 	broadcastAddressCount;
+	uint8_t	 	debuggerTargetCount;
 };
 
 struct Win32Settings
@@ -68,6 +80,7 @@ struct Win32Settings
 	uint32_t 	windowHeight;
 	int32_t 	windowPosX;
 	int32_t 	windowPosY;
+	char 		bindAddress[K15_IPV4_ADDRESS_MAX_STRING_LENGTH];
 };
 
 const char* pSettingsFormatting = R"(
@@ -75,6 +88,7 @@ windowPosX=%d
 windowPosY=%d
 windowWidth=%u
 windowHeight=%u
+bindAddress=%s
 )";
 
 
@@ -84,7 +98,8 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler( HWND hWnd, UINT ms
 
 bool8_t deserializeSettings( Win32Settings* pOutSettings, const char* pSettingsTextBuffer, size_t settingsTextBufferSizeInBytes )
 {
-	if( sscanf_s( pSettingsTextBuffer, pSettingsFormatting, &pOutSettings->windowPosX, &pOutSettings->windowPosY, &pOutSettings->windowWidth, &pOutSettings->windowHeight ) == 0 )
+	if( sscanf_s( pSettingsTextBuffer, pSettingsFormatting, &pOutSettings->windowPosX, &pOutSettings->windowPosY, 
+		&pOutSettings->windowWidth, &pOutSettings->windowHeight, &pOutSettings->bindAddress ) == 0 )
 	{
 		return false;
 	}
@@ -94,7 +109,8 @@ bool8_t deserializeSettings( Win32Settings* pOutSettings, const char* pSettingsT
 
 DWORD serializeSettings( const Win32Settings* pSettings, char* pSettingsTextBuffer, size_t settingsTextBufferSizeInBytes )
 {
-	return sprintf_s( pSettingsTextBuffer, settingsTextBufferSizeInBytes, pSettingsFormatting, pSettings->windowPosX, pSettings->windowPosY, pSettings->windowWidth, pSettings->windowHeight );
+	return sprintf_s( pSettingsTextBuffer, settingsTextBufferSizeInBytes, pSettingsFormatting, pSettings->windowPosX, pSettings->windowPosY, 
+		pSettings->windowWidth, pSettings->windowHeight, pSettings->bindAddress );
 }
 
 bool8_t writeSettingsToFile( const Win32Settings* pSettings, const char* pSettingsPath )
@@ -207,6 +223,7 @@ void applyDefaultSettings( Win32Settings* pOutSettings )
 	pOutSettings->windowPosY = 0;
 	pOutSettings->windowWidth = 1024;
 	pOutSettings->windowHeight = 768;
+	strcpy( pOutSettings->bindAddress, "127.0.0.1" );
 }
 
 constexpr size_t imguiMemoryBlockSizeInBytes = Mbyte(4);
@@ -403,7 +420,7 @@ bool8_t setupImgui(Win32Context* pContext)
 	return true;
 }
 
-bool8_t setupNetworking(Win32Context* pContext)
+bool8_t setupNetworking( Win32Context* pContext, const char* pBindAddress )
 {
 	WORD wsaVersion = MAKEWORD( 2, 2 );
 	WSADATA wsaData = {};
@@ -419,6 +436,20 @@ bool8_t setupNetworking(Win32Context* pContext)
 		DWORD error = GetLastError();
 		return false;
 	}
+
+	pContext->debugSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if( pContext->debugSocket == INVALID_SOCKET )
+	{
+		return false;
+	}
+
+	struct sockaddr_in bindAddr;
+	bindAddr.sin_family = AF_INET;
+	bindAddr.sin_port 	= DebuggerPort;
+	bindAddr.sin_addr 	= convertFromIPv4AddressString( pBindAddress, K15_IPV4_ADDRESS_MAX_STRING_LENGTH );
+	int result = bind( pContext->debugSocket, (struct sockaddr*)&bindAddr, sizeof( bindAddr ) );
+
+	listen( pContext->debugSocket, 1 );
 
 	char broadcast = 1;
 	if( setsockopt(pContext->broadcastSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1) != 0 )
@@ -453,10 +484,20 @@ bool8_t setupNetworking(Win32Context* pContext)
 	return true;
 }
 
-void doDebuggerUiFrame()
+void doDebuggerUiFrame( DebuggerContext* pContext )
 {
-	ImGui::Begin("TestFrame");
-	ImGui::Button("Dies ist ein Test!");
+	ImGui::Begin("Connect to a target");
+	for( uint8_t index = 0; index < pContext->debuggerTargetCount; ++index )
+	{
+		ImGui::LabelText( "", "%s - %s", pContext->debuggerTargets[ index ].name, pContext->debuggerTargets[ index ].address );
+		ImGui::SameLine();
+		
+		if( ImGui::Button("Connect") )
+		{
+			tryToConnectToEmulatorInstance( &pContext->debuggerTargets[ index ] );
+		}
+	}
+
 	ImGui::End();
 }
 
@@ -469,42 +510,70 @@ void renderDebuggerUiFrame(HDC dc)
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void searchForEmulators( DebuggerContext* pContext, float deltaTimeInSeconds )
+void sendEmulatorDetectionBroadcast( SOCKET socket, const networkaddress_t* pBroadcastAddresses, size_t broadcastAddressCount )
 {
-	pContext->timeUntilBroadcastInSeconds -= deltaTimeInSeconds;
-	if( pContext->timeUntilBroadcastInSeconds <= 0.0f )
+	struct sockaddr_in broadcastAddr;
+	broadcastAddr.sin_family 		= AF_INET;
+	broadcastAddr.sin_port 			= DebuggerBroadcastPort;
+
+	for( uint8_t broadcastIndex = 0; broadcastIndex < broadcastAddressCount; ++broadcastIndex )
 	{
-		pContext->timeUntilBroadcastInSeconds = BroadcastTimeIntervallInSeconds;
-
-		struct sockaddr_in broadcastAddr;
-		broadcastAddr.sin_family 		= AF_INET;
-		broadcastAddr.sin_port 			= DebuggerBroadcastPort;
-
-		for( uint8_t broadcastIndex = 0; broadcastIndex < pContext->broadcastAddressCount; ++broadcastIndex )
-		{
-			broadcastAddr.sin_addr.S_un.S_addr = pContext->pBroadcastAddresses[ broadcastIndex ];
-			sendto( pContext->broadcastSocket, (const char*)&BroadcastPacket, sizeof( BroadcastPacket ), 0, ( const sockaddr* )&broadcastAddr, sizeof( broadcastAddr ) );
-		}
+		broadcastAddr.sin_addr.S_un.S_addr = pBroadcastAddresses[ broadcastIndex ];
+		sendto( socket, (const char*)&BroadcastPacket, sizeof( BroadcastPacket ), 0, ( const sockaddr* )&broadcastAddr, sizeof( broadcastAddr ) );
 	}
+}
 
+bool8_t targetAnsweredBroadcast( SOCKET socket, DebuggerTarget* pOutDebuggerTarget )
+{
 	struct sockaddr_in emulatorAddr = {};
 	EmulatorPacket emulatorPacket = {};
 	int packetLength = sizeof( emulatorAddr );
-	if( recvfrom( pContext->broadcastSocket, (char*)&emulatorPacket, sizeof( emulatorPacket ), 0, (sockaddr*)&emulatorAddr, &packetLength ) != -1 )
+	if( recvfrom( socket, (char*)&emulatorPacket, sizeof( emulatorPacket ), 0, (sockaddr*)&emulatorAddr, &packetLength ) != -1 )
 	{
 		if( isValidEmulatorPacket( &emulatorPacket ) && emulatorPacket.header.type == EmulatorPacketType::PING )
 		{
-			char address[K15_IPV4_ADDRESS_MAX_STRING_LENGTH] = {};
-			convertToIPv4AddressString( emulatorAddr.sin_addr, address, sizeof( address ) );
-			printf( address );
+			strcpy_s( pOutDebuggerTarget->name, K15_MAX_COMPUTER_NAME_LENGTH, emulatorPacket.payload.pingPayload.computerName );
+			convertToIPv4AddressString( emulatorAddr.sin_addr, pOutDebuggerTarget->address, K15_IPV4_ADDRESS_MAX_STRING_LENGTH );
+			return true;
 		}
 	}
+
+	return false;
 }
 
 void tickDebugger( DebuggerContext* pContext, float deltaTimeInSeconds )
 {
-	searchForEmulators( pContext, deltaTimeInSeconds );
-	doDebuggerUiFrame();
+	if( pContext->emulatorSocket == INVALID_SOCKET )
+	{
+		pContext->timeUntilBroadcastInSeconds -= deltaTimeInSeconds;
+		if( pContext->timeUntilBroadcastInSeconds <= 0.0f )
+		{
+			sendEmulatorDetectionBroadcast( pContext->broadcastSocket, pContext->pBroadcastAddresses, pContext->broadcastAddressCount );
+			pContext->timeUntilBroadcastInSeconds = BroadcastTimeIntervallInSeconds; 
+		}
+
+		DebuggerTarget potentialTarget = {};
+		if( targetAnsweredBroadcast( pContext->broadcastSocket, &potentialTarget ) )
+		{
+			bool8_t targetFoundEarlier = false;
+			for( uint8_t targetIndex = 0; targetIndex < pContext->debuggerTargetCount; ++targetIndex )
+			{
+				if( strcmp( pContext->debuggerTargets[ targetIndex ].address, potentialTarget.address ) == 0 )
+				{
+					targetFoundEarlier = true;
+					break;
+				}
+			}
+
+			if( !targetFoundEarlier && pContext->debuggerTargetCount + 1 < K15_MAX_DEBUGGER_TARGETS )
+			{
+				pContext->debuggerTargets[ pContext->debuggerTargetCount ] = potentialTarget;
+				++pContext->debuggerTargetCount;
+			}
+		}
+	}
+	
+	doDebuggerUiFrame( pContext );
 }
 
 float calculateDeltaTimeInSeconds( const LARGE_INTEGER* pFrequency, LARGE_INTEGER* pCounter )
@@ -527,6 +596,7 @@ void runDebuggerMainLoop( Win32Context* pContext )
 	debuggerContext.broadcastSocket 		= pContext->broadcastSocket;
 	debuggerContext.pBroadcastAddresses 	= pContext->broadcastAddresses;
 	debuggerContext.broadcastAddressCount 	= pContext->broadcastAddressCount;
+	debuggerContext.emulatorSocket			= INVALID_SOCKET;
 
 	bool loopRunning = true;
 	while( loopRunning )
@@ -607,7 +677,7 @@ int CALLBACK WinMain(HINSTANCE pInstance, HINSTANCE pPrevInstance, LPSTR lpCmdLi
 		return 1;
 	}
 
-	if( !setupNetworking( &context ) )
+	if( !setupNetworking( &context, settings.bindAddress ) )
 	{
 		return 1;
 	}

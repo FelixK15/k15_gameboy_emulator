@@ -242,6 +242,7 @@ struct Win32RomSelectionDialogData
 
 struct Win32ApplicationContext
 {
+	char						computerName[K15_MAX_COMPUTER_NAME_LENGTH]		= {};
 	char 						mainWindowClass[64]								= {};
 	Win32EmulatorContext		emulatorContext									= {};
 	Win32UserMessage			userMessage										= {};
@@ -2158,6 +2159,9 @@ bool8_t setupUi( Win32ApplicationContext* pContext )
 		return 0;
 	}
 
+	DWORD computerNameLength = K15_MAX_COMPUTER_NAME_LENGTH;
+	GetComputerNameA( pContext->computerName, &computerNameLength );
+
 	SetWindowLongPtrA( pContext->pMainWindowHandle, GWLP_USERDATA, (LONG_PTR)pContext );
 	ShowWindow(pContext->pMainWindowHandle, SW_SHOW);
 
@@ -2516,7 +2520,7 @@ void checkDebuggerConnection( Win32ApplicationContext* pContext )
 	int bytes = recvfrom( pContext->broadcastSocket, (char*)&packet, sizeof(packet), 0, (sockaddr*)&senderAddr, &length );
 	if( bytes == sizeof( DebuggerPacket ) && isValidDebuggerPacket( &packet ) && packet.header.type == DebuggerPacketType::BROADCAST )
 	{
-		EmulatorPacket pingPacket = createPingEmulatorPacket( EmulatorHostPlatform::Windows );
+		EmulatorPacket pingPacket = createPingEmulatorPacket( EmulatorHostPlatform::Windows, pContext->computerName );
 		sendto(pContext->broadcastSocket, (char*)&pingPacket, sizeof( pingPacket ), 0, ( const sockaddr* )&senderAddr, sizeof( senderAddr ) );
 	}
 }
