@@ -2062,7 +2062,8 @@ uint8_t generateOpenGLShaders( Win32ApplicationContext* pContext  )
 
 bool8_t createOpenGLContext( Win32ApplicationContext* pContext )
 {
-	if( !setupOpenGLAndCreateOpenGL4Context( pContext->pMainWindowHandle, pContext->pDeviceContext ) )
+	pContext->pOpenGLContext = setupOpenGLAndCreateOpenGL4Context( pContext->pMainWindowHandle, pContext->pDeviceContext );
+	if( pContext->pOpenGLContext == nullptr )
 	{
 		return false;
 	}
