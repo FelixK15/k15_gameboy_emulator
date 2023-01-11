@@ -258,7 +258,8 @@ struct Win32ApplicationContext
 	HGLRC						pOpenGLContext									= nullptr;
 	HDC							pDeviceContext									= nullptr;
 	SOCKET 						broadcastSocket									= INVALID_SOCKET;
-	SOCKET 						debuggerSocket									= INVALID_SOCKET;
+	SOCKET 						listenerSocket									= INVALID_SOCKET;
+	SOCKET 						debugSocket 									= INVALID_SOCKET;
 	uint8_t* 					pGameboyRGBVideoBuffer 							= nullptr;
 	uint8_t*					pUncompressBuffer								= nullptr;
 	char 						gameTitle[16] 									= {};
@@ -2112,28 +2113,36 @@ bool8_t setupMainWindow( Win32ApplicationContext* pContext )
 	return 1u;
 }
 
-bool8_t setupNetworking( SOCKET* pOutSocket )
+bool8_t setupNetworking( SOCKET* pOutBroadcastSocket, SOCKET* pOutListenerSocket )
 {
 	WORD wsaVersion = MAKEWORD( 2, 2 );
 	WSADATA wsaData = {};
 	w32WSAStartup(wsaVersion, &wsaData);
 
-	SOCKET newSocket = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
+	SOCKET broadcastSocket 	= socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
+	SOCKET listenerSocket 	= socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
 
 	char broadcast = 1;
-	setsockopt( newSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1 );
+	setsockopt( broadcastSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1 );
 
 	u_long mode = 1;  // 1 to enable non-blocking socket
-	ioctlsocket( newSocket, FIONBIO, &mode );
+	ioctlsocket( broadcastSocket, FIONBIO, &mode );
+	ioctlsocket( listenerSocket, FIONBIO, &mode );
 
-	struct sockaddr_in receiveAddr = {};
-	receiveAddr.sin_family 		= AF_INET;
-	receiveAddr.sin_port 		= DebuggerBroadcastPort;
-	receiveAddr.sin_addr.s_addr = INADDR_ANY;
+	struct sockaddr_in anyAddress = {};
+	anyAddress.sin_family 		= AF_INET;
+	anyAddress.sin_port 		= DebuggerBroadcastPort;
+	anyAddress.sin_addr.s_addr 	= INADDR_ANY;
 
-	bind( newSocket, (const sockaddr*)&receiveAddr, sizeof( receiveAddr ) );
+	bind( broadcastSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) );
+	
+	anyAddress.sin_port = DebuggerPort;
+	bind( listenerSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) );
 
-	*pOutSocket = newSocket;
+	int result = listen( listenerSocket, 1u );
+
+	*pOutBroadcastSocket = broadcastSocket;
+	*pOutListenerSocket = listenerSocket;
 	return true;
 }
 
@@ -2188,7 +2197,7 @@ bool8_t setupOpenGL( Win32ApplicationContext* pContext )
 		return 0;
 	}
 
-	if(! generateOpenGLShaders( pContext ) )
+	if( !generateOpenGLShaders( pContext ) )
 	{
 		return 0;
 	}
@@ -2506,13 +2515,8 @@ void updateUserMessage( Win32UserMessage* pUserMessage, const uint32_t deltaTime
 	pUserMessage->timeToLiveInMilliseconds -= deltaTimeInMicroSeconds;
 }
 
-void checkDebuggerConnection( Win32ApplicationContext* pContext )
+void checkForDebuggerBroadcast( Win32ApplicationContext* pContext )
 {
-	if( pContext->debuggerSocket != INVALID_SOCKET )
-	{
-		return;
-	}
-
 	DebuggerPacket packet;
 
 	struct sockaddr_in senderAddr;
@@ -2523,6 +2527,42 @@ void checkDebuggerConnection( Win32ApplicationContext* pContext )
 	{
 		EmulatorPacket pingPacket = createPingEmulatorPacket( EmulatorHostPlatform::Windows, pContext->computerName );
 		sendto(pContext->broadcastSocket, (char*)&pingPacket, sizeof( pingPacket ), 0, ( const sockaddr* )&senderAddr, sizeof( senderAddr ) );
+	}
+}
+
+void acceptDebuggerConnection( Win32ApplicationContext* pContext )
+{
+	pContext->debugSocket = accept( pContext->listenerSocket, nullptr, nullptr );
+	if( pContext->debugSocket == -1 )
+	{
+		return;
+	}
+
+	const int sndBufferSizeInBytes = K15_DEBUGGER_SENT_BUFFER_SIZE_IN_BYTES;
+	if( setsockopt( pContext->debugSocket, SOL_SOCKET, SO_SNDBUF, (const char*)&sndBufferSizeInBytes, sizeof(sndBufferSizeInBytes) ) == -1 )
+	{
+		printf("[Warning] Couldn't set sendBufferSize for debug socket after establishing connection to a debugger. errno: %d", errno);
+	}
+
+	//FK: Debugger got connected!
+	send( pContext->debugSocket, )
+}
+
+void sendMemoryToDebugger( SOCKET debugSocket, const void* pMemory )
+{
+	send( debugSocket, (const char*)pMemory, 0x10000, 0 );
+}
+
+void updateNetwork( Win32ApplicationContext* pContext )
+{
+	if( pContext->debugSocket != INVALID_SOCKET )
+	{
+		sendMemoryToDebugger( pContext->debugSocket, pContext->emulatorContext.pEmulatorInstance->pMemoryMapper->pBaseAddress );
+	}
+	else
+	{
+		checkForDebuggerBroadcast( pContext );
+		acceptDebuggerConnection( pContext );
 	}
 }
 
@@ -2566,7 +2606,7 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
-		checkDebuggerConnection( pContext );
+		updateNetwork( pContext );
 
 		const uint32_t gbCyclesPerSecond = gbCyclesPerFrame * gbEmulatorFrameRate;
 
@@ -2719,7 +2759,7 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		return 1;
 	}
 
-	if( !setupNetworking( &appContext.broadcastSocket ) )
+	if( !setupNetworking( &appContext.broadcastSocket, &appContext.listenerSocket ) )
 	{
 		return 1;
 	}

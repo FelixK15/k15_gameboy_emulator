@@ -35,6 +35,8 @@ constexpr float  BroadcastTimeIntervallInSeconds = 2.0f;
 
 struct Win32Context
 {
+	void*				pEmulatorMemory;
+
 	HWND 				pMainWindowHandle;
 	HDC  				pMainWindowDeviceContext;
 	HGLRC				pOpenGLContext;
@@ -63,15 +65,22 @@ struct DebuggerTarget
 
 #define K15_MAX_DEBUGGER_TARGETS 16
 
+struct EmulatorDebuggerContext
+{
+	void* pMemory;
+};
+
 struct DebuggerContext
 {
-	DebuggerTarget debuggerTargets[K15_MAX_DEBUGGER_TARGETS];
-	uint32_t* 	pBroadcastAddresses;
-	SOCKET 		broadcastSocket;
-	SOCKET 		emulatorSocket;
-	float 		timeUntilBroadcastInSeconds = BroadcastTimeIntervallInSeconds;
-	uint8_t 	broadcastAddressCount;
-	uint8_t	 	debuggerTargetCount;
+	DebuggerTarget 			debuggerTargets[K15_MAX_DEBUGGER_TARGETS];
+	EmulatorDebuggerContext emulatorContext;
+	uint32_t* 				pBroadcastAddresses;
+	SOCKET 					broadcastSocket;
+	SOCKET 					emulatorSocket;
+	float 					timeUntilBroadcastInSeconds = BroadcastTimeIntervallInSeconds;
+	uint8_t 				broadcastAddressCount;
+	uint8_t	 				debuggerTargetCount;
+	bool8_t 				connectedToEmulator;
 };
 
 struct Win32Settings
@@ -420,7 +429,7 @@ bool8_t setupImgui(Win32Context* pContext)
 	return true;
 }
 
-bool8_t setupNetworking( Win32Context* pContext, const char* pBindAddress )
+bool8_t setupNetworking( Win32Context* pContext )
 {
 	WORD wsaVersion = MAKEWORD( 2, 2 );
 	WSADATA wsaData = {};
@@ -442,14 +451,6 @@ bool8_t setupNetworking( Win32Context* pContext, const char* pBindAddress )
 	{
 		return false;
 	}
-
-	struct sockaddr_in bindAddr;
-	bindAddr.sin_family = AF_INET;
-	bindAddr.sin_port 	= DebuggerPort;
-	bindAddr.sin_addr 	= convertFromIPv4AddressString( pBindAddress, K15_IPV4_ADDRESS_MAX_STRING_LENGTH );
-	int result = bind( pContext->debugSocket, (struct sockaddr*)&bindAddr, sizeof( bindAddr ) );
-
-	listen( pContext->debugSocket, 1 );
 
 	char broadcast = 1;
 	if( setsockopt(pContext->broadcastSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1) != 0 )
@@ -484,7 +485,16 @@ bool8_t setupNetworking( Win32Context* pContext, const char* pBindAddress )
 	return true;
 }
 
-void doDebuggerUiFrame( DebuggerContext* pContext )
+bool8_t tryToConnectToEmulatorInstance( SOCKET socket, const DebuggerTarget* pTarget )
+{
+	struct sockaddr_in targetAddress;
+	targetAddress.sin_family = AF_INET;
+	targetAddress.sin_port = DebuggerPort;
+	targetAddress.sin_addr = convertFromIPv4AddressString( pTarget->address, K15_IPV4_ADDRESS_MAX_STRING_LENGTH );
+	return connect( socket, (struct sockaddr*)&targetAddress, sizeof( targetAddress ) ) == 0;
+}
+
+void doEmulatorSelectUi( DebuggerContext* pContext )
 {
 	ImGui::Begin("Connect to a target");
 	for( uint8_t index = 0; index < pContext->debuggerTargetCount; ++index )
@@ -494,11 +504,46 @@ void doDebuggerUiFrame( DebuggerContext* pContext )
 		
 		if( ImGui::Button("Connect") )
 		{
-			tryToConnectToEmulatorInstance( &pContext->debuggerTargets[ index ] );
+			if( tryToConnectToEmulatorInstance( pContext->emulatorSocket, &pContext->debuggerTargets[ index ] ) )
+			{
+				pContext->connectedToEmulator = true;
+			}
 		}
 	}
 
 	ImGui::End();
+}
+
+void doEmulatorMemoryViewUi( DebuggerContext* pContext )
+{
+	static MemoryEditor s_MemoryEditor;
+
+	ImGui::Begin("Memory Debug View");
+	s_MemoryEditor.DrawContents( pContext->emulatorContext.pMemory, 0xFFFF, 1u );
+	ImGui::End();
+}
+
+void doEmulatorDebugUi( DebuggerContext* pContext )
+{
+	doEmulatorMemoryViewUi( pContext );
+}
+
+void updateEmulatorState( DebuggerContext* pContext )
+{
+	recv( pContext->emulatorSocket, (char*)pContext->emulatorContext.pMemory, 0x10000, 0 );
+}
+
+void doDebuggerUiFrame( DebuggerContext* pContext )
+{
+	if( !pContext->connectedToEmulator )
+	{
+		doEmulatorSelectUi( pContext );
+	}
+	else 
+	{
+		updateEmulatorState( pContext );
+		doEmulatorDebugUi( pContext );
+	}
 }
 
 void renderDebuggerUiFrame(HDC dc)
@@ -541,36 +586,41 @@ bool8_t targetAnsweredBroadcast( SOCKET socket, DebuggerTarget* pOutDebuggerTarg
 	return false;
 }
 
+void searchForEmulatorsToConnectTo( DebuggerContext* pContext, float deltaTimeInSeconds )
+{
+	pContext->timeUntilBroadcastInSeconds -= deltaTimeInSeconds;
+	if( pContext->timeUntilBroadcastInSeconds <= 0.0f )
+	{
+		sendEmulatorDetectionBroadcast( pContext->broadcastSocket, pContext->pBroadcastAddresses, pContext->broadcastAddressCount );
+		pContext->timeUntilBroadcastInSeconds = BroadcastTimeIntervallInSeconds; 
+	}
+
+	DebuggerTarget potentialTarget = {};
+	if( targetAnsweredBroadcast( pContext->broadcastSocket, &potentialTarget ) )
+	{
+		bool8_t targetFoundEarlier = false;
+		for( uint8_t targetIndex = 0; targetIndex < pContext->debuggerTargetCount; ++targetIndex )
+		{
+			if( strcmp( pContext->debuggerTargets[ targetIndex ].address, potentialTarget.address ) == 0 )
+			{
+				targetFoundEarlier = true;
+				break;
+			}
+		}
+
+		if( !targetFoundEarlier && pContext->debuggerTargetCount + 1 < K15_MAX_DEBUGGER_TARGETS )
+		{
+			pContext->debuggerTargets[ pContext->debuggerTargetCount ] = potentialTarget;
+			++pContext->debuggerTargetCount;
+		}
+	}
+}
+
 void tickDebugger( DebuggerContext* pContext, float deltaTimeInSeconds )
 {
-	if( pContext->emulatorSocket == INVALID_SOCKET )
+	if( !pContext->connectedToEmulator )
 	{
-		pContext->timeUntilBroadcastInSeconds -= deltaTimeInSeconds;
-		if( pContext->timeUntilBroadcastInSeconds <= 0.0f )
-		{
-			sendEmulatorDetectionBroadcast( pContext->broadcastSocket, pContext->pBroadcastAddresses, pContext->broadcastAddressCount );
-			pContext->timeUntilBroadcastInSeconds = BroadcastTimeIntervallInSeconds; 
-		}
-
-		DebuggerTarget potentialTarget = {};
-		if( targetAnsweredBroadcast( pContext->broadcastSocket, &potentialTarget ) )
-		{
-			bool8_t targetFoundEarlier = false;
-			for( uint8_t targetIndex = 0; targetIndex < pContext->debuggerTargetCount; ++targetIndex )
-			{
-				if( strcmp( pContext->debuggerTargets[ targetIndex ].address, potentialTarget.address ) == 0 )
-				{
-					targetFoundEarlier = true;
-					break;
-				}
-			}
-
-			if( !targetFoundEarlier && pContext->debuggerTargetCount + 1 < K15_MAX_DEBUGGER_TARGETS )
-			{
-				pContext->debuggerTargets[ pContext->debuggerTargetCount ] = potentialTarget;
-				++pContext->debuggerTargetCount;
-			}
-		}
+		searchForEmulatorsToConnectTo( pContext, deltaTimeInSeconds );
 	}
 	
 	doDebuggerUiFrame( pContext );
@@ -596,7 +646,8 @@ void runDebuggerMainLoop( Win32Context* pContext )
 	debuggerContext.broadcastSocket 		= pContext->broadcastSocket;
 	debuggerContext.pBroadcastAddresses 	= pContext->broadcastAddresses;
 	debuggerContext.broadcastAddressCount 	= pContext->broadcastAddressCount;
-	debuggerContext.emulatorSocket			= INVALID_SOCKET;
+	debuggerContext.emulatorSocket			= pContext->debugSocket;
+	debuggerContext.emulatorContext.pMemory	= pContext->pEmulatorMemory;
 
 	bool loopRunning = true;
 	while( loopRunning )
@@ -677,7 +728,13 @@ int CALLBACK WinMain(HINSTANCE pInstance, HINSTANCE pPrevInstance, LPSTR lpCmdLi
 		return 1;
 	}
 
-	if( !setupNetworking( &context, settings.bindAddress ) )
+	if( !setupNetworking( &context ) )
+	{
+		return 1;
+	}
+
+	context.pEmulatorMemory = VirtualAlloc( ( LPVOID )0x400000000, 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
+	if( context.pEmulatorMemory == nullptr )
 	{
 		return 1;
 	}

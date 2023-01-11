@@ -4,6 +4,8 @@
 #include "k15_types.h"
 
 #define K15_MAX_COMPUTER_NAME_LENGTH  64
+#define K15_DEBUGGER_SENT_BUFFER_SIZE_IN_BYTES Mbyte(1)
+#define K15_DEBUGGER_RECV_BUFFER_SIZE_IN_BYTES Mbyte(1)
 
 enum class DebuggerPacketType : uint8_t
 {
@@ -24,6 +26,9 @@ struct DebuggerPacket
 enum class EmulatorPacketType : uint8_t
 {
 	PING,
+	EMULATOR_SETUP,
+	EMULATOR_MEMORY,
+	EMULATOR_OPCODE
 };
 
 struct EmulatorPacketHeader
@@ -82,5 +87,7 @@ inline EmulatorPacket createPingEmulatorPacket( EmulatorHostPlatform hostPlatfor
 
 	return pingPacket;
 }
+
+inline EmulatorPacket createEmulatorSetupPacket( )
 
 #endif //K15_GB_NETWORK
