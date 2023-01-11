@@ -61,13 +61,15 @@ struct DebuggerTarget
 {
 	char name[K15_MAX_COMPUTER_NAME_LENGTH];
 	char address[K15_IPV4_ADDRESS_MAX_STRING_LENGTH];
+	uint8_t protocolVersion;
 };
 
 #define K15_MAX_DEBUGGER_TARGETS 16
 
 struct EmulatorDebuggerContext
 {
-	void* pMemory;
+	GBCpuRegisters 	cpuRegisters;
+	void* 			pMemory;
 };
 
 struct DebuggerContext
@@ -499,6 +501,8 @@ void doEmulatorSelectUi( DebuggerContext* pContext )
 	ImGui::Begin("Connect to a target");
 	for( uint8_t index = 0; index < pContext->debuggerTargetCount; ++index )
 	{
+		const bool8_t hasValidProtocolVersion = ( pContext->debuggerTargets[ index ].protocolVersion & ProtocolMajorVersion ) != 0u;
+		ImGui::BeginDisabled( !hasValidProtocolVersion );
 		ImGui::LabelText( "", "%s - %s", pContext->debuggerTargets[ index ].name, pContext->debuggerTargets[ index ].address );
 		ImGui::SameLine();
 		
@@ -509,6 +513,7 @@ void doEmulatorSelectUi( DebuggerContext* pContext )
 				pContext->connectedToEmulator = true;
 			}
 		}
+		ImGui::EndDisabled();
 	}
 
 	ImGui::End();
@@ -523,14 +528,77 @@ void doEmulatorMemoryViewUi( DebuggerContext* pContext )
 	ImGui::End();
 }
 
+void doEmulatorCpuRegisterViewUi( DebuggerContext* pContext )
+{
+	ImGui::Begin("CPU View");
+	ImGui::BeginTable( "Registers", 2 );
+
+	ImGui::TableNextRow();
+	ImGui::TableNextColumn();
+	ImGui::Text("AF");
+	ImGui::TableNextColumn();
+	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.AF);
+
+	ImGui::TableNextRow();
+	ImGui::TableNextColumn();
+	ImGui::Text("BC");
+	ImGui::TableNextColumn();
+	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.BC);
+
+	ImGui::TableNextRow();
+	ImGui::TableNextColumn();
+	ImGui::Text("DE");
+	ImGui::TableNextColumn();
+	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.DE);
+
+	ImGui::TableNextRow();
+	ImGui::TableNextColumn();
+	ImGui::Text("HL");
+	ImGui::TableNextColumn();
+	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.HL);
+
+	ImGui::TableNextRow();
+	ImGui::TableNextColumn();
+	ImGui::Text("SP");
+	ImGui::TableNextColumn();
+	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.SP);
+
+	ImGui::TableNextRow();
+	ImGui::TableNextColumn();
+	ImGui::Text("PC");
+	ImGui::TableNextColumn();
+	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.PC);
+
+	ImGui::EndTable();
+	ImGui::End();
+}
+
 void doEmulatorDebugUi( DebuggerContext* pContext )
 {
 	doEmulatorMemoryViewUi( pContext );
+	doEmulatorCpuRegisterViewUi( pContext );
 }
 
-void updateEmulatorState( DebuggerContext* pContext )
+void receiveEmulatorMessages( DebuggerContext* pContext )
 {
-	recv( pContext->emulatorSocket, (char*)pContext->emulatorContext.pMemory, 0x10000, 0 );
+	EmulatorMessageHeader messageHeader = {};
+	if( recv( pContext->emulatorSocket, (char*)&messageHeader, sizeof( messageHeader ), 0u ) != -1 )
+	{
+		switch( messageHeader.type )
+		{
+			case EmulatorMessageType::MEMORY:
+			{
+				recv( pContext->emulatorSocket, ( char* )pContext->emulatorContext.pMemory, gbMappedMemorySizeInBytes, 0u );
+				break;
+			}
+
+			case EmulatorMessageType::CPU_REGISTERS:
+			{
+				recv( pContext->emulatorSocket, ( char* )&pContext->emulatorContext.cpuRegisters, sizeof( GBCpuRegisters ), 0u );
+				break;
+			}
+		}
+	}
 }
 
 void doDebuggerUiFrame( DebuggerContext* pContext )
@@ -541,7 +609,7 @@ void doDebuggerUiFrame( DebuggerContext* pContext )
 	}
 	else 
 	{
-		updateEmulatorState( pContext );
+		receiveEmulatorMessages( pContext );
 		doEmulatorDebugUi( pContext );
 	}
 }
@@ -571,13 +639,14 @@ void sendEmulatorDetectionBroadcast( SOCKET socket, const networkaddress_t* pBro
 bool8_t targetAnsweredBroadcast( SOCKET socket, DebuggerTarget* pOutDebuggerTarget )
 {
 	struct sockaddr_in emulatorAddr = {};
-	EmulatorPacket emulatorPacket = {};
+	EmulatorPingMessage emulatorPingMessage = {};
 	int packetLength = sizeof( emulatorAddr );
-	if( recvfrom( socket, (char*)&emulatorPacket, sizeof( emulatorPacket ), 0, (sockaddr*)&emulatorAddr, &packetLength ) != -1 )
+	if( recvfrom( socket, (char*)&emulatorPingMessage, sizeof( emulatorPingMessage ), 0, (sockaddr*)&emulatorAddr, &packetLength ) != -1 )
 	{
-		if( isValidEmulatorPacket( &emulatorPacket ) && emulatorPacket.header.type == EmulatorPacketType::PING )
+		if( isValidEmulatorMessageHeader( &emulatorPingMessage.header ) && emulatorPingMessage.header.type == EmulatorMessageType::PING )
 		{
-			strcpy_s( pOutDebuggerTarget->name, K15_MAX_COMPUTER_NAME_LENGTH, emulatorPacket.payload.pingPayload.computerName );
+			pOutDebuggerTarget->protocolVersion = emulatorPingMessage.protocolVersion;
+			strcpy_s( pOutDebuggerTarget->name, K15_MAX_COMPUTER_NAME_LENGTH, emulatorPingMessage.computerName );
 			convertToIPv4AddressString( emulatorAddr.sin_addr, pOutDebuggerTarget->address, K15_IPV4_ADDRESS_MAX_STRING_LENGTH );
 			return true;
 		}

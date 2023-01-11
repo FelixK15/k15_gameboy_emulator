@@ -2525,7 +2525,7 @@ void checkForDebuggerBroadcast( Win32ApplicationContext* pContext )
 	int bytes = recvfrom( pContext->broadcastSocket, (char*)&packet, sizeof(packet), 0, (sockaddr*)&senderAddr, &length );
 	if( bytes == sizeof( DebuggerPacket ) && isValidDebuggerPacket( &packet ) && packet.header.type == DebuggerPacketType::BROADCAST )
 	{
-		EmulatorPacket pingPacket = createPingEmulatorPacket( EmulatorHostPlatform::Windows, pContext->computerName );
+		EmulatorPingMessage pingPacket = createEmulatorPingMessage( EmulatorHostPlatform::Windows, pContext->computerName );
 		sendto(pContext->broadcastSocket, (char*)&pingPacket, sizeof( pingPacket ), 0, ( const sockaddr* )&senderAddr, sizeof( senderAddr ) );
 	}
 }
@@ -2544,8 +2544,12 @@ void acceptDebuggerConnection( Win32ApplicationContext* pContext )
 		printf("[Warning] Couldn't set sendBufferSize for debug socket after establishing connection to a debugger. errno: %d", errno);
 	}
 
-	//FK: Debugger got connected!
-	send( pContext->debugSocket, )
+	//FK: Debugger got connected! Sent current emulator status
+	const EmulatorCpuRegisterMessage cpuMessage = createEmulatorCpuRegistersMessage( getGBEmulatorCpuRegisters(pContext->emulatorContext.pEmulatorInstance) );
+	const EmulatorMemoryMessage memoryMessage = createEmulatorMemoryMessage( getGBEmulatorMemory( pContext->emulatorContext.pEmulatorInstance ) );
+	
+	send( pContext->debugSocket, (const char*)&cpuMessage, sizeof(cpuMessage), 0);
+	send( pContext->debugSocket, (const char*)&memoryMessage, sizeof(memoryMessage), 0);
 }
 
 void sendMemoryToDebugger( SOCKET debugSocket, const void* pMemory )

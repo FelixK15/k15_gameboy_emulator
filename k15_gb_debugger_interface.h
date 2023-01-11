@@ -1,7 +1,7 @@
 #ifndef K15_GB_NETWORK
 #define K15_GB_NETWORK
 
-#include "k15_types.h"
+#include "k15_gb_emulator_types.h"
 
 #define K15_MAX_COMPUTER_NAME_LENGTH  64
 #define K15_DEBUGGER_SENT_BUFFER_SIZE_IN_BYTES Mbyte(1)
@@ -23,18 +23,18 @@ struct DebuggerPacket
 	DebuggerPacketHeader header;
 };
 
-enum class EmulatorPacketType : uint8_t
+enum class EmulatorMessageType : uint8_t
 {
 	PING,
-	EMULATOR_SETUP,
-	EMULATOR_MEMORY,
-	EMULATOR_OPCODE
+	CPU_REGISTERS,
+	MEMORY,
+	ROM_HEADER
 };
 
-struct EmulatorPacketHeader
+struct EmulatorMessageHeader
 {
-	fourcc32_t 			fourcc;
-	EmulatorPacketType 	type;
+	fourcc32_t 				fourcc;
+	EmulatorMessageType 	type;
 };
 
 enum class EmulatorHostPlatform : uint8_t
@@ -46,48 +46,89 @@ enum class EmulatorHostPlatform : uint8_t
 	iOS
 };
 
-union EmulatorPacketPayload
+struct BaseEmulatorMessage
 {
-	struct {
-		EmulatorHostPlatform platform;	
-		char 				 computerName[K15_MAX_COMPUTER_NAME_LENGTH];
-	} pingPayload;
+	EmulatorMessageHeader 	header;
 };
 
-struct EmulatorPacket
+struct EmulatorPingMessage : public BaseEmulatorMessage
 {
-	EmulatorPacketHeader 	header;
-	EmulatorPacketPayload 	payload;
+	EmulatorHostPlatform 	platform;
+	uint8_t 				protocolVersion;
+	char 					computerName[ K15_MAX_COMPUTER_NAME_LENGTH ];
+};
+
+struct EmulatorCpuRegisterMessage : public BaseEmulatorMessage
+{
+	GBCpuRegisters 			cpuRegisters;
+};
+
+struct EmulatorMemoryMessage : public BaseEmulatorMessage
+{
+	uint8_t 				memory[ gbMappedMemorySizeInBytes ];
+};
+
+struct EmulatorRomHeaderMessage : public BaseEmulatorMessage
+{
+	GBRomHeader 			romHeader;
 };
 
 constexpr uint16_t 			DebuggerBroadcastPort 	= 4066;
 constexpr uint16_t 			DebuggerPort 			= 5066;
+constexpr uint8_t 			ProtocolMinorVersion 	= 0;
+constexpr uint8_t 			ProtocolMajorVersion 	= 1u << 4u;
+constexpr uint8_t 			ProtocolVersion 		= (ProtocolMajorVersion | ProtocolMinorVersion );
 constexpr fourcc32_t        DebuggerPacketFourCC = K15_FOUR_CC('G', 'B', 'D', 'B');
 constexpr DebuggerPacket    BroadcastPacket = { DebuggerPacketFourCC, DebuggerPacketType::BROADCAST };
 
-constexpr fourcc32_t 		EmulatorPacketFourCC = K15_FOUR_CC('G', 'B', 'E', 'M');
+constexpr fourcc32_t 		EmulatorMessageFourCC = K15_FOUR_CC('G', 'B', 'E', 'M');
+
+inline EmulatorMessageHeader createEmulatorMessageHeader( EmulatorMessageType messageType )
+{
+	EmulatorMessageHeader header = {};
+	header.fourcc = EmulatorMessageFourCC;
+	header.type = messageType;
+
+	return header;
+}
 
 inline bool8_t isValidDebuggerPacket( const DebuggerPacket* pPacket )
 {
     return pPacket->header.fourcc == DebuggerPacketFourCC;
 }
 
-inline bool8_t isValidEmulatorPacket( const EmulatorPacket* pPacket )
+inline bool8_t isValidEmulatorMessageHeader( const EmulatorMessageHeader* pHeader )
 {
-    return pPacket->header.fourcc == EmulatorPacketFourCC;
+    return pHeader->fourcc == EmulatorMessageFourCC;
 }
 
-inline EmulatorPacket createPingEmulatorPacket( EmulatorHostPlatform hostPlatform, const char* pComputerName )
+inline EmulatorPingMessage createEmulatorPingMessage( EmulatorHostPlatform hostPlatform, const char* pComputerName )
 {
-	EmulatorPacket pingPacket = {};
-	pingPacket.header.fourcc 	= EmulatorPacketFourCC;
-	pingPacket.header.type 		= EmulatorPacketType::PING;
-	pingPacket.payload.pingPayload.platform 	= hostPlatform;
-	strcpy_s( pingPacket.payload.pingPayload.computerName, K15_MAX_COMPUTER_NAME_LENGTH, pComputerName );
+	EmulatorPingMessage pingMessage = {};
+	pingMessage.header 			= createEmulatorMessageHeader( EmulatorMessageType::PING );
+	pingMessage.platform 		= hostPlatform;
+	pingMessage.protocolVersion = ProtocolVersion;
+	strcpy_s( pingMessage.computerName, K15_MAX_COMPUTER_NAME_LENGTH, pComputerName );
 
-	return pingPacket;
+	return pingMessage;
 }
 
-inline EmulatorPacket createEmulatorSetupPacket( )
+inline EmulatorCpuRegisterMessage createEmulatorCpuRegistersMessage( GBCpuRegisters cpuRegisters )
+{
+	EmulatorCpuRegisterMessage registersMessage = {};
+	registersMessage.header = createEmulatorMessageHeader( EmulatorMessageType::CPU_REGISTERS );
+	registersMessage.cpuRegisters = cpuRegisters;
+
+	return registersMessage;
+}
+
+inline EmulatorMemoryMessage createEmulatorMemoryMessage( const uint8_t* pMemory )
+{
+	EmulatorMemoryMessage memoryMessage = {};
+	memoryMessage.header = createEmulatorMessageHeader( EmulatorMessageType::MEMORY );
+	memcpy( memoryMessage.memory, pMemory, gbMappedMemorySizeInBytes );
+
+	return memoryMessage;
+}
 
 #endif //K15_GB_NETWORK
