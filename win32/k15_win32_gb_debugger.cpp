@@ -9,7 +9,7 @@
 
 #include "stdio.h"
 
-#include "../k15_gb_debugger_interface.h"
+#include "../k15_gb_debugger_protocol.h"
 
 #include "k15_win32_opengl.h"
 #define IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
@@ -68,6 +68,7 @@ struct DebuggerTarget
 
 struct EmulatorDebuggerContext
 {
+	GBRomHeader 	romHeader;
 	GBCpuRegisters 	cpuRegisters;
 	void* 			pMemory;
 };
@@ -462,6 +463,12 @@ bool8_t setupNetworking( Win32Context* pContext )
 		return false;
 	}
 
+	int recvBufferSizeInBytes = K15_DEBUGGER_RECV_BUFFER_SIZE_IN_BYTES;
+	if( setsockopt(pContext->debugSocket, SOL_SOCKET, SO_RCVBUF, (char*)&recvBufferSizeInBytes, sizeof( recvBufferSizeInBytes ) ) != 0 )
+	{
+
+	}
+
 	u_long mode = 1;  // 1 to enable non-blocking socket
 	ioctlsocket( pContext->broadcastSocket, FIONBIO, &mode );
 
@@ -519,64 +526,52 @@ void doEmulatorSelectUi( DebuggerContext* pContext )
 	ImGui::End();
 }
 
-void doEmulatorMemoryViewUi( DebuggerContext* pContext )
+void doEmulatorMemoryViewUi( void* pEmulatorMemory )
 {
 	static MemoryEditor s_MemoryEditor;
 
 	ImGui::Begin("Memory Debug View");
-	s_MemoryEditor.DrawContents( pContext->emulatorContext.pMemory, 0xFFFF, 1u );
+	s_MemoryEditor.DrawContents( pEmulatorMemory, 0xFFFF, 1u );
 	ImGui::End();
 }
 
-void doEmulatorCpuRegisterViewUi( DebuggerContext* pContext )
+void doEmulatorCpuRegisterViewUi( GBCpuRegisters cpuRegisters )
 {
 	ImGui::Begin("CPU View");
 	ImGui::BeginTable( "Registers", 2 );
 
-	ImGui::TableNextRow();
-	ImGui::TableNextColumn();
-	ImGui::Text("AF");
-	ImGui::TableNextColumn();
-	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.AF);
+	ImGui::TableNextRow(); ImGui::TableNextColumn();
+	ImGui::Text("AF"); ImGui::TableNextColumn(); ImGui::Text("%04X", cpuRegisters.AF);
 
-	ImGui::TableNextRow();
-	ImGui::TableNextColumn();
-	ImGui::Text("BC");
-	ImGui::TableNextColumn();
-	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.BC);
+	ImGui::TableNextRow(); ImGui::TableNextColumn();
+	ImGui::Text("BC"); ImGui::TableNextColumn(); ImGui::Text("%04X", cpuRegisters.BC);
 
-	ImGui::TableNextRow();
-	ImGui::TableNextColumn();
-	ImGui::Text("DE");
-	ImGui::TableNextColumn();
-	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.DE);
+	ImGui::TableNextRow(); ImGui::TableNextColumn();
+	ImGui::Text("DE"); ImGui::TableNextColumn(); ImGui::Text("%04X", cpuRegisters.DE);
 
-	ImGui::TableNextRow();
-	ImGui::TableNextColumn();
-	ImGui::Text("HL");
-	ImGui::TableNextColumn();
-	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.HL);
+	ImGui::TableNextRow(); ImGui::TableNextColumn();
+	ImGui::Text("HL"); ImGui::TableNextColumn(); ImGui::Text("%04X", cpuRegisters.HL);
 
-	ImGui::TableNextRow();
-	ImGui::TableNextColumn();
-	ImGui::Text("SP");
-	ImGui::TableNextColumn();
-	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.SP);
+	ImGui::TableNextRow(); ImGui::TableNextColumn();
+	ImGui::Text("SP"); ImGui::TableNextColumn(); ImGui::Text("%04X", cpuRegisters.SP);
 
-	ImGui::TableNextRow();
-	ImGui::TableNextColumn();
-	ImGui::Text("PC");
-	ImGui::TableNextColumn();
-	ImGui::Text("%04X", pContext->emulatorContext.cpuRegisters.PC);
+	ImGui::TableNextRow(); ImGui::TableNextColumn(); 
+	ImGui::Text("PC"); ImGui::TableNextColumn(); ImGui::Text("%04X", cpuRegisters.PC);
 
 	ImGui::EndTable();
 	ImGui::End();
 }
 
+void doEmulatorRomHeaderViewUi( GBRomHeader romHeader )
+{
+	
+}
+
 void doEmulatorDebugUi( DebuggerContext* pContext )
 {
-	doEmulatorMemoryViewUi( pContext );
-	doEmulatorCpuRegisterViewUi( pContext );
+	doEmulatorMemoryViewUi( pContext->emulatorContext.pMemory );
+	doEmulatorCpuRegisterViewUi( pContext->emulatorContext.cpuRegisters );
+	doEmulatorRomHeaderViewUi( pContext->emulatorContext.romHeader );
 }
 
 void receiveEmulatorMessages( DebuggerContext* pContext )
@@ -595,6 +590,22 @@ void receiveEmulatorMessages( DebuggerContext* pContext )
 			case EmulatorMessageType::CPU_REGISTERS:
 			{
 				recv( pContext->emulatorSocket, ( char* )&pContext->emulatorContext.cpuRegisters, sizeof( GBCpuRegisters ), 0u );
+				break;
+			}
+
+			case EmulatorMessageType::ROM_HEADER:
+			{
+				recv( pContext->emulatorSocket, (char*)&pContext->emulatorContext.romHeader, sizeof( GBRomHeader ), 0u );
+				break;
+			}
+
+			case EmulatorMessageType::CPU_INSTRUCTION:
+			{
+				GBEmulatorCpuInstruction instruction;
+				int bla = recv( pContext->emulatorSocket, (char*)&instruction, sizeof( instruction ), 0u );
+				RuntimeAssert( bla == sizeof( instruction ) );
+
+				printf("%s\n", instruction.mnemonic );
 				break;
 			}
 		}
@@ -772,6 +783,10 @@ int CALLBACK WinMain(HINSTANCE pInstance, HINSTANCE pPrevInstance, LPSTR lpCmdLi
 	{
 		applyDefaultSettings( &settings );
 	}
+
+	AllocConsole();
+	AttachConsole(ATTACH_PARENT_PROCESS);
+	freopen("CONOUT$", "w", stdout);
 
 	Win32Context context = {};
 	context.pMainWindowHandle = setupWindow( pInstance, &settings );

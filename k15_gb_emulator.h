@@ -1,6 +1,6 @@
-#include "k15_gb_emulator_types.h"
+#include "k15_gb_debugger_protocol.h"
 
-#define K15_ENABLE_EMULATOR_DEBUG_FEATURES      0
+#define K15_ENABLE_EMULATOR_DEBUG_FEATURES      1
 #define K15_BREAK_ON_UNKNOWN_INSTRUCTION        1
 #define K15_BREAK_ON_ILLEGAL_INSTRUCTION        1
 
@@ -27,6 +27,55 @@
 
 #ifdef _MSC_VER
 #   pragma warning( pop ) 
+#endif
+
+GBRomHeader getGBRomHeader(const uint8_t* pRomData)
+{
+    GBRomHeader header;
+    memcpy(&header, pRomData + 0x0100, sizeof(GBRomHeader));
+    return header;
+}
+
+GBRomHeader getGBEmulatorCurrentCartridgeHeader( const GBEmulatorInstance* pEmulatorInstance )
+{
+    RuntimeAssert( pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr );
+    return getGBRomHeader( pEmulatorInstance->pCartridge->pRomBaseAddress );
+}
+
+GBCpuRegisters getGBEmulatorCpuRegisters( const GBEmulatorInstance* pEmulatorInstance )
+{
+    return pEmulatorInstance->pCpuState->registers;
+}
+
+const uint8_t* getGBEmulatorMemory( const GBEmulatorInstance* pEmulatorInstance )
+{
+    return pEmulatorInstance->pMemoryMapper->pBaseAddress;
+}
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+bool8_t acceptDebuggerConnection( GBEmulatorInstance* pInstance )
+{
+    pInstance->debuggerSocket = accept( pInstance->listenerSocket, nullptr, nullptr );
+	if( pInstance->debuggerSocket == -1 )
+	{
+		return false;
+	}
+
+	const int sndBufferSizeInBytes = K15_DEBUGGER_SENT_BUFFER_SIZE_IN_BYTES;
+	if( setsockopt( pInstance->debuggerSocket, SOL_SOCKET, SO_SNDBUF, (const char*)&sndBufferSizeInBytes, sizeof(sndBufferSizeInBytes) ) == -1 )
+	{
+		printf("[Warning] Couldn't set sendBufferSize for debug socket after establishing connection to a debugger. errno: %d", errno);
+	}
+
+	//FK: Debugger got connected! Sent current emulator status
+	const EmulatorCpuRegisterMessage cpuMessage = createEmulatorCpuRegistersMessage( getGBEmulatorCpuRegisters( pInstance ) );
+	const EmulatorMemoryMessage memoryMessage = createEmulatorMemoryMessage( getGBEmulatorMemory( pInstance ) );
+	
+	send( pInstance->debuggerSocket, (const char*)&cpuMessage, sizeof(cpuMessage), 0);
+	send( pInstance->debuggerSocket, (const char*)&memoryMessage, sizeof(memoryMessage), 0);
+
+    return true;
+}
 #endif
 
 const uint8_t* getFontGlyphPixel( char glyph )
@@ -209,13 +258,6 @@ bool8_t isGBRomData( const uint8_t* pRomData, const size_t romDataSizeInBytes )
     //FK: TODO calculate complete rom checksum eventually...
     const uint8_t headerChecksum = calculateGBRomHeaderChecksum( pRomData );
     return headerChecksum == header.headerChecksum;
-}
-
-GBRomHeader getGBRomHeader(const uint8_t* pRomData)
-{
-    GBRomHeader header;
-    memcpy(&header, pRomData + 0x0100, sizeof(GBRomHeader));
-    return header;
 }
 
 struct ZipEndOfCentralDirectory
@@ -1037,22 +1079,6 @@ bool8_t isGBEmulatorRomMapped( const GBEmulatorInstance* pEmulatorInstance )
     return pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr;
 }
 
-GBRomHeader getGBEmulatorCurrentCartridgeHeader( const GBEmulatorInstance* pEmulatorInstance )
-{
-    RuntimeAssert( pEmulatorInstance->pCartridge->pRomBaseAddress != nullptr );
-    return getGBRomHeader( pEmulatorInstance->pCartridge->pRomBaseAddress );
-}
-
-GBCpuRegisters getGBEmulatorCpuRegisters( const GBEmulatorInstance* pEmulatorInstance )
-{
-    return pEmulatorInstance->pCpuState->registers;
-}
-
-const uint8_t* getGBEmulatorMemory( const GBEmulatorInstance* pEmulatorInstance )
-{
-    return pEmulatorInstance->pMemoryMapper->pBaseAddress;
-}
-
 size_t calculateCompressedMemorySizeRLE( const uint8_t* pMemory, size_t memorySizeInBytes )
 {
     size_t compressedMemorySizeInBytes = sizeof( uint32_t ); //FK: Compressed memory size in bytes
@@ -1696,35 +1722,11 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
     pEmulatorInstance->pMemoryMapper->pBaseAddress[0xFF04] = 0x19;
 }
 
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-void setGBEmulatorBreakpoint( GBEmulatorInstance* pEmulatorInstance, uint8_t pauseAtBreakpoint, uint16_t breakpointAddress )
-{
-    pEmulatorInstance->debug.pauseAtBreakpoint = pauseAtBreakpoint;
-    pEmulatorInstance->debug.breakpointAddress = breakpointAddress;
-}
-
-void continueGBEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
-{
-    pEmulatorInstance->debug.continueExecution = 1;
-}
-
-void pauseGBEmulatorExecution( GBEmulatorInstance* pEmulatorInstance )
-{
-    pEmulatorInstance->debug.pauseExecution = 1;
-}
-
-void runGBEmulatorForOneInstruction( GBEmulatorInstance* pEmulatorInstance )
-{
-    pEmulatorInstance->debug.runForOneInstruction = 1;
-}
-
-void runGBEmulatorForOneFrame( GBEmulatorInstance* pEmulatorInstance )
-{
-    pEmulatorInstance->debug.runSingleFrame = 1;
-}
-#endif
-
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory, SOCKET debuggerListenerSocket = INVALID_SOCKET )
+#else
 GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
+#endif
 {
     GBEmulatorInstance* pEmulatorInstance = (GBEmulatorInstance*)pEmulatorInstanceMemory;
     pEmulatorInstance->pCpuState        = (GBCpuState*)(pEmulatorInstance + 1);
@@ -1741,21 +1743,16 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     uint8_t* pFramebufferMemory = (uint8_t*)(pGBMemory + gbMappedMemorySizeInBytes);
     initPpuFrameBuffers( pEmulatorInstance->pPpuState, pFramebufferMemory );
 
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES
-    pEmulatorInstance->debug.breakpointAddress    = 0x0000;
-    pEmulatorInstance->debug.pauseAtBreakpoint    = 0;
-    pEmulatorInstance->debug.pauseExecution       = 0;
-    pEmulatorInstance->debug.runForOneInstruction = 0;
-    pEmulatorInstance->debug.runSingleFrame       = 0;
-    pEmulatorInstance->debug.continueExecution    = 0;
-    pEmulatorInstance->debug.opcodeHistorySize    = 0;
-    memset( pEmulatorInstance->debug.opcodeHistory, 0, sizeof( pEmulatorInstance->debug.opcodeHistory ) );
-#endif
-
     //FK: no cartridge loaded yet
     memset( pEmulatorInstance->pCartridge, 0, sizeof( GBCartridge ) );
 
     resetGBEmulator( pEmulatorInstance );
+
+#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
+    pEmulatorInstance->debuggerSocket = INVALID_SOCKET;
+    pEmulatorInstance->listenerSocket = debuggerListenerSocket;
+#endif
+
     return pEmulatorInstance;
 }
 
@@ -3840,23 +3837,42 @@ void setGBEmulatorJoypadState( GBEmulatorInstance* pEmulatorInstance, GBEmulator
     pEmulatorInstance->joypadState.value = joypadState.value;
 }
 
-void addOpcodeToOpcodeHistory( GBEmulatorInstance* pEmulatorInstance, uint16_t address, uint8_t opcode )
+void sendInstructionToDebugger( GBEmulatorInstance* pEmulatorInstance, uint16_t address, uint8_t opcode, uint8_t opcodeByteCount )
 {
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 0
-    K15_UNUSED_VAR(pEmulatorInstance);
-    K15_UNUSED_VAR(address);
-    K15_UNUSED_VAR(opcode);
-    return;
+    K15_UNUSED_VAR( pEmulatorInstance );
+    K15_UNUSED_VAR( address );
+    K15_UNUSED_VAR( opcode );
+    K15_UNUSED_VAR( opcodeByteCount );
 #else
-    memmove(pEmulatorInstance->debug.opcodeHistory + 1, pEmulatorInstance->debug.opcodeHistory + 0, pEmulatorInstance->debug.opcodeHistorySize * sizeof( GBOpcodeHistoryElement ) );
-
-    pEmulatorInstance->debug.opcodeHistory[0].address     = address; 
-    pEmulatorInstance->debug.opcodeHistory[0].opcode      = opcode; 
-    pEmulatorInstance->debug.opcodeHistory[0].registers   = pEmulatorInstance->pCpuState->registers; 
-
-    if( pEmulatorInstance->debug.opcodeHistorySize + 1 != gbOpcodeHistoryBufferCapacity )
+    if( pEmulatorInstance->debuggerSocket != INVALID_SOCKET )
     {
-        pEmulatorInstance->debug.opcodeHistorySize++;
+        EmulatorCpuInstructionMessage instrMessage = createEmulatorCpuInstructionMessage( address, opcode, opcodeByteCount );
+
+        if( opcode != 0xCB )
+        {
+            if( opcodeByteCount == 1u )
+            {
+                sprintf( instrMessage.instruction.mnemonic, unprefixedOpcodes[opcode].pMnemonic );
+            }
+            else if( opcodeByteCount == 2u )
+            {
+                const uint8_t argument = pEmulatorInstance->pMemoryMapper->pBaseAddress[address+1];
+                sprintf( instrMessage.instruction.mnemonic, unprefixedOpcodes[opcode].pMnemonic, argument );
+            }
+            else if( opcodeByteCount == 3u )
+            {
+                const uint16_t argument = (uint16_t)pEmulatorInstance->pMemoryMapper->pBaseAddress[address+1] | (uint16_t)pEmulatorInstance->pMemoryMapper->pBaseAddress[address+2] << 1u; 
+                sprintf( instrMessage.instruction.mnemonic, unprefixedOpcodes[opcode].pMnemonic, argument );
+            }
+        }
+
+        if( send( pEmulatorInstance->debuggerSocket, (const char*)&instrMessage, sizeof(instrMessage), 0u ) == SOCKET_ERROR )
+        {
+            DWORD test = GetLastError();
+            closesocket( pEmulatorInstance->debuggerSocket );
+            pEmulatorInstance->flags.debuggerDisconnected = 1;
+        }
     }
 #endif
 }
@@ -4136,7 +4152,7 @@ uint8_t runSingleInstruction( GBEmulatorInstance* pEmulatorInstance )
         const uint8_t opcode            = read8BitValueFromMappedMemory( pMemoryMapper, opcodeAddress );
         const uint8_t opcodeByteCount   = opcode == 0xCB ? cbPrefixedOpcodes[opcode].byteCount : unprefixedOpcodes[opcode].byteCount;
 
-        addOpcodeToOpcodeHistory( pEmulatorInstance, opcodeAddress, opcode );
+        sendInstructionToDebugger( pEmulatorInstance, opcodeAddress, opcode, opcodeByteCount );
         cycleCost = executeInstruction( pCpuState, pMemoryMapper, opcode );
     }
 
@@ -4222,55 +4238,31 @@ GBEmulatorInstanceEventMask runGBEmulatorForCycles( GBEmulatorInstance* pInstanc
 {
     GBCpuState* pCpuState = pInstance->pCpuState;
     GBPpuState* pPpuState = pInstance->pPpuState;
-    
-    //FK: reset flags
-    pInstance->flags.value = 0;
+
+    GBEmulatorInstanceEventMask eventMask = K15_GB_NO_EVENT_FLAG;
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    bool8_t runFrame = 0;
-    if( pInstance->debug.continueExecution )
+    if( pInstance->debuggerSocket == INVALID_SOCKET && pInstance->listenerSocket != INVALID_SOCKET )
     {
-        pInstance->debug.continueExecution    = 0;
-        pInstance->debug.pauseExecution       = 0;
-    }
-
-	if( pInstance->debug.runForOneInstruction )
-	{
-        const uint8_t cycleCount = runSingleInstruction( pInstance );
-        
-        if( pPpuState->cycleCounter >= gbCyclesPerFrame )
+        if( acceptDebuggerConnection( pInstance ) )
         {
-            pInstance->flags.vblank = 1;
-            pPpuState->cycleCounter -= gbCyclesPerFrame;
+            eventMask |= K15_GB_DEBUGGER_CONNECTED_EVENT_FLAG;
         }
-
-        pInstance->debug.runForOneInstruction = 0;
-	}
-    else
-    {
-        runFrame = pInstance->debug.runSingleFrame || !pInstance->debug.pauseExecution;
-        pInstance->debug.runSingleFrame = 0;
     }
-
-    if( !runFrame )
+    else if( pInstance->flags.debuggerDisconnected )
     {
-        return K15_GB_NO_EVENT_FLAG;
+        eventMask |= K15_GB_DEBUGGER_DISCONNECTED_EVENT_FLAG;
     }
 #endif
+
+    //FK: reset flags
+    pInstance->flags.value = 0;
 
     uint32_t localCycleCounter = 0u;
     while( localCycleCounter < cycleCountToRunFor )
     {
         const uint8_t cycleCount = runSingleInstruction( pInstance );
         localCycleCounter += cycleCount;
-
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-        if( pInstance->debug.pauseAtBreakpoint && pInstance->debug.breakpointAddress == pInstance->pCpuState->registers.PC )
-        {
-            pInstance->debug.pauseExecution = 1;
-            return K15_GB_NO_EVENT_FLAG;
-        }
-#endif
     }
 
     pCpuState->cycleCounter += localCycleCounter;
@@ -4280,10 +4272,6 @@ GBEmulatorInstanceEventMask runGBEmulatorForCycles( GBEmulatorInstance* pInstanc
         pPpuState->cycleCounter -= gbCyclesPerFrame;
         pCpuState->cycleCounter -= gbCyclesPerFrame;
     }
-    else
-    {
-        BreakPointHook();
-    }
-
-    return pInstance->flags.vblank == 1 ? K15_GB_VBLANK_EVENT_FLAG : K15_GB_NO_EVENT_FLAG;
+    eventMask = pInstance->flags.vblank == 1 ? eventMask | K15_GB_VBLANK_EVENT_FLAG : eventMask;
+    return eventMask;
 }

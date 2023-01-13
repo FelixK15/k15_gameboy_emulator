@@ -1,6 +1,3 @@
-#ifndef K15_GB_NETWORK
-#define K15_GB_NETWORK
-
 #include "k15_gb_emulator_types.h"
 
 #define K15_MAX_COMPUTER_NAME_LENGTH  64
@@ -27,8 +24,9 @@ enum class EmulatorMessageType : uint8_t
 {
 	PING,
 	CPU_REGISTERS,
+	CPU_INSTRUCTION,
 	MEMORY,
-	ROM_HEADER
+	ROM_HEADER,
 };
 
 struct EmulatorMessageHeader
@@ -71,6 +69,11 @@ struct EmulatorMemoryMessage : public BaseEmulatorMessage
 struct EmulatorRomHeaderMessage : public BaseEmulatorMessage
 {
 	GBRomHeader 			romHeader;
+};
+
+struct EmulatorCpuInstructionMessage : public BaseEmulatorMessage
+{
+	GBEmulatorCpuInstruction instruction;
 };
 
 constexpr uint16_t 			DebuggerBroadcastPort 	= 4066;
@@ -131,4 +134,13 @@ inline EmulatorMemoryMessage createEmulatorMemoryMessage( const uint8_t* pMemory
 	return memoryMessage;
 }
 
-#endif //K15_GB_NETWORK
+inline EmulatorCpuInstructionMessage createEmulatorCpuInstructionMessage( uint16_t address, uint8_t opcode, uint8_t opcodeByteCount )
+{
+	EmulatorCpuInstructionMessage cpuInstructionMessage = {};
+	cpuInstructionMessage.header 							= createEmulatorMessageHeader( EmulatorMessageType::CPU_INSTRUCTION );
+	cpuInstructionMessage.instruction.address				= address;
+	cpuInstructionMessage.instruction.opcode 				= opcode;
+	cpuInstructionMessage.instruction.argumentByteCount 	= opcodeByteCount;
+
+	return cpuInstructionMessage;
+}

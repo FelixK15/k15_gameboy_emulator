@@ -40,10 +40,12 @@ typedef uint32_t GBEmulatorInstanceEventMask;
 
 enum
 {
-    K15_GB_NO_EVENT_FLAG            = 0x00,
-    K15_GB_VBLANK_EVENT_FLAG        = 0x01,
-    K15_GB_STATE_SAVED_EVENT_FLAG   = 0x02,
-    K15_GB_STATE_LOADED_EVENT_FLAG  = 0x04,
+    K15_GB_NO_EVENT_FLAG                    = 0x00,
+    K15_GB_VBLANK_EVENT_FLAG                = 0x01,
+    K15_GB_STATE_SAVED_EVENT_FLAG           = 0x02,
+    K15_GB_STATE_LOADED_EVENT_FLAG          = 0x04,
+    K15_GB_DEBUGGER_CONNECTED_EVENT_FLAG    = 0x08,
+    K15_GB_DEBUGGER_DISCONNECTED_EVENT_FLAG = 0x10
 };
 
 enum 
@@ -114,6 +116,15 @@ enum GBMappedIOAdresses
 
     K15_GB_MAPPED_IO_ADDRESS_IF     = 0xFF0F,
     K15_GB_MAPPED_IO_ADDRESS_IE     = 0xFFFF
+};
+
+#define K15_MAX_MNEMONIC_NAME_LENGTH 64
+struct GBEmulatorCpuInstruction
+{
+    char mnemonic[ K15_MAX_MNEMONIC_NAME_LENGTH ];
+    uint16_t address;
+    uint8_t opcode;
+    uint8_t argumentByteCount;
 };
 
 struct GBEmulatorJoypadState
@@ -436,45 +447,15 @@ struct GBRomHeader
     uint8_t         checksumLower;
 };
 
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-struct GBEmulatorDebugSettings
-{
-    uint8_t enableBreakAtProgramCounter         : 1;
-    uint8_t enableBreakAtOpcode                 : 1;
-    uint8_t enableBreakAtMemoryReadFromAddress  : 1;
-    uint8_t enableBreakAtMemoryWriteToAddress   : 1;
-};
-
-struct GBOpcodeHistoryElement
-{
-    uint8_t         opcode;
-    uint16_t        address;
-    GBCpuRegisters  registers;
-};
-
-struct GBEmulatorDebug
-{
-    GBOpcodeHistoryElement      opcodeHistory[ gbOpcodeHistoryBufferCapacity ];
-
-    uint8_t                     pauseExecution          : 1;
-    uint8_t                     continueExecution       : 1;
-    uint8_t                     runForOneInstruction    : 1;
-    uint8_t                     runSingleFrame          : 1;
-    uint8_t                     pauseAtBreakpoint       : 1;
-
-    uint16_t                    breakpointAddress;
-    uint8_t                     opcodeHistorySize;
-};
-#endif
-
 struct GBEmulatorInstanceFlags
 {
     union
     {
         struct 
         {
-            uint8_t vblank      : 1;
-            uint8_t ramAccessed : 1;
+            uint8_t vblank                  : 1;
+            uint8_t ramAccessed             : 1;
+            uint8_t debuggerDisconnected    : 1;
         };
 
         uint8_t value;
@@ -572,9 +553,8 @@ struct GBEmulatorInstance
     GBEmulatorJoypadState   joypadState;
     GBEmulatorInstanceFlags flags;
 
-#if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    GBEmulatorDebug         debug;
-#endif
+    intptr_t                debuggerSocket;
+    intptr_t                listenerSocket;
 };
 
 struct GBEmulatorState

@@ -74,7 +74,6 @@ PFNWSASTARTUPPROC 			w32WSAStartup			= nullptr;
 #include <math.h>
 #include <stdio.h>
 #include "../k15_gb_emulator.h"
-#include "../k15_gb_debugger_interface.h"
 #include "k15_win32_opengl.h"
 
 #define WIN32_PROFILE_FUNCTION(func) \
@@ -299,6 +298,7 @@ struct Win32ApplicationContext
 	bool8_t						windowMaximized									= 0u;
 	bool8_t						hasFocus										= 1u;
 	bool8_t						showUserMessage									= 1u;
+	bool8_t						isDebuggerConnected								= 0u;
 };
 
 typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
@@ -2122,24 +2122,61 @@ bool8_t setupNetworking( SOCKET* pOutBroadcastSocket, SOCKET* pOutListenerSocket
 	SOCKET broadcastSocket 	= socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
 	SOCKET listenerSocket 	= socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
 
+	if( broadcastSocket == INVALID_SOCKET )
+	{
+		printf("Could not create broadcast socket. GetLastError() = %u", GetLastError() );
+		return false;
+	}
+
+	if( listenerSocket == INVALID_SOCKET )
+	{
+		printf("Could not create listener socket. GetLastError() = %u", GetLastError() );
+		return false;
+	}
+
 	char broadcast = 1;
-	setsockopt( broadcastSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1 );
+	if( setsockopt( broadcastSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1 ) != 0 )
+	{
+		printf("Could not set SO_BROADCAST for broadcast socket. GetLastError() = %u", GetLastError() );
+		return false;
+	}
 
 	u_long mode = 1;  // 1 to enable non-blocking socket
-	ioctlsocket( broadcastSocket, FIONBIO, &mode );
-	ioctlsocket( listenerSocket, FIONBIO, &mode );
+	if( ioctlsocket( broadcastSocket, FIONBIO, &mode ) != 0) 
+	{
+		printf("Could not set non-blocking socket for broadcast socket. GetLastError() = %u", GetLastError() );
+		return false;
+	}
+
+	if( ioctlsocket( listenerSocket, FIONBIO, &mode ) != 0 )
+	{
+		printf("Could not set non-blocking socket for listener socket. GetLastError() = %u", GetLastError() );
+		return false;
+	}
 
 	struct sockaddr_in anyAddress = {};
 	anyAddress.sin_family 		= AF_INET;
 	anyAddress.sin_port 		= DebuggerBroadcastPort;
 	anyAddress.sin_addr.s_addr 	= INADDR_ANY;
 
-	bind( broadcastSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) );
+	if( bind( broadcastSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) ) != 0 )
+	{
+		printf("Could not bind broadcast socket to INADDR_ANY on port %u. GetLastError() = %u", DebuggerBroadcastPort, GetLastError() );
+		return false;
+	}
 	
 	anyAddress.sin_port = DebuggerPort;
-	bind( listenerSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) );
+	if( bind( listenerSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) ) != 0 )
+	{
+		printf("Could not bind listener socket to INADDR_ANY on port %u. GetLastError() = %u", DebuggerPort, GetLastError() );
+		return false;
+	}
 
-	int result = listen( listenerSocket, 1u );
+	if( listen( listenerSocket, 1u ) != 0 )
+	{
+		printf("listen() on listener socket failed. GetLastError() = %u", GetLastError() );
+		return false;
+	}
 
 	*pOutBroadcastSocket = broadcastSocket;
 	*pOutListenerSocket = listenerSocket;
@@ -2309,7 +2346,7 @@ void setDefaultKeyboardBinding( int* pDigipadMappings, int* pActionButtonMapping
 	pActionButtonMappings[(uint8_t)Win32EmulatorKeyboardActionButtonBindings::SELECT] 	= VK_SPACE;
 }
 
-bool8_t setupEmulator( Win32EmulatorContext* pContext )
+bool8_t setupEmulator( Win32EmulatorContext* pContext, SOCKET debugListenerSocket )
 {
 	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorMemoryRequirementsInBytes();
 
@@ -2320,7 +2357,7 @@ bool8_t setupEmulator( Win32EmulatorContext* pContext )
 		return 0;
 	}
 
-	pContext->pEmulatorInstance = createGBEmulatorInstance( pEmulatorInstanceMemory );
+	pContext->pEmulatorInstance = createGBEmulatorInstance( pEmulatorInstanceMemory, debugListenerSocket );
 	setDefaultKeyboardBinding( pContext->digipadKeyboardMappings, pContext->actionButtonKeyboardMappings );
 
 	return 1;
@@ -2530,46 +2567,6 @@ void checkForDebuggerBroadcast( Win32ApplicationContext* pContext )
 	}
 }
 
-void acceptDebuggerConnection( Win32ApplicationContext* pContext )
-{
-	pContext->debugSocket = accept( pContext->listenerSocket, nullptr, nullptr );
-	if( pContext->debugSocket == -1 )
-	{
-		return;
-	}
-
-	const int sndBufferSizeInBytes = K15_DEBUGGER_SENT_BUFFER_SIZE_IN_BYTES;
-	if( setsockopt( pContext->debugSocket, SOL_SOCKET, SO_SNDBUF, (const char*)&sndBufferSizeInBytes, sizeof(sndBufferSizeInBytes) ) == -1 )
-	{
-		printf("[Warning] Couldn't set sendBufferSize for debug socket after establishing connection to a debugger. errno: %d", errno);
-	}
-
-	//FK: Debugger got connected! Sent current emulator status
-	const EmulatorCpuRegisterMessage cpuMessage = createEmulatorCpuRegistersMessage( getGBEmulatorCpuRegisters(pContext->emulatorContext.pEmulatorInstance) );
-	const EmulatorMemoryMessage memoryMessage = createEmulatorMemoryMessage( getGBEmulatorMemory( pContext->emulatorContext.pEmulatorInstance ) );
-	
-	send( pContext->debugSocket, (const char*)&cpuMessage, sizeof(cpuMessage), 0);
-	send( pContext->debugSocket, (const char*)&memoryMessage, sizeof(memoryMessage), 0);
-}
-
-void sendMemoryToDebugger( SOCKET debugSocket, const void* pMemory )
-{
-	send( debugSocket, (const char*)pMemory, 0x10000, 0 );
-}
-
-void updateNetwork( Win32ApplicationContext* pContext )
-{
-	if( pContext->debugSocket != INVALID_SOCKET )
-	{
-		sendMemoryToDebugger( pContext->debugSocket, pContext->emulatorContext.pEmulatorInstance->pMemoryMapper->pBaseAddress );
-	}
-	else
-	{
-		checkForDebuggerBroadcast( pContext );
-		acceptDebuggerConnection( pContext );
-	}
-}
-
 void runVsyncMainLoop( Win32ApplicationContext* pContext )
 {
 	bool8_t loopRunning = true;
@@ -2610,7 +2607,10 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
-		updateNetwork( pContext );
+		if( !pContext->isDebuggerConnected )
+		{
+			checkForDebuggerBroadcast( pContext );
+		}
 
 		const uint32_t gbCyclesPerSecond = gbCyclesPerFrame * gbEmulatorFrameRate;
 
@@ -2629,6 +2629,17 @@ void runVsyncMainLoop( Win32ApplicationContext* pContext )
 			{
 				uploadGBFrameBufferWithoutUserMessage( pContext->pDeviceContext, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
 			}
+		}
+		
+		if( emulatorEventMask & K15_GB_DEBUGGER_CONNECTED_EVENT_FLAG )
+		{
+			setUserMessage( &pContext->userMessage, "Debugger on");
+			pContext->isDebuggerConnected = true;
+		}
+		else if( emulatorEventMask & K15_GB_DEBUGGER_DISCONNECTED_EVENT_FLAG )
+		{
+			setUserMessage( &pContext->userMessage, "Debugger off");
+			pContext->isDebuggerConnected = false;
 		}
 
 		drawGBFrameBuffer( pContext->pDeviceContext );
@@ -2690,6 +2701,11 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 			setGBEmulatorJoypadState( pEmulatorContext->pEmulatorInstance, joypadState );
 		}
 
+		if( !pContext->isDebuggerConnected )
+		{
+			checkForDebuggerBroadcast( pContext );
+		}
+
 		const uint32_t cycleCountForThisHostFrame = gbCyclesPerFrame * pEmulatorContext->cyclePerHostFrameFactor;
 		const GBEmulatorInstanceEventMask emulatorEventMask = runGBEmulatorForCycles( pEmulatorContext->pEmulatorInstance, cycleCountForThisHostFrame );
 
@@ -2706,6 +2722,17 @@ void runNonVsyncMainLoop( Win32ApplicationContext* pContext )
 			{
 				uploadGBFrameBufferWithoutUserMessage( pContext->pDeviceContext, pContext->pGameboyRGBVideoBuffer, pGameBoyNativeFrameBuffer );
 			}
+		}
+		
+		if( emulatorEventMask & K15_GB_DEBUGGER_CONNECTED_EVENT_FLAG )
+		{
+			setUserMessage( &pContext->userMessage, "Debugger connected");
+			pContext->isDebuggerConnected = true;
+		}
+		else if( emulatorEventMask & K15_GB_DEBUGGER_DISCONNECTED_EVENT_FLAG )
+		{
+			setUserMessage( &pContext->userMessage, "Debugger lost");
+			pContext->isDebuggerConnected = false;
 		}
 
 		drawGBFrameBuffer( pContext->pDeviceContext );
@@ -2757,13 +2784,12 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		return 1;
 	}
 
-	if( !setupEmulator( &appContext.emulatorContext ) )
+	if( !setupNetworking( &appContext.broadcastSocket, &appContext.listenerSocket ) )
 	{
-		DebugBreak();
-		return 1;
+		printf("Error during network setup - debugger functionality won't work for this session.");
 	}
 
-	if( !setupNetworking( &appContext.broadcastSocket, &appContext.listenerSocket ) )
+	if( !setupEmulator( &appContext.emulatorContext, appContext.listenerSocket ) )
 	{
 		return 1;
 	}
