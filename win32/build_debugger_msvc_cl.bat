@@ -22,9 +22,10 @@ if not exist !BUILD_FOLDER! mkdir "!BUILD_FOLDER!"
 
 set OBJ_OUTPUT_PATH="!BUILD_FOLDER!\!PROJECT_NAME!.obj"
 set EXE_OUTPUT_PATH="!BUILD_FOLDER!\!PROJECT_NAME!.exe"
+set PDB_OUTPUT_PATH="!BUILD_FOLDER!\!PROJECT_NAME!.pdb"
 
 ::FK: Add /Bt to get a compile performance profile
-set COMPILER_OPTIONS=/nologo /FC /TP /W3 /Fe!EXE_OUTPUT_PATH! /Fo!OBJ_OUTPUT_PATH!
+set COMPILER_OPTIONS=/nologo /FC /TP /W3 /Fe!EXE_OUTPUT_PATH! /Fo!OBJ_OUTPUT_PATH! /Fd!PDB_OUTPUT_PATH!
 if "%BUILD_CONFIG%"=="debug" (
 	echo Build config = debug
 	set COMPILER_OPTIONS=!COMPILER_OPTIONS! /Od /Zi /GS
