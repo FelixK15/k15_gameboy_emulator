@@ -257,8 +257,7 @@ struct Win32ApplicationContext
 	HGLRC						pOpenGLContext									= nullptr;
 	HDC							pDeviceContext									= nullptr;
 	SOCKET 						broadcastSocket									= INVALID_SOCKET;
-	SOCKET 						listenerSocket									= INVALID_SOCKET;
-	SOCKET 						debugSocket 									= INVALID_SOCKET;
+	SOCKET 						debuggerSocket									= INVALID_SOCKET;
 	uint8_t* 					pGameboyRGBVideoBuffer 							= nullptr;
 	uint8_t*					pUncompressBuffer								= nullptr;
 	char 						gameTitle[16] 									= {};
@@ -2113,14 +2112,18 @@ bool8_t setupMainWindow( Win32ApplicationContext* pContext )
 	return 1u;
 }
 
-bool8_t setupNetworking( SOCKET* pOutBroadcastSocket, SOCKET* pOutListenerSocket )
+bool8_t setupNetworking( SOCKET* pOutBroadcastSocket, SOCKET* pOutDebuggerSocket )
 {
 	WORD wsaVersion = MAKEWORD( 2, 2 );
 	WSADATA wsaData = {};
-	w32WSAStartup(wsaVersion, &wsaData);
+	if( w32WSAStartup(wsaVersion, &wsaData) != 0 )
+	{
+		printf("Error during WSA initialization. GetLastError() = %u", GetLastError() );
+		return false;
+	}
 
 	SOCKET broadcastSocket 	= socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
-	SOCKET listenerSocket 	= socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
+	SOCKET debuggerSocket 	= socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
 
 	if( broadcastSocket == INVALID_SOCKET )
 	{
@@ -2128,7 +2131,7 @@ bool8_t setupNetworking( SOCKET* pOutBroadcastSocket, SOCKET* pOutListenerSocket
 		return false;
 	}
 
-	if( listenerSocket == INVALID_SOCKET )
+	if( debuggerSocket == INVALID_SOCKET )
 	{
 		printf("Could not create listener socket. GetLastError() = %u", GetLastError() );
 		return false;
@@ -2148,38 +2151,40 @@ bool8_t setupNetworking( SOCKET* pOutBroadcastSocket, SOCKET* pOutListenerSocket
 		return false;
 	}
 
-	if( ioctlsocket( listenerSocket, FIONBIO, &mode ) != 0 )
+	if( ioctlsocket( debuggerSocket, FIONBIO, &mode ) != 0 )
 	{
 		printf("Could not set non-blocking socket for listener socket. GetLastError() = %u", GetLastError() );
 		return false;
 	}
 
-	struct sockaddr_in anyAddress = {};
-	anyAddress.sin_family 		= AF_INET;
-	anyAddress.sin_port 		= DebuggerBroadcastPort;
-	anyAddress.sin_addr.s_addr 	= INADDR_ANY;
-
-	if( bind( broadcastSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) ) != 0 )
 	{
-		printf("Could not bind broadcast socket to INADDR_ANY on port %u. GetLastError() = %u", DebuggerBroadcastPort, GetLastError() );
-		return false;
+		struct sockaddr_in anyAddress = {};
+		anyAddress.sin_family 		= AF_INET;
+		anyAddress.sin_port 		= DebuggerBroadcastPort;
+		anyAddress.sin_addr.s_addr 	= INADDR_ANY;
+
+		if( bind( broadcastSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) ) != 0 )
+		{
+			printf("Could not bind broadcast socket to INADDR_ANY on port %u. GetLastError() = %u", DebuggerBroadcastPort, GetLastError() );
+			return false;
+		}
+	}
+
+	{
+		struct sockaddr_in anyAddress = {};
+		anyAddress.sin_family 		= AF_INET;
+		anyAddress.sin_port 		= DebuggerPort;
+		anyAddress.sin_addr.s_addr 	= INADDR_ANY;
+
+		if( bind( debuggerSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) ) != 0 )
+		{
+			printf("Could not bind broadcast socket to INADDR_ANY on port %u. GetLastError() = %u", DebuggerPort, GetLastError() );
+			return false;
+		}
 	}
 	
-	anyAddress.sin_port = DebuggerPort;
-	if( bind( listenerSocket, (const sockaddr*)&anyAddress, sizeof( anyAddress ) ) != 0 )
-	{
-		printf("Could not bind listener socket to INADDR_ANY on port %u. GetLastError() = %u", DebuggerPort, GetLastError() );
-		return false;
-	}
-
-	if( listen( listenerSocket, 1u ) != 0 )
-	{
-		printf("listen() on listener socket failed. GetLastError() = %u", GetLastError() );
-		return false;
-	}
-
 	*pOutBroadcastSocket = broadcastSocket;
-	*pOutListenerSocket = listenerSocket;
+	*pOutDebuggerSocket = debuggerSocket;
 	return true;
 }
 
@@ -2346,7 +2351,7 @@ void setDefaultKeyboardBinding( int* pDigipadMappings, int* pActionButtonMapping
 	pActionButtonMappings[(uint8_t)Win32EmulatorKeyboardActionButtonBindings::SELECT] 	= VK_SPACE;
 }
 
-bool8_t setupEmulator( Win32EmulatorContext* pContext, SOCKET debugListenerSocket )
+bool8_t setupEmulator( Win32EmulatorContext* pContext, SOCKET debuggerSocket )
 {
 	const size_t emulatorMemorySizeInBytes = calculateGBEmulatorMemoryRequirementsInBytes();
 
@@ -2357,7 +2362,7 @@ bool8_t setupEmulator( Win32EmulatorContext* pContext, SOCKET debugListenerSocke
 		return 0;
 	}
 
-	pContext->pEmulatorInstance = createGBEmulatorInstance( pEmulatorInstanceMemory, debugListenerSocket );
+	pContext->pEmulatorInstance = createGBEmulatorInstance( pEmulatorInstanceMemory, debuggerSocket );
 	setDefaultKeyboardBinding( pContext->digipadKeyboardMappings, pContext->actionButtonKeyboardMappings );
 
 	return 1;
@@ -2754,6 +2759,8 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine, int nShowCmd)
 {
+	allocateDebugConsole();
+
 	Win32ApplicationContext appContext;
 	appContext.pInstanceHandle = hInstance;
 
@@ -2784,12 +2791,12 @@ int CALLBACK WinMain(HINSTANCE hInstance,
 		return 1;
 	}
 
-	if( !setupNetworking( &appContext.broadcastSocket, &appContext.listenerSocket ) )
+	if( !setupNetworking( &appContext.broadcastSocket, &appContext.debuggerSocket ) )
 	{
 		printf("Error during network setup - debugger functionality won't work for this session.");
 	}
 
-	if( !setupEmulator( &appContext.emulatorContext, appContext.listenerSocket ) )
+	if( !setupEmulator( &appContext.emulatorContext, appContext.debuggerSocket ) )
 	{
 		return 1;
 	}

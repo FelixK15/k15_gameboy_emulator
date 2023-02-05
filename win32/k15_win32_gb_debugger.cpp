@@ -46,7 +46,7 @@ struct Win32Context
 
 	SOCKET 				broadcastSocket;
 	SOCKET 				debugSocket;
-	uint32_t			broadcastAddresses[ MaxBroadcastAddresses ];
+	IN_ADDR				broadcastAddresses[ MaxBroadcastAddresses ];
 
 	uint32_t 			windowWidth;
 	uint32_t 			windowHeight;
@@ -61,6 +61,7 @@ struct DebuggerTarget
 {
 	char name[K15_MAX_COMPUTER_NAME_LENGTH];
 	char address[K15_IPV4_ADDRESS_MAX_STRING_LENGTH];
+	IN_ADDR ipAddress;
 	uint8_t protocolVersion;
 };
 
@@ -77,7 +78,7 @@ struct DebuggerContext
 {
 	DebuggerTarget 			debuggerTargets[K15_MAX_DEBUGGER_TARGETS];
 	EmulatorDebuggerContext emulatorContext;
-	uint32_t* 				pBroadcastAddresses;
+	IN_ADDR* 				pBroadcastAddresses;
 	SOCKET 					broadcastSocket;
 	SOCKET 					emulatorSocket;
 	float 					timeUntilBroadcastInSeconds = BroadcastTimeIntervallInSeconds;
@@ -93,6 +94,11 @@ struct Win32Settings
 	int32_t 	windowPosX;
 	int32_t 	windowPosY;
 	char 		bindAddress[K15_IPV4_ADDRESS_MAX_STRING_LENGTH];
+};
+
+struct Win32NetworkThreadParameter
+{
+	SOCKET debugSocket;
 };
 
 const char* pSettingsFormatting = R"(
@@ -384,7 +390,7 @@ bool8_t setupOpenGL( Win32Context* pContext )
 	}
 
 	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-	constexpr bool8_t enableVsync = true;
+	constexpr bool8_t enableVsync = 1;
 	
 	//FK: Try to enable v-sync...
 	w32glSwapIntervalEXT( enableVsync );
@@ -449,28 +455,23 @@ bool8_t setupNetworking( Win32Context* pContext )
 		return false;
 	}
 
-	pContext->debugSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	pContext->debugSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if( pContext->debugSocket == INVALID_SOCKET )
 	{
 		return false;
 	}
 
 	char broadcast = 1;
-	if( setsockopt(pContext->broadcastSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1) != 0 )
+	if( setsockopt(pContext->broadcastSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, 1 ) != 0 )
 	{
 		closesocket(pContext->broadcastSocket);
 		pContext->broadcastSocket = INVALID_SOCKET;
 		return false;
 	}
 
-	int recvBufferSizeInBytes = K15_DEBUGGER_RECV_BUFFER_SIZE_IN_BYTES;
-	if( setsockopt(pContext->debugSocket, SOL_SOCKET, SO_RCVBUF, (char*)&recvBufferSizeInBytes, sizeof( recvBufferSizeInBytes ) ) != 0 )
-	{
-
-	}
-
 	u_long mode = 1;  // 1 to enable non-blocking socket
 	ioctlsocket( pContext->broadcastSocket, FIONBIO, &mode );
+	ioctlsocket( pContext->debugSocket, FIONBIO, &mode );
 
 	INTERFACE_INFO interfaceInfos[16] = {};
 	DWORD bytesReturned = 0;
@@ -482,11 +483,10 @@ bool8_t setupNetworking( Win32Context* pContext )
 	const DWORD interfaceCount = GetMin( MaxBroadcastAddresses, bytesReturned / sizeof( INTERFACE_INFO ) );
 	for( DWORD interfaceIndex = 0; interfaceIndex < interfaceCount; ++interfaceIndex )
 	{
-		networkaddress_t maskAddress = interfaceInfos[interfaceIndex].iiNetmask.AddressIn.sin_addr.S_un.S_addr;
-		networkaddress_t address = interfaceInfos[interfaceIndex].iiAddress.AddressIn.sin_addr.S_un.S_addr;
+		const IN_ADDR netMask = interfaceInfos[interfaceIndex].iiNetmask.AddressIn.sin_addr;
+		const IN_ADDR address = interfaceInfos[interfaceIndex].iiAddress.AddressIn.sin_addr;
 
-		networkaddress_t broadcastAddress = ( maskAddress & address ) | ( 0xFFFFFFFFu & ~maskAddress );
-		pContext->broadcastAddresses[interfaceIndex] = broadcastAddress;
+		pContext->broadcastAddresses[interfaceIndex] = generateBroadcastAddress( address, netMask );;
 	}
 
 	pContext->broadcastAddressCount = ( uint8_t )interfaceCount;
@@ -494,13 +494,10 @@ bool8_t setupNetworking( Win32Context* pContext )
 	return true;
 }
 
-bool8_t tryToConnectToEmulatorInstance( SOCKET socket, const DebuggerTarget* pTarget )
+bool8_t sendConnectRequestToEmulatorInstance( SOCKET socket, const DebuggerTarget* pTarget )
 {
-	struct sockaddr_in targetAddress;
-	targetAddress.sin_family = AF_INET;
-	targetAddress.sin_port = DebuggerPort;
-	targetAddress.sin_addr = convertFromIPv4AddressString( pTarget->address, K15_IPV4_ADDRESS_MAX_STRING_LENGTH );
-	return connect( socket, (struct sockaddr*)&targetAddress, sizeof( targetAddress ) ) == 0;
+	EmulatorMessageHeader connectHeader = createEmulatorMessageHeader( EmulatorMessageType::CONNECT );
+	return sendToSocket( socket, DebuggerPort, pTarget->ipAddress, &connectHeader, sizeof( connectHeader ) );
 }
 
 void doEmulatorSelectUi( DebuggerContext* pContext )
@@ -515,9 +512,9 @@ void doEmulatorSelectUi( DebuggerContext* pContext )
 		
 		if( ImGui::Button("Connect") )
 		{
-			if( tryToConnectToEmulatorInstance( pContext->emulatorSocket, &pContext->debuggerTargets[ index ] ) )
+			if( !sendConnectRequestToEmulatorInstance( pContext->emulatorSocket, &pContext->debuggerTargets[ index ] ) )
 			{
-				pContext->connectedToEmulator = true;
+				printf("Error sending connect to '%s'. Error: %d\n", pContext->debuggerTargets[ index ].address, GetLastError() );
 			}
 		}
 		ImGui::EndDisabled();
@@ -577,90 +574,106 @@ void doEmulatorDebugUi( DebuggerContext* pContext )
 void receiveEmulatorMessages( DebuggerContext* pContext )
 {
 	EmulatorMessageHeader messageHeader = {};
-	if( recv( pContext->emulatorSocket, (char*)&messageHeader, sizeof( messageHeader ), 0u ) != -1 )
+	IN_ADDR senderAddress = {};
+	if( !receiveFromSocket( pContext->emulatorSocket, &messageHeader, sizeof( messageHeader ), &senderAddress ) )
 	{
-		switch( messageHeader.type )
+		printf("Error: %d\n", GetLastError());
+		return;
+	}
+
+	if( !isValidEmulatorMessageHeader( &messageHeader ) )
+	{
+		return;
+	}
+
+	bool8_t errorHappened = 0;
+	switch( messageHeader.type )
+	{
+		case EmulatorMessageType::CONNECT_ACK:
 		{
-			case EmulatorMessageType::MEMORY:
-			{
-				recv( pContext->emulatorSocket, ( char* )pContext->emulatorContext.pMemory, gbMappedMemorySizeInBytes, 0u );
-				break;
-			}
-
-			case EmulatorMessageType::CPU_REGISTERS:
-			{
-				recv( pContext->emulatorSocket, ( char* )&pContext->emulatorContext.cpuRegisters, sizeof( GBCpuRegisters ), 0u );
-				break;
-			}
-
-			case EmulatorMessageType::ROM_HEADER:
-			{
-				recv( pContext->emulatorSocket, (char*)&pContext->emulatorContext.romHeader, sizeof( GBRomHeader ), 0u );
-				break;
-			}
-
-			case EmulatorMessageType::CPU_INSTRUCTION:
-			{
-				GBEmulatorCpuInstruction instruction;
-				int bla = recv( pContext->emulatorSocket, (char*)&instruction, sizeof( instruction ), 0u );
-				RuntimeAssert( bla == sizeof( instruction ) );
-
-				printf("%s\n", instruction.mnemonic );
-				break;
-			}
+			pContext->connectedToEmulator = true;
+			break;
 		}
+		case EmulatorMessageType::MEMORY:
+		{
+			errorHappened |= !receiveFromSocket( pContext->emulatorSocket, pContext->emulatorContext.pMemory, gbMappedMemorySizeInBytes, nullptr );
+			break;
+		}
+
+		case EmulatorMessageType::CPU_REGISTERS:
+		{
+			errorHappened |= !receiveFromSocket( pContext->emulatorSocket, &pContext->emulatorContext.cpuRegisters, sizeof( GBCpuRegisters ), nullptr );
+			break;
+		}
+
+		case EmulatorMessageType::ROM_HEADER:
+		{
+			errorHappened |= !receiveFromSocket( pContext->emulatorSocket, &pContext->emulatorContext.romHeader, sizeof( GBRomHeader ), nullptr );
+			break;
+		}
+
+		case EmulatorMessageType::CPU_INSTRUCTION:
+		{
+			GBEmulatorCpuInstruction instruction;
+			errorHappened |= !receiveFromSocket( pContext->emulatorSocket, &instruction, sizeof( instruction ), nullptr );
+			printf("%s\n", instruction.mnemonic );
+			break;
+		}
+	}
+
+	if( errorHappened )
+	{
+		printf("error during `receiveEmulatorMessages()`: GetLastError: %u\n", WSAGetLastError() );
 	}
 }
 
 void doDebuggerUiFrame( DebuggerContext* pContext )
 {
+	receiveEmulatorMessages( pContext );
+
 	if( !pContext->connectedToEmulator )
 	{
 		doEmulatorSelectUi( pContext );
 	}
-	else 
+	else
 	{
-		receiveEmulatorMessages( pContext );
 		doEmulatorDebugUi( pContext );
 	}
 }
 
 void renderDebuggerUiFrame(HDC dc)
 {
+	glClear(GL_COLOR_BUFFER_BIT);
+
 	ImGui::Render();
 	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 	w32SwapBuffers( dc );
-
-	glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void sendEmulatorDetectionBroadcast( SOCKET socket, const networkaddress_t* pBroadcastAddresses, size_t broadcastAddressCount )
+void sendEmulatorDetectionBroadcast( SOCKET socket, const IN_ADDR* pBroadcastAddresses, size_t broadcastAddressCount )
 {
-	struct sockaddr_in broadcastAddr;
-	broadcastAddr.sin_family 		= AF_INET;
-	broadcastAddr.sin_port 			= DebuggerBroadcastPort;
-
 	for( uint8_t broadcastIndex = 0; broadcastIndex < broadcastAddressCount; ++broadcastIndex )
 	{
-		broadcastAddr.sin_addr.S_un.S_addr = pBroadcastAddresses[ broadcastIndex ];
-		sendto( socket, (const char*)&BroadcastPacket, sizeof( BroadcastPacket ), 0, ( const sockaddr* )&broadcastAddr, sizeof( broadcastAddr ) );
+		sendToSocket( socket, DebuggerBroadcastPort, (IN_ADDR)pBroadcastAddresses[ broadcastIndex ], &BroadcastPacket, sizeof( BroadcastPacket ) );
 	}
 }
 
 bool8_t targetAnsweredBroadcast( SOCKET socket, DebuggerTarget* pOutDebuggerTarget )
 {
-	struct sockaddr_in emulatorAddr = {};
 	EmulatorPingMessage emulatorPingMessage = {};
-	int packetLength = sizeof( emulatorAddr );
-	if( recvfrom( socket, (char*)&emulatorPingMessage, sizeof( emulatorPingMessage ), 0, (sockaddr*)&emulatorAddr, &packetLength ) != -1 )
+	IN_ADDR emulatorAddress;
+	if( !receiveFromSocket( socket, &emulatorPingMessage, sizeof( emulatorPingMessage ), &emulatorAddress ) )
 	{
-		if( isValidEmulatorMessageHeader( &emulatorPingMessage.header ) && emulatorPingMessage.header.type == EmulatorMessageType::PING )
-		{
-			pOutDebuggerTarget->protocolVersion = emulatorPingMessage.protocolVersion;
-			strcpy_s( pOutDebuggerTarget->name, K15_MAX_COMPUTER_NAME_LENGTH, emulatorPingMessage.computerName );
-			convertToIPv4AddressString( emulatorAddr.sin_addr, pOutDebuggerTarget->address, K15_IPV4_ADDRESS_MAX_STRING_LENGTH );
-			return true;
-		}
+		return false;
+	}
+
+	if( isValidEmulatorMessageHeader( &emulatorPingMessage.header ) && emulatorPingMessage.header.type == EmulatorMessageType::PING )
+	{
+		pOutDebuggerTarget->protocolVersion = emulatorPingMessage.protocolVersion;
+		strcpy_s( pOutDebuggerTarget->name, K15_MAX_COMPUTER_NAME_LENGTH, emulatorPingMessage.computerName );
+		convertToIPv4AddressString( emulatorAddress, pOutDebuggerTarget->address, K15_IPV4_ADDRESS_MAX_STRING_LENGTH );
+		pOutDebuggerTarget->ipAddress = emulatorAddress;
+		return true;
 	}
 
 	return false;

@@ -1,7 +1,8 @@
 #include "k15_gb_emulator_types.h"
 
 #define K15_MAX_COMPUTER_NAME_LENGTH  64
-#define K15_DEBUGGER_SENT_BUFFER_SIZE_IN_BYTES Mbyte(1)
+#define K15_DEBUGGER_MAX_MESSAGE_SIZE_IN_BYTES sizeof( EmulatorMemoryMessage )
+#define K15_DEBUGGER_SEND_BUFFER_SIZE_IN_BYTES Mbyte(1)
 #define K15_DEBUGGER_RECV_BUFFER_SIZE_IN_BYTES Mbyte(1)
 
 enum class DebuggerPacketType : uint8_t
@@ -20,8 +21,20 @@ struct DebuggerPacket
 	DebuggerPacketHeader header;
 };
 
+struct DatagramSocket
+{
+	SOCKET socket;
+};
+
+struct StreamSocket
+{
+	SOCKET socket;
+};
+
 enum class EmulatorMessageType : uint8_t
 {
+	CONNECT,
+	CONNECT_ACK,
 	PING,
 	CPU_REGISTERS,
 	CPU_INSTRUCTION,
@@ -144,3 +157,53 @@ inline EmulatorCpuInstructionMessage createEmulatorCpuInstructionMessage( uint16
 
 	return cpuInstructionMessage;
 }
+
+bool8_t receiveFromSocket( SOCKET socket, void* pBuffer, int bytesToReceive, IN_ADDR* pOutAddress )
+{
+	char* pBufferPtr = ( char* )pBuffer;
+	int receivedBytes = 0;
+
+	struct sockaddr_in senderAddress = {};
+	int senderAddressSizeInBytes = sizeof(senderAddress);
+	while( receivedBytes != bytesToReceive )
+	{
+		const int recvReturnValue = recvfrom( socket, pBufferPtr + receivedBytes, bytesToReceive - receivedBytes, 0, (struct sockaddr*)&senderAddress, &senderAddressSizeInBytes );
+		if( recvReturnValue != SOCKET_ERROR )
+		{
+			receivedBytes += recvReturnValue;
+			continue;
+		}
+
+		return false;
+	};
+
+	if( pOutAddress != nullptr )
+	{
+		*pOutAddress = senderAddress.sin_addr;
+	}
+
+	return true;
+}
+
+bool8_t sendToSocket(SOCKET socket, uint16_t port, IN_ADDR address, const void* pBuffer, int bufferSizeInBytes )
+{
+	const char* pBufferPtr = ( const char* )pBuffer;
+    int bytesSent = 0;
+	struct sockaddr_in receivingAddress = {};
+	receivingAddress.sin_addr = address;
+	receivingAddress.sin_family = AF_INET;
+	receivingAddress.sin_port = port;
+    while( bytesSent != bufferSizeInBytes )
+    {
+        const int sendReturnValue = sendto( socket, pBufferPtr + bytesSent, bufferSizeInBytes - bytesSent, 0u, ( const struct sockaddr* )&receivingAddress, sizeof( receivingAddress ) );
+        if( sendReturnValue == SOCKET_ERROR )
+        {
+            return false;
+        }
+
+        bytesSent += sendReturnValue;
+    }
+
+    return true;
+}
+

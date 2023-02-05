@@ -55,25 +55,31 @@ const uint8_t* getGBEmulatorMemory( const GBEmulatorInstance* pEmulatorInstance 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
 bool8_t acceptDebuggerConnection( GBEmulatorInstance* pInstance )
 {
-    pInstance->debuggerSocket = accept( pInstance->listenerSocket, nullptr, nullptr );
-	if( pInstance->debuggerSocket == -1 )
-	{
-		return false;
-	}
+    EmulatorMessageHeader messageHeader = {0};
+    IN_ADDR senderAddress = {};
+    if( !receiveFromSocket( pInstance->debuggerSocket, &messageHeader, sizeof( messageHeader ), &senderAddress ) )
+    {
+        return false;
+    }
 
-	const int sndBufferSizeInBytes = K15_DEBUGGER_SENT_BUFFER_SIZE_IN_BYTES;
-	if( setsockopt( pInstance->debuggerSocket, SOL_SOCKET, SO_SNDBUF, (const char*)&sndBufferSizeInBytes, sizeof(sndBufferSizeInBytes) ) == -1 )
-	{
-		printf("[Warning] Couldn't set sendBufferSize for debug socket after establishing connection to a debugger. errno: %d", errno);
-	}
+    if( !isValidEmulatorMessageHeader( &messageHeader ) || messageHeader.type != EmulatorMessageType::CONNECT )
+    {
+        return false;
+    }
 
-	//FK: Debugger got connected! Sent current emulator status
-	const EmulatorCpuRegisterMessage cpuMessage = createEmulatorCpuRegistersMessage( getGBEmulatorCpuRegisters( pInstance ) );
+    pInstance->debuggerIpAddress = senderAddress;
+
+    u_long mode = 0;  // 0 to disable non-blocking socket
+	ioctlsocket( pInstance->debuggerSocket, FIONBIO, &mode );
+
+	//FK: Debugger got connected! Sent ack and current emulator state
+    const EmulatorMessageHeader ackMessage = createEmulatorMessageHeader( EmulatorMessageType::CONNECT_ACK );
+    sendToSocket( pInstance->debuggerSocket, DebuggerPort, senderAddress, &ackMessage, sizeof( ackMessage ) );
+    
+    const EmulatorCpuRegisterMessage cpuMessage = createEmulatorCpuRegistersMessage( getGBEmulatorCpuRegisters( pInstance ) );
 	const EmulatorMemoryMessage memoryMessage = createEmulatorMemoryMessage( getGBEmulatorMemory( pInstance ) );
-	
-	send( pInstance->debuggerSocket, (const char*)&cpuMessage, sizeof(cpuMessage), 0);
-	send( pInstance->debuggerSocket, (const char*)&memoryMessage, sizeof(memoryMessage), 0);
-
+    sendToSocket( pInstance->debuggerSocket, DebuggerPort, senderAddress, &cpuMessage, sizeof( cpuMessage ) );
+    sendToSocket( pInstance->debuggerSocket, DebuggerPort, senderAddress, &memoryMessage, sizeof( memoryMessage ) );
     return true;
 }
 #endif
@@ -1723,7 +1729,7 @@ void resetGBEmulator( GBEmulatorInstance* pEmulatorInstance )
 }
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory, SOCKET debuggerListenerSocket = INVALID_SOCKET )
+GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory, SOCKET debuggerSocket = INVALID_SOCKET )
 #else
 GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
 #endif
@@ -1749,8 +1755,7 @@ GBEmulatorInstance* createGBEmulatorInstance( uint8_t* pEmulatorInstanceMemory )
     resetGBEmulator( pEmulatorInstance );
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    pEmulatorInstance->debuggerSocket = INVALID_SOCKET;
-    pEmulatorInstance->listenerSocket = debuggerListenerSocket;
+    pEmulatorInstance->debuggerSocket = debuggerSocket;
 #endif
 
     return pEmulatorInstance;
@@ -3845,7 +3850,7 @@ void sendInstructionToDebugger( GBEmulatorInstance* pEmulatorInstance, uint16_t 
     K15_UNUSED_VAR( opcode );
     K15_UNUSED_VAR( opcodeByteCount );
 #else
-    if( pEmulatorInstance->debuggerSocket != INVALID_SOCKET )
+    if( pEmulatorInstance->flags.debuggerConnected )
     {
         EmulatorCpuInstructionMessage instrMessage = createEmulatorCpuInstructionMessage( address, opcode, opcodeByteCount );
 
@@ -3867,11 +3872,9 @@ void sendInstructionToDebugger( GBEmulatorInstance* pEmulatorInstance, uint16_t 
             }
         }
 
-        if( send( pEmulatorInstance->debuggerSocket, (const char*)&instrMessage, sizeof(instrMessage), 0u ) == SOCKET_ERROR )
+        if( !sendToSocket( pEmulatorInstance->debuggerSocket, DebuggerPort, pEmulatorInstance->debuggerIpAddress, (const char*)&instrMessage, sizeof( instrMessage ) ) )
         {
-            DWORD test = GetLastError();
-            closesocket( pEmulatorInstance->debuggerSocket );
-            pEmulatorInstance->flags.debuggerDisconnected = 1;
+            printf("Error during 'sendInstructionToDebugger'. Error: %u\n", WSAGetLastError());
         }
     }
 #endif
@@ -4242,10 +4245,11 @@ GBEmulatorInstanceEventMask runGBEmulatorForCycles( GBEmulatorInstance* pInstanc
     GBEmulatorInstanceEventMask eventMask = K15_GB_NO_EVENT_FLAG;
 
 #if K15_ENABLE_EMULATOR_DEBUG_FEATURES == 1
-    if( pInstance->debuggerSocket == INVALID_SOCKET && pInstance->listenerSocket != INVALID_SOCKET )
+    if( !pInstance->flags.debuggerConnected )
     {
         if( acceptDebuggerConnection( pInstance ) )
         {
+            pInstance->flags.debuggerConnected = 1;
             eventMask |= K15_GB_DEBUGGER_CONNECTED_EVENT_FLAG;
         }
     }

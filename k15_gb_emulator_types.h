@@ -456,6 +456,7 @@ struct GBEmulatorInstanceFlags
             uint8_t vblank                  : 1;
             uint8_t ramAccessed             : 1;
             uint8_t debuggerDisconnected    : 1;
+            uint8_t debuggerConnected       : 1;
         };
 
         uint8_t value;
@@ -554,7 +555,7 @@ struct GBEmulatorInstance
     GBEmulatorInstanceFlags flags;
 
     intptr_t                debuggerSocket;
-    intptr_t                listenerSocket;
+    IN_ADDR                 debuggerIpAddress;
 };
 
 struct GBEmulatorState

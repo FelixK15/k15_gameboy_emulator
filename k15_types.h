@@ -38,7 +38,6 @@
 
 typedef uint8_t     bool8_t;
 typedef uint32_t    fourcc32_t;
-typedef uint32_t    networkaddress_t;
 
 #define K15_FOUR_CC(a,b,c,d)    (fourcc32_t)( (fourcc32_t)a << 0 | (fourcc32_t)b << 8 | (fourcc32_t)c << 16 | (fourcc32_t)d << 24 )
 #define K15_IPV4_ADDRESS_MIN_STRING_LENGTH  8
@@ -88,6 +87,14 @@ IN_ADDR convertFromIPv4AddressString( const char* pBuffer, size_t bufferSizeInBy
 
     sscanf_s( pBuffer, "%hhu.%hhu.%hhu.%hhu", &address.S_un.S_un_b.s_b1, &address.S_un.S_un_b.s_b2, &address.S_un.S_un_b.s_b3, &address.S_un.S_un_b.s_b4 );
     return address;
+}
+
+IN_ADDR generateBroadcastAddress( const IN_ADDR address, const IN_ADDR netMask )
+{
+    IN_ADDR broadcastAddress = {};
+    broadcastAddress.S_un.S_addr = ( netMask.S_un.S_addr & address.S_un.S_addr ) | ( 0xFFFFFFFFu & ~netMask.S_un.S_addr );
+
+    return broadcastAddress;
 }
 
 #endif //K15_TYPES_HEADER

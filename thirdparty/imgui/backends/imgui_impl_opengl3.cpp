@@ -520,6 +520,7 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
         }
     }
 
+    glDisable(GL_SCISSOR_TEST);
     (void)bd; // Not all compilation paths use this
 }
 
