@@ -10,7 +10,6 @@
 *.k15_gb_state
 *.k15_gb_ram
 *.suo
-.vscode
 bugs.plan.txt
 k15_win32_gb_emulator_release_disassembly.asm
 testroms/
