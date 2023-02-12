@@ -5,15 +5,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "(Win32) Lauch Debugger - Debug",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/win32/build_debug/k15_win32_cl_gb_debugger.exe",
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/win32/build_debug/",
-            "environment": [],
-        },
-        {
             "name": "(Win32) Launch Debug",
             "type": "cppvsdbg",
             "request": "launch",
